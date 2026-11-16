@@ -131,16 +131,22 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 		return "", fmt.Errorf("the sprig %q no longer exists", r.Sprig)
 	}
 	// The level may have changed since the request (lowered, say): only
-	// raise from the level the user was shown.
+	// raise from the level the user was shown. Checked and written in one
+	// transaction; a failed read refuses.
 	tool := e.toolsFor(ctx, &turn{user: user, char: c})[r.Tool]
 	if tool == nil {
 		return "", fmt.Errorf("%s no longer has %s", c.DisplayName(), r.Tool)
 	}
-	if cur := e.toolLevel(ctx, c, tool); cur != r.From {
+	def := store.LevelAct
+	if tool.Risky {
+		def = store.LevelAsk
+	}
+	cur, err := e.DB.RaiseToolLevel(ctx, c.ID, r.Tool, granted(tool), def, r.From, r.Level)
+	if errors.Is(err, store.ErrLevelChanged) {
 		return "", fmt.Errorf("%s's level for %s changed to %s since it asked (was %s), so nothing was changed; it can ask again", c.DisplayName(), r.Tool, cur, r.From)
 	}
-	if err := e.DB.SetToolLevel(ctx, c.ID, r.Tool, r.Level); err != nil {
-		return "", err
+	if err != nil {
+		return "", fmt.Errorf("couldn't check %s's current level, so nothing was changed: %w", c.DisplayName(), err)
 	}
 	e.logActivity(ctx, "info", "approval", c.ID, user.ID, fmt.Sprintf("%s raised to %s for %s", r.Tool, r.Level, c.DisplayName()), "was "+r.From)
 	return fmt.Sprintf("%s is now at %s for %s (was %s).", c.DisplayName(), r.Level, r.Tool, r.From), nil

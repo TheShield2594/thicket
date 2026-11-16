@@ -113,8 +113,15 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	case !approve:
 		return true, e.respond(ctx, t, fmt.Sprintf("The user said no to %s. Acknowledge briefly and don't try it again unless they ask.", what))
 	case gone:
+		// Reported in code, not by a model turn: nothing here may run a
+		// tool or hand off.
 		_ = e.DB.SetApprovalResult(ctx, a.ID, "not run: the sprig that asked no longer exists")
-		return true, e.respond(ctx, t, fmt.Sprintf("The user approved %s, but the sprig that asked for it (%s) no longer exists, so nothing was run. Tell them briefly.", what, a.Character))
+		msg := fmt.Sprintf("I didn't run %s: %s, who asked for it, isn't around any more.", what, a.Character)
+		if err := e.send(ctx, a.ChatRef, char, msg); err != nil {
+			return true, err
+		}
+		_ = e.DB.AddMessage(ctx, conv.ID, "assistant", char.ID, msg)
+		return true, nil
 	}
 	var result string
 	if strings.HasPrefix(a.Tool, internalPrefix) {

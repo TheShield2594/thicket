@@ -59,3 +59,9 @@ func TestMatches(t *testing.T) {
 		t.Fatal("a broken regex was accepted")
 	}
 }
+
+func TestPrettyArgsKeepsNumbers(t *testing.T) {
+	if got := prettyArgs([]byte(`{"n":9007199254740993}`)); !strings.Contains(got, "9007199254740993") {
+		t.Fatalf("number changed: %s", got)
+	}
+}

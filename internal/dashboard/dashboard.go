@@ -6,6 +6,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -413,8 +414,15 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		return nil, err
 	}
 	for _, it := range items {
-		p.Inbox = append(p.Inbox, inboxView{ID: it.ID, Kind: it.Kind, Title: it.Title, Detail: it.Detail, Sprig: name(it.Character),
-			At: stamp(it.UpdatedAt), Count: it.Count, Draft: it.Kind == store.InboxDraft && it.Action != ""})
+		v := inboxView{ID: it.ID, Kind: it.Kind, Title: it.Title, Detail: it.Detail, Sprig: name(it.Character),
+			At: stamp(it.UpdatedAt), Count: it.Count}
+		if it.Kind == store.InboxDraft {
+			// "Do it" runs the stored action: show exactly that.
+			if exact, ok := draftArgs(it.Action); ok {
+				v.Detail, v.Draft = exact, true
+			}
+		}
+		p.Inbox = append(p.Inbox, v)
 	}
 	var acts []store.Activity
 	if p.Admin {
@@ -489,16 +497,27 @@ func (d *Dashboard) costs(ctx context.Context, name func(string) string) ([]cost
 	return sprigs, models, nil
 }
 
-// prettyJSON shows arguments in full (the box scrolls): a person must see
-// everything they approve.
+// prettyJSON shows arguments in full (the box scrolls) and exactly as
+// stored: indented, never re-encoded, so a person sees what will run.
 func prettyJSON(s string) string {
-	var v any
-	if json.Unmarshal([]byte(s), &v) == nil {
-		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
-			return string(b)
-		}
+	var b bytes.Buffer
+	if json.Indent(&b, []byte(s), "", "  ") == nil {
+		return b.String()
 	}
 	return s
+}
+
+// draftArgs is a draft's exact call, from its stored action (its detail
+// text is only a description).
+func draftArgs(action string) (string, bool) {
+	var a struct {
+		Tool string          `json:"tool"`
+		Args json.RawMessage `json:"args"`
+	}
+	if json.Unmarshal([]byte(action), &a) != nil || a.Tool == "" {
+		return "", false
+	}
+	return a.Tool + "\n" + prettyJSON(string(a.Args)), true
 }
 
 func (d *Dashboard) spend(ctx context.Context) (*spendView, error) {

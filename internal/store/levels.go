@@ -48,6 +48,44 @@ func (s *Store) ToolLevel(ctx context.Context, character, tool string, scoped bo
 	return v, err
 }
 
+// ErrLevelChanged means a level wasn't the one expected.
+var ErrLevelChanged = errors.New("the level changed")
+
+// RaiseToolLevel sets a sprig's level for a tool to `to`, but only if the
+// level in force is still `from` (def is the tool's default, for when none
+// is set). The check and the write are one transaction, so a change made
+// in between can't be overwritten. A failed read refuses rather than
+// assuming anything.
+func (s *Store) RaiseToolLevel(ctx context.Context, character, tool string, scoped bool, def, from, to string) (string, error) {
+	if !ValidLevel(to) {
+		return "", errors.New("level must be read, draft, ask or act")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var cur string
+	err = tx.QueryRowContext(ctx, `SELECT level FROM tool_levels WHERE
+		(character = ? AND tool = ?) OR (? AND character = ? AND tool = '*') OR (character = '*' AND tool = ?)
+		ORDER BY CASE WHEN character = '*' THEN 2 WHEN tool = '*' THEN 1 ELSE 0 END LIMIT 1`,
+		character, tool, scoped, character, tool).Scan(&cur)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		cur = def
+	case err != nil:
+		return "", err
+	}
+	if cur != from {
+		return cur, ErrLevelChanged
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_levels (character, tool, level, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(character, tool) DO UPDATE SET level = excluded.level, updated_at = excluded.updated_at`, character, tool, to, s.unix()); err != nil {
+		return "", err
+	}
+	return cur, tx.Commit()
+}
+
 // LevelRank orders levels: read < draft < ask < act. Unknown is -1.
 func LevelRank(level string) int {
 	switch level {

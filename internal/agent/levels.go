@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -91,12 +92,12 @@ type draftAction struct {
 	ChatRef string          `json:"chat_ref,omitempty"`
 }
 
+// prettyArgs indents the arguments without re-encoding them, so what a
+// person reads is exactly what runs (no number rounding).
 func prettyArgs(args json.RawMessage) string {
-	var v any
-	if json.Unmarshal(args, &v) == nil {
-		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
-			return string(b)
-		}
+	var b bytes.Buffer
+	if json.Indent(&b, args, "", "  ") == nil {
+		return b.String()
 	}
 	return string(args)
 }

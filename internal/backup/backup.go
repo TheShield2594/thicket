@@ -116,7 +116,10 @@ func addFile(tw *tar.Writer, path, name string, mode int64) error {
 }
 
 // voiceTestPath matches a sprig's voice test in an archive.
-var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.yaml$`)
+// The file name may be anything Export would include (any *.yaml name),
+// except hidden names, separators and control characters; ".." is refused
+// separately.
+var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[^./\\\x00-\x1f][^/\\\x00-\x1f]*\.yaml$`)
 
 // maxEntry bounds any single file in an archive.
 const maxEntry int64 = 64 << 30

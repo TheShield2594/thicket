@@ -501,14 +501,18 @@ func TestWebhookFilter(t *testing.T) {
 // a webhook filter sees the body, not the headers; /health hides MCP
 // error details.
 func TestApprovalEdgeCases(t *testing.T) {
-	a, fc, _, ctx, _, writes := ready(t)
+	a, fc, fm, ctx, _, writes := ready(t)
 	a.Engine.HandleIncoming(ctx, dm("hal, turn on the light"))
 	fc.take()
 	os.Remove(filepath.Join(a.Cfg.CharactersDir, "hal.md"))
 	a.Chars.Load()
+	before := fm.calls
 	a.Engine.HandleIncoming(ctx, dm("approve"))
 	out := fc.take()
-	if writes.Load() != 0 || len(out) == 0 || out[0].persona != "Juni" {
+	if fm.calls != before {
+		t.Fatal("the report ran a model turn, which could call tools")
+	}
+	if writes.Load() != 0 || len(out) != 1 || out[0].persona != "Juni" || !strings.Contains(out[0].text, "didn't run") {
 		t.Fatalf("a removed sprig's approval ran (writes %d): %+v", writes.Load(), out)
 	}
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -249,5 +250,29 @@ func TestInboxAfterResolve(t *testing.T) {
 	}
 	if items, _ := s.OpenInbox(ctx, u.ID); len(items) != 1 || items[0].Title != "b" {
 		t.Fatalf("open: %+v", items)
+	}
+}
+
+// A trust upgrade raises only from the level the user was shown, in one
+// transaction, and refuses when the level can't be read.
+func TestRaiseToolLevel(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelAsk, LevelAct); err != nil {
+		t.Fatal(err)
+	}
+	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", true); lv != LevelAct {
+		t.Fatalf("not raised: %q", lv)
+	}
+	s.SetToolLevel(ctx, "hal", "turn_on", LevelRead) // lowered meanwhile
+	if cur, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelAsk, LevelAct); !errors.Is(err, ErrLevelChanged) || cur != LevelRead {
+		t.Fatalf("stale raise: %q %v", cur, err)
+	}
+	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", true); lv != LevelRead {
+		t.Fatalf("stale raise applied: %q", lv)
+	}
+	s.Close()
+	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelRead, LevelAct); err == nil || errors.Is(err, ErrLevelChanged) {
+		t.Fatalf("a failed read must refuse: %v", err)
 	}
 }
