@@ -171,6 +171,19 @@ cookies (`Secure` over HTTPS).
   sprig is working: it stops at once, tells you anything it had already
   done, and sets aside messages you sent in the meantime. With no reply
   running, "stop" stops your running jobs.
+- Pin what matters: reply to a message with **pin this** (or say **pin
+  that** for the latest one) and it stays in every reply's context for the
+  rest of the conversation, even after older messages are summarised (up
+  to 10 pins). **What's pinned?**, **unpin this** and **unpin all** do what
+  they say. Pins end with the conversation; for anything longer, ask a
+  sprig to remember it.
+- Take things back: reply to a message with **forget this** and it's gone
+  from the conversation sprigs see (a sprig's message is deleted from the
+  chat too). **Delete that** deletes the sprig's last message. Deleting
+  your own message in Discord or the web app does the same; Telegram
+  doesn't tell bots about deletions, so reply "forget this" there. Plain
+  "forget that" is still about memories. The web app has pin and delete
+  buttons on every message.
 
 ## Configuration
 

@@ -102,6 +102,9 @@ func (e *Engine) AddChannel(c channel.Channel) {
 		e.channels = map[string]channel.Channel{}
 	}
 	e.channels[c.Name()] = c
+	if w, ok := c.(channel.DeleteWatcher); ok {
+		w.OnDelete(e.HandleDeleted)
+	}
 }
 
 func (e *Engine) Channels() map[string]channel.Channel { return e.channels }
@@ -230,7 +233,11 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
-	// 3. No model yet: scripted first-run setup.
+	// 3. Pin and delete commands ("pin this", "delete that").
+	if handled, err := e.handleMessageCommand(ctx, in, user, typed, addressed); handled || err != nil {
+		return err
+	}
+	// 4. No model yet: scripted first-run setup.
 	if !e.ModelReady(ctx) {
 		return e.bootstrap(ctx, in, user, host)
 	}
@@ -266,6 +273,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err != nil {
 		return err
 	}
+	if in.MessageID != "" {
+		_ = e.DB.AddMessageRefs(ctx, msgID, in.ChatRef(), in.MessageID)
+	}
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
@@ -287,8 +297,11 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	var sendErr error
 	if reply != "" {
-		if sendErr = e.send(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
-			_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", t.char.ID, reply)
+		var ids []string
+		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
+			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
+				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
+			}
 		}
 	}
 	// Approval prompts go out even if the reply failed. An approval is
@@ -506,6 +519,20 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 		return fmt.Errorf("no channel %q", name)
 	}
 	return ch.Send(ctx, id, e.persona(c), text)
+}
+
+// sendIDs is send, also returning the chat app's ids for what was posted
+// (none if the channel can't say).
+func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Character, text string) ([]string, error) {
+	name, id := splitRef(chatRef)
+	ch := e.channels[name]
+	if ch == nil {
+		return nil, fmt.Errorf("no channel %q", name)
+	}
+	if p, ok := ch.(channel.Poster); ok {
+		return p.SendIDs(ctx, id, e.persona(c), text)
+	}
+	return nil, ch.Send(ctx, id, e.persona(c), text)
 }
 
 // sendToUser posts proactively in the user's DMs and records it in that

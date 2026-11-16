@@ -186,6 +186,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
+	a.Web.Pin = a.Engine.PinWebMessage
 	a.channels = append(a.channels, a.Web)
 	for _, ch := range a.channels {
 		a.Engine.AddChannel(ch)

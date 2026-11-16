@@ -190,7 +190,8 @@ type message struct {
 	Entities        []entity `json:"entities"`
 	CaptionEntities []entity `json:"caption_entities"`
 	ReplyTo         *struct {
-		From *user `json:"from"`
+		MessageID int64 `json:"message_id"`
+		From      *user `json:"from"`
 	} `json:"reply_to_message"`
 	Photo    []file `json:"photo"`
 	Document *file  `json:"document"`
@@ -343,11 +344,15 @@ func (a *Adapter) incoming(m *message) (channel.Incoming, bool) {
 		name = m.From.Username
 	}
 	chatID := strconv.FormatInt(m.Chat.ID, 10)
+	replyTo := ""
+	if m.ReplyTo != nil && m.ReplyTo.MessageID != 0 {
+		replyTo = strconv.FormatInt(m.ReplyTo.MessageID, 10)
+	}
 	return channel.Incoming{
 		Channel: "telegram", ChatID: chatID, MessageID: strconv.FormatInt(m.MessageID, 10),
 		UserID: strconv.FormatInt(m.From.ID, 10), UserName: name, Text: text,
 		IsDM: m.Chat.Type == "private", Mentioned: mentioned, Listening: a.listen[chatID],
-		Attachments: atts,
+		Attachments: atts, ReplyTo: replyTo,
 	}, true
 }
 
@@ -452,14 +457,25 @@ func (a *Adapter) download(ctx context.Context, fileID string, max int) ([]byte,
 // --- sending ---
 
 func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, text string) error {
+	_, err := a.SendIDs(ctx, chatID, p, text)
+	return err
+}
+
+// SendIDs posts text as a persona and returns the ids of the messages it
+// became.
+func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
+	var ids []string
 	for i, part := range split(text, maxText) {
+		var sent struct {
+			MessageID int64 `json:"message_id"`
+		}
 		html := toHTML(part)
 		if i == 0 && p.Name != "" {
 			html = "<b>" + escape(p.Name) + "</b>\n" + html
 		}
 		params := map[string]any{"chat_id": chatID, "text": html, "parse_mode": "HTML",
 			"link_preview_options": map[string]any{"is_disabled": true}}
-		err := a.callRetry(ctx, "sendMessage", params, nil)
+		err := a.callRetry(ctx, "sendMessage", params, &sent)
 		var ae *apiError
 		if errors.As(err, &ae) && ae.Code == 400 && strings.Contains(ae.Desc, "parse entities") {
 			// Formatting Telegram won't accept: send it plain.
@@ -467,13 +483,16 @@ func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, te
 			if i == 0 && p.Name != "" {
 				plain = p.Name + ":\n" + part
 			}
-			err = a.callRetry(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": plain}, nil)
+			err = a.callRetry(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": plain}, &sent)
 		}
 		if err != nil {
-			return err
+			return ids, err
+		}
+		if sent.MessageID != 0 {
+			ids = append(ids, strconv.FormatInt(sent.MessageID, 10))
 		}
 	}
-	return nil
+	return ids, nil
 }
 
 // SendDirect posts in the user's private chat, whose id is the user's id.

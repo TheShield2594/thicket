@@ -161,12 +161,21 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		return nil, err
 	}
 	var history []store.Message
-	summary := ""
+	summary, pinned := "", ""
 	if t.conv != nil {
 		if history, err = e.DB.MessagesAfter(ctx, t.conv.ID, t.conv.SummaryUpto, historyLoadLimit); err != nil {
 			return nil, err
 		}
-		history, _ = fitHistory(history, e.historyBudget(ctx, t), t.userMsgID)
+		pins, err := e.DB.PinnedMessages(ctx, t.conv.ID)
+		if err != nil {
+			return nil, err
+		}
+		// Pinned messages that would fall out of the history are shown on
+		// their own, and take their room from the history budget.
+		budget := e.historyBudget(ctx, t)
+		pinned = e.pinnedBlock(pins, nil)
+		history, _ = fitHistory(history, max(budget-len(pinned), minHistoryChars), t.userMsgID)
+		pinned = e.pinnedBlock(pins, history)
 		summary = t.conv.Summary
 	}
 	query := t.query + " " + event
@@ -193,6 +202,9 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	msgs := []llm.Message{{Role: "system", Content: sys}}
 	if summary != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
+	}
+	if pinned != "" {
+		msgs = append(msgs, llm.Message{Role: "user", Content: pinned})
 	}
 	for i, h := range history {
 		// The message this turn answers, tracked by id: a notice added to

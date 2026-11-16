@@ -76,6 +76,21 @@ internal/avatar      parametric SVG avatars with CSS-animated states
    summary just lets old messages drop out, and isn't retried for 10
    minutes. A handoff then runs the next sprig's turn (at most 2 deep).
 
+## Pins and deletes
+
+Each stored message can carry the chat app's ids for it
+(`message_refs`: user messages from `Incoming.MessageID`, sprig replies
+from `channel.Poster.SendIDs`, which Discord, Telegram and the web app
+implement). That lets a reply (`Incoming.ReplyTo`) or a deletion event
+(`channel.DeleteWatcher`: Discord's `MessageDelete`, the web app's delete
+button) find the stored message. "Pin this", "forget this", "delete that"
+and friends are matched in code (`agent/pins.go`) after secrets and
+approvals, under the chat lock, and never stored or shown to the model.
+`buildMessages` shows pinned messages that fall outside the verbatim
+history as a block after the summary (1,500 characters each, 6,000 in
+all, taken from the history budget). Pins are conversation-scoped: a new
+conversation starts with none.
+
 ## Memory
 
 - Written directly when a sprig calls `remember` (memories the user asked

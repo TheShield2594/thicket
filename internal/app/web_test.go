@@ -142,6 +142,35 @@ func TestWebApp(t *testing.T) {
 		t.Fatalf("history: %d %v", code, out)
 	}
 
+	// Pin your message; delete Pip's reply. Both reach the conversation
+	// sprigs see.
+	pinPath := fmt.Sprintf("/api/chats/%s/messages/%d/pin", pipChat, msgs[0].ID)
+	if code, out := w.do("POST", pinPath, map[string]bool{"pinned": true}, true); code != 200 || out["pinned"] != true {
+		t.Fatalf("pin: %d %v", code, out)
+	}
+	if _, out := w.do("GET", "/api/chats/"+pipChat+"/messages", nil, false); out["messages"].([]any)[0].(map[string]any)["pinned"] != true {
+		t.Fatalf("history doesn't show the pin: %v", out)
+	}
+	conv, err := a.DB.CurrentConversation(ctx, owner.ID, "web:"+pipChat, a.Cfg.IdleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pins, _ := a.DB.PinnedMessages(ctx, conv.ID); len(pins) != 1 || pins[0].Content != "hello" {
+		t.Fatalf("conversation pins: %+v", pins)
+	}
+	if code, _ := w.do("DELETE", fmt.Sprintf("/api/chats/%s/messages/%d", fmt.Sprintf("%d.pip", owner.ID+1), msgs[1].ID), nil, true); code != http.StatusNotFound {
+		t.Fatalf("deleting in someone else's chat: %d", code)
+	}
+	if code, out := w.do("DELETE", fmt.Sprintf("/api/chats/%s/messages/%d", pipChat, msgs[1].ID), nil, true); code != 200 {
+		t.Fatalf("delete: %d %v", code, out)
+	}
+	if left, _ := a.DB.RecentMessages(ctx, conv.ID, 10); len(left) != 1 || left[0].Role != "user" {
+		t.Fatalf("Pip's reply is still in the conversation: %+v", left)
+	}
+	if left, _ := a.DB.WebMessages(ctx, pipChat, 0, 10); len(left) != 1 {
+		t.Fatalf("Pip's reply is still in the chat: %+v", left)
+	}
+
 	// In the shared room, addressing by name still routes.
 	room := fmt.Sprintf("%d.all", owner.ID)
 	w.do("POST", "/api/chats/"+room+"/messages", map[string]string{"text": "Pip, are you there?"}, true)

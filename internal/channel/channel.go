@@ -38,6 +38,9 @@ type Incoming struct {
 	// Attachments are files sent with the message. Text holds only what
 	// the user typed; the engine decides what to download.
 	Attachments []Attachment
+	// ReplyTo is the platform id of the message this one replies to, if
+	// any ("forget this", "pin this" in reply to a message).
+	ReplyTo string
 }
 
 // Attachment is a file sent with a message. URL must be https and is
@@ -71,4 +74,26 @@ type Channel interface {
 	Typing(ctx context.Context, chatID string)
 	// Connected reports whether the adapter is currently online.
 	Connected() bool
+}
+
+// Poster is implemented by channels that can say which messages a send
+// posted (a long text may become several), so they can be deleted later.
+type Poster interface {
+	SendIDs(ctx context.Context, chatID string, p Persona, text string) ([]string, error)
+}
+
+// Deletion reports messages someone deleted in a chat app.
+type Deletion struct {
+	Channel    string
+	ChatID     string
+	MessageIDs []string
+}
+
+// ChatRef is the deletion's channel-qualified chat id.
+func (d Deletion) ChatRef() string { return d.Channel + ":" + d.ChatID }
+
+// DeleteWatcher is implemented by channels that hear about deleted
+// messages (Discord does; Telegram bots aren't told).
+type DeleteWatcher interface {
+	OnDelete(func(ctx context.Context, d Deletion))
 }

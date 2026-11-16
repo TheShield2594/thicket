@@ -76,6 +76,8 @@ const ICONS = {
   check: '<path d="m5 12 5 5 9-10"/>',
   x: '<path d="M7 7l10 10M17 7 7 17"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
 };
 function icon(name, cls) {
@@ -802,17 +804,44 @@ function renderFeed(chat, animateId, forceBottom) {
 }
 
 function messageEl(m, cont, animate) {
+  const actions = !m.pending && !m.failed && m.id > 0 && h('span.msg-actions', {},
+    h('button.msg-act' + (m.pinned ? '.on' : ''), {
+      title: m.pinned ? 'Unpin' : 'Pin: keep it in view for the rest of this conversation',
+      'aria-label': m.pinned ? 'Unpin message' : 'Pin message', 'aria-pressed': m.pinned ? 'true' : 'false',
+      onclick: () => togglePin(m),
+    }, icon('pin')),
+    h('button.msg-act', { title: 'Delete: remove it here and from what sprigs remember of this conversation', 'aria-label': 'Delete message', onclick: () => deleteMessage(m) }, icon('trash')));
+  const pinMark = m.pinned && h('span.pin-mark', { title: 'Pinned for this conversation' }, icon('pin'));
   if (m.role === 'user') {
     const retry = m.failed && h('button', { class: 'stamp', style: { opacity: 1, color: 'var(--err)' }, onclick: () => { const c = S.chats.get(m.chat); c.messages = c.messages.filter((x) => x !== m); send(m.chat, m.content); } }, `Not sent (${m.failed}). Tap to retry`);
-    return h('div.msg.user' + (cont ? '.cont' : '') + (m.pending ? '.pending' : '') + (m.failed ? '.failed' : ''), {},
-      h('div.stack', {}, h('div.bubble', { html: md(m.content) }), retry || h('span.stamp', {}, m.pending ? 'Sending…' : clock(m.at))));
+    return h('div.msg.user' + (cont ? '.cont' : '') + (m.pending ? '.pending' : '') + (m.failed ? '.failed' : '') + (m.pinned ? '.pinned' : ''), {},
+      h('div.stack', {}, h('div.bubble', { html: md(m.content) }), retry || h('span.stamp', {}, actions, pinMark, m.pending ? 'Sending…' : clock(m.at))));
   }
   const s = S.sprigs.get(m.character) || { name: m.character || 'Thicket', color: '#7c8cff' };
-  const el = h('div.msg' + (cont ? '.cont' : ''), { style: { '--c': s.color } },
+  const el = h('div.msg' + (cont ? '.cont' : '') + (m.pinned ? '.pinned' : ''), { style: { '--c': s.color } },
     orb(s, 30),
-    h('div.stack', {}, h('span.who', {}, s.name), h('div.bubble', { html: md(m.content) }), h('span.stamp', {}, clock(m.at))));
+    h('div.stack', {}, h('span.who', {}, s.name), h('div.bubble', { html: md(m.content) }), h('span.stamp', {}, clock(m.at), pinMark, actions)));
   if (!animate) el.style.animation = 'none';
   return el;
+}
+
+async function togglePin(m) {
+  try {
+    const r = await api(`/api/chats/${encodeURIComponent(m.chat)}/messages/${m.id}/pin`, { method: 'POST', body: { pinned: !m.pinned } });
+    const changed = r.pinned !== !!m.pinned;
+    m.pinned = r.pinned;
+    renderFeed(m.chat);
+    if (!changed && r.note) toast(r.note);
+    else toast(m.pinned ? 'Pinned for the rest of this conversation' : 'Unpinned');
+  } catch (e) { toast('Couldn’t change the pin: ' + e.message); }
+}
+
+async function deleteMessage(m) {
+  if (!confirm(m.role === 'user' ? 'Delete your message? Sprigs won’t see it anymore.' : 'Delete this message? Sprigs won’t see it anymore.')) return;
+  try {
+    await api(`/api/chats/${encodeURIComponent(m.chat)}/messages/${m.id}`, { method: 'DELETE' });
+    onDeleted(m.chat, m.id);
+  } catch (e) { toast('Couldn’t delete it: ' + e.message); }
 }
 
 // Approvals: Thicket asks with "Reply **approve** or **deny**"; offer the

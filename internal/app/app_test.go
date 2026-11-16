@@ -33,8 +33,23 @@ type fakeChannel struct {
 	sent    []sent
 	deleted []string
 	// failIf makes Send fail for matching text (simulates a dropped post).
-	failIf func(text string) bool
+	failIf   func(text string) bool
+	posted   int // ids handed out by SendIDs
+	onDelete func(ctx context.Context, d channel.Deletion)
 }
+
+// SendIDs is Send, naming each post "out-N" (like a chat app's ids).
+func (f *fakeChannel) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
+	if err := f.Send(ctx, chatID, p, text); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.posted++
+	return []string{fmt.Sprintf("out-%d", f.posted)}, nil
+}
+
+func (f *fakeChannel) OnDelete(fn func(ctx context.Context, d channel.Deletion)) { f.onDelete = fn }
 
 func (f *fakeChannel) Name() string {
 	if f.name == "" {

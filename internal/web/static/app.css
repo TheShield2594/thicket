@@ -295,7 +295,19 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .msg.user .bubble a { color: inherit; }
 .msg .stamp { font-size: 11px; color: var(--muted); padding: 0 6px; opacity: 0; transition: opacity 0.15s; }
 .msg.user .stamp { text-align: right; }
-.msg:hover .stamp { opacity: 1; }
+.msg:hover .stamp, .msg:focus-within .stamp { opacity: 1; }
+.msg .stamp { display: inline-flex; align-items: center; gap: 2px; }
+.msg.user .stamp { justify-content: flex-end; }
+.msg-actions { display: inline-flex; gap: 0; }
+.msg-act { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--muted); }
+.msg-act:hover, .msg-act:focus-visible { color: var(--text); background: var(--surface-3); }
+.msg-act.on { color: var(--c, var(--accent, currentColor)); }
+.msg-act .i { width: 15px; height: 15px; }
+.pin-mark { display: inline-grid; place-items: center; color: var(--muted); }
+.pin-mark .i { width: 12px; height: 12px; }
+.msg.pinned .stamp { opacity: 1; }
+.msg.pinned .bubble { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c, #7c8cff) 55%, transparent); }
+@media (hover: none) { .msg .stamp { opacity: 1; } }
 .msg.pending .bubble { opacity: 0.6; }
 .msg.failed .bubble { box-shadow: 0 0 0 1.5px var(--err); }
 .msg.failed .stamp { opacity: 1; color: var(--err); }

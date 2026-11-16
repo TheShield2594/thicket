@@ -68,9 +68,14 @@ type Adapter struct {
 	Status func(ctx context.Context, admin bool) Status
 	// SecureCookies forces the Secure flag (set when PublicURL is https).
 	SecureCookies bool
+	// Pin pins or unpins the conversation message behind a web message,
+	// returning what to tell the user (the engine's PinWebMessage).
+	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration
+
+	onDelete func(ctx context.Context, d channel.Deletion)
 
 	running atomic.Bool
 	mu      sync.RWMutex
@@ -153,17 +158,27 @@ func parseChat(chatID string) (int64, string, bool) {
 }
 
 func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, text string) error {
+	_, err := a.SendIDs(ctx, chatID, p, text)
+	return err
+}
+
+// SendIDs posts a sprig's message and returns its id.
+func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
 	uid, _, ok := parseChat(chatID)
 	if !ok {
-		return fmt.Errorf("web: bad chat id %q", chatID)
+		return nil, fmt.Errorf("web: bad chat id %q", chatID)
 	}
 	m, err := a.DB.AddWebMessage(ctx, uid, store.WebMessage{ChatID: chatID, Role: "assistant", Character: p.ID, Content: text})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	a.publish(uid, Event{Type: "message", Chat: chatID, Message: &m})
-	return nil
+	return []string{strconv.FormatInt(m.ID, 10)}, nil
 }
+
+// OnDelete registers what to call when someone deletes a message in the
+// app. Call it before Run.
+func (a *Adapter) OnDelete(f func(ctx context.Context, d channel.Deletion)) { a.onDelete = f }
 
 func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Persona, text string) (string, error) {
 	u, err := a.DB.UserByExternal(ctx, ChannelName, userID)
@@ -270,6 +285,8 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sprigs/{id}", a.auth(a.sprig))
 	mux.HandleFunc("GET /api/chats/{chat}/messages", a.auth(a.messages))
 	mux.HandleFunc("POST /api/chats/{chat}/messages", a.auth(a.post))
+	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
+	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
 	return securityHeaders(mux)
 }
@@ -598,6 +615,67 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig}
 	go h(runCtx, in) // the turn outlives this request
 	writeJSON(w, http.StatusOK, map[string]any{"message": m})
+}
+
+// deleteMessage deletes a message from a chat and from the conversation
+// sprigs see.
+func (a *Adapter) deleteMessage(w http.ResponseWriter, r *http.Request, u *store.User) {
+	chatID := r.PathValue("chat")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	done, err := a.DB.DeleteWebMessage(r.Context(), chatID, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !done {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	a.publish(u.ID, Event{Type: "deleted", Chat: chatID, ID: id})
+	if a.onDelete != nil {
+		a.onDelete(r.Context(), channel.Deletion{Channel: ChannelName, ChatID: chatID, MessageIDs: []string{strconv.FormatInt(id, 10)}})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// pinMessage pins or unpins a message for the rest of its conversation.
+func (a *Adapter) pinMessage(w http.ResponseWriter, r *http.Request, u *store.User) {
+	chatID := r.PathValue("chat")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	var body struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if a.Pin == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pinning isn't available")
+		return
+	}
+	if _, err := a.DB.WebMessageByID(r.Context(), chatID, id); err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	note, err := a.Pin(r.Context(), u.ID, ChannelName+":"+chatID, strconv.FormatInt(id, 10), body.Pinned)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "couldn't change the pin")
+		return
+	}
+	m, err := a.DB.WebMessageByID(r.Context(), chatID, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pinned": m.Pinned, "note": note})
 }
 
 func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) {

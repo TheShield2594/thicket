@@ -4,6 +4,18 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v12)
+
+- Pin and delete messages. Reply "pin this" (or say "pin that") to keep a
+  message in every reply's context for the rest of the conversation, even
+  after compaction; "what's pinned?", "unpin this", "unpin all". Reply
+  "forget this" to take a message out of the stored conversation (a
+  sprig's is deleted from the chat too); "delete that" deletes the sprig's
+  last message. Messages deleted in Discord or the web app leave the
+  conversation as well. The web app gets pin and delete buttons. These
+  commands are handled in code and never stored. New `message_refs` table
+  maps chat-app message ids to stored messages; `messages.pinned`.
+
 ## Unreleased: sprigs that feel alive (schema v11)
 
 - Skills: a starter pack of six example skills (morning briefing, weekly
