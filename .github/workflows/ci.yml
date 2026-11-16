@@ -40,3 +40,24 @@ jobs:
         run: docker build --build-arg VERSION=${{ github.sha }} -t thicket:ci .
       - name: image smoke test
         run: docker run --rm thicket:ci version
+
+  # Publish the image docker-compose.yml points at, only on pushes to main
+  # (never from pull requests) and only after tests pass. Uses the repo's
+  # own GITHUB_TOKEN.
+  publish:
+    if: github.event_name == 'push'
+    needs: [test, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: build and push
+        run: |
+          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker build --build-arg VERSION=${{ github.sha }} -t "$IMAGE:latest" -t "$IMAGE:${{ github.sha }}" .
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"

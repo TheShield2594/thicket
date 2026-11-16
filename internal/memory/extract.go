@@ -77,6 +77,9 @@ func (r *Reviewer) ReviewPending(ctx context.Context) {
 		}
 		if _, err := r.Review(ctx, c); err != nil {
 			r.Log.Warn("memory review failed", "conversation", c.ID, "err", err)
+			if llm.IsBudget(err) {
+				continue // a spend cap isn't the conversation's fault; retry later
+			}
 			_ = r.DB.MarkReviewFailed(ctx, c.ID)
 			if c.ReviewAttempts+1 >= 3 && r.OnFailure != nil {
 				r.OnFailure(ctx, c.UserID, err)
@@ -186,7 +189,8 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 			Summary: fmt.Sprintf("memory review run %d: %d change(s), %d skipped", runID, len(plan.Changes), len(plan.Skipped)),
 			Detail:  strings.Join(plan.Skipped, "\n")})
 	}
-	return runID, r.DB.MarkReviewed(ctx, conv.ID)
+	_, err = r.DB.MarkReviewed(ctx, conv.ID, conv.LastActivityAt)
+	return runID, err
 }
 
 func (r *Reviewer) charName(id string) string {

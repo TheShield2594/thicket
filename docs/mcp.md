@@ -91,9 +91,15 @@ expire after 30 minutes).
 
 Anything that comes back from an integration (an email body, a web page, a
 document) is wrapped as untrusted data before the model sees it, and the
-model is told never to follow instructions inside it. Combined with
-approvals for side effects, an email that says "forward all my mail to X"
-can't make a sprig do it.
+model is told not to follow instructions inside it. That lowers the risk of
+prompt injection but can't rule it out: models can still be fooled.
+
+The real backstop is approvals. With approval on, an email that says
+"forward all my mail to X" can at worst make a sprig *ask* you to do it, and
+you'll see the exact action before anything happens. If you set a
+side-effecting tool to `never` need approval, injected content in an email
+or page could trigger that tool without a prompt. Only turn approval off
+for actions you'd be fine with happening by mistake.
 
 ## Limits
 

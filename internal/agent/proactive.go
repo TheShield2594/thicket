@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -119,7 +120,9 @@ func (e *Engine) quiet(c *character.Character, u *store.User) bool {
 	return c.InQuietHours(n.Hour()*60 + n.Minute())
 }
 
-// FollowUps sends due follow-ups, one per user per run.
+// FollowUps sends due follow-ups, one per user per run. A follow-up is
+// only marked done once it was actually delivered; a failed attempt is
+// retried after an hour (the claim stops duplicate sends meanwhile).
 func (e *Engine) FollowUps(ctx context.Context) {
 	due, err := e.DB.DueFollowups(ctx)
 	if err != nil {
@@ -135,22 +138,38 @@ func (e *Engine) FollowUps(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		expire := func(why string) {
+			if _, err := e.DB.ApplyMemoryChanges(ctx, 0, []store.MemoryChange{{Action: "expire", Memory: store.Memory{ID: m.ID}}}); err != nil {
+				e.Log.Error("expire followup", "err", err)
+			}
+			if why != "" {
+				e.logActivity(ctx, "info", "character", m.Character, m.UserID, "follow-up dropped: "+why, m.Content)
+			}
+		}
+		if e.now().Sub(m.DueAt) > 3*24*time.Hour {
+			expire("it was more than 3 days overdue")
+			continue
+		}
 		char, ok := e.Chars.Get(m.Character)
 		if !ok || !char.Initiative.FollowUps {
-			if char, ok = e.Chars.Host(); !ok {
-				continue
-			}
+			char, ok = e.Chars.Host()
+		}
+		// The final choice must allow follow-ups too, host included.
+		if !ok || !char.Initiative.FollowUps {
+			expire("no sprig has follow-ups switched on")
+			continue
 		}
 		if e.quiet(char, user) {
 			continue // try again after quiet hours
 		}
-		done[m.UserID] = true
-		// Expire first so a failure can't make it nag repeatedly.
-		if _, err := e.DB.ApplyMemoryChanges(ctx, 0, []store.MemoryChange{{Action: "expire", Memory: store.Memory{ID: m.ID}}}); err != nil {
-			e.Log.Error("expire followup", "err", err)
-			continue
+		if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("followup:%d", m.ID), time.Hour); !ok {
+			continue // attempted recently
 		}
-		e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content))
+		done[m.UserID] = true
+		err = e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content))
+		if err == nil {
+			expire("")
+		}
 	}
 }
 
@@ -184,27 +203,40 @@ func (e *Engine) CheckIns(ctx context.Context) {
 		if char == nil {
 			continue
 		}
-		if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("checkin:%d", u.ID), window); !ok {
+		// One check-in per quiet spell: the key changes only when the user
+		// writes again, so a silent user isn't pinged every N days.
+		if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("checkin:%d:%d", u.ID, last.Unix()), 10*365*24*time.Hour); !ok {
 			continue
 		}
-		e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
+		_ = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
 	}
 }
 
-func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string) {
+// errQuietHours means generation finished inside quiet hours, so nothing
+// was sent.
+var errQuietHours = errors.New("quiet hours started; not sent")
+
+// proactive generates and delivers a message the user didn't ask for. It
+// returns nil only if the message was delivered.
+func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string) error {
 	t := &turn{user: u, char: c, query: event, noTools: true}
 	pctx := llm.WithMeta(ctx, llm.Meta{UserID: u.ID, Character: c.ID, Purpose: "proactive"})
 	text, err := e.runTurn(pctx, t, event)
 	if err != nil {
 		e.Log.Warn("proactive message failed", "user", u.ID, "character", c.ID, "err", err)
-		return
+		return err
 	}
 	if text == "" {
-		return
+		return errors.New("model produced no message")
+	}
+	// Generation can take a while: re-check quiet hours right before sending.
+	if e.quiet(c, u) {
+		return errQuietHours
 	}
 	if err := e.sendToUser(ctx, u, c, text); err != nil {
 		e.Log.Error("send proactive message", "err", err)
-		return
+		return err
 	}
 	e.logActivity(ctx, "info", "character", c.ID, u.ID, "sent a check-in", truncate(text, 200))
+	return nil
 }

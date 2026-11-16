@@ -165,10 +165,16 @@ func openStore(cfg *config.Config) (*store.Store, error) {
 }
 
 func export(args []string) error {
-	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default thicket-export-DATE.tar.gz)")
 	withKey := fs.Bool("include-key", false, "include secret.key so stored API keys survive the move (keep the file safe!)")
-	_ = fs.Parse(args)
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return errors.New("usage: thicket export [-o FILE] [--include-key]")
+	}
 	cfg := loadConfig()
 	db, err := openStore(cfg)
 	if err != nil {
@@ -199,14 +205,17 @@ func export(args []string) error {
 }
 
 func restore(args []string) error {
-	fs := flag.NewFlagSet("restore", flag.ExitOnError)
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	force := fs.Bool("force", false, "replace an existing database (the old files are kept as .before-restore-*)")
-	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
 		return errors.New("usage: thicket restore FILE [--force]")
 	}
 	cfg := loadConfig()
-	f, err := os.Open(fs.Arg(0))
+	f, err := os.Open(pos[0])
 	if err != nil {
 		return err
 	}
@@ -252,13 +261,16 @@ func characterCmd(args []string) error {
 		}
 		return nil
 	case "export":
-		fs := flag.NewFlagSet("character export", flag.ExitOnError)
+		fs := flag.NewFlagSet("character export", flag.ContinueOnError)
 		out := fs.String("o", "", "output file")
-		_ = fs.Parse(args[1:])
-		if fs.NArg() != 1 {
+		pos, err := parseFlags(fs, args[1:])
+		if err != nil {
+			return err
+		}
+		if len(pos) != 1 {
 			return errors.New("usage: thicket character export ID [-o FILE]")
 		}
-		id := fs.Arg(0)
+		id := pos[0]
 		b, err := os.ReadFile(filepath.Join(cfg.CharactersDir, filepath.Base(id)+".md"))
 		if err != nil {
 			return err
@@ -333,6 +345,24 @@ func memoryCmd(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown memory command %q", args[0])
+}
+
+// parseFlags parses flags wherever they appear, so the documented
+// "thicket restore FILE --force" works as well as "--force FILE".
+// The standard flag package stops at the first positional argument.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if len(args) == 0 {
+			return pos, nil
+		}
+		pos = append(pos, args[0])
+		args = args[1:]
+	}
 }
 
 func firstLine(s string) string {

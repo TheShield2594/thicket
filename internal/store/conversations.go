@@ -109,10 +109,16 @@ func (s *Store) ConversationsToReview(ctx context.Context, idle time.Duration, l
 	return out, rows.Err()
 }
 
-// MarkReviewed closes a conversation once memory review has run (or been skipped).
-func (s *Store) MarkReviewed(ctx context.Context, convID int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE conversations SET reviewed_at = ? WHERE id = ?", s.unix(), convID)
-	return err
+// MarkReviewed closes a conversation once memory review has run. If a
+// message arrived after the reviewed snapshot (asOf), it stays open so the
+// whole conversation is reviewed again once it goes idle.
+func (s *Store) MarkReviewed(ctx context.Context, convID int64, asOf time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET reviewed_at = ? WHERE id = ? AND last_activity_at <= ?", s.unix(), convID, asOf.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 func (s *Store) MarkReviewFailed(ctx context.Context, convID int64) error {

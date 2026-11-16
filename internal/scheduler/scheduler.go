@@ -222,5 +222,7 @@ func (s *Scheduler) runOne(ctx context.Context, j store.Job, now time.Time, sche
 		s.Log.Error("finish job run", "job", j.ID, "err", err)
 	}
 	s.Log.Info("job finished", "job", j.ID, "name", j.Name, "status", res.Status)
-	s.Exec.JobFinished(ctx, j, res, sched.Next(s.Now().In(loc)))
+	// Same base Due uses (last_run_at = this tick), so the reported next
+	// run matches when it will actually fire.
+	s.Exec.JobFinished(ctx, j, res, sched.Next(now.In(loc)))
 }

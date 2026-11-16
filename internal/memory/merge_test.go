@@ -211,3 +211,23 @@ func TestLimitCountsCharactersNotBytes(t *testing.T) {
 		t.Fatalf("150-character memory rejected: %v", p.Skipped)
 	}
 }
+
+func TestKindChangeMovesExpiry(t *testing.T) {
+	ex := []store.Memory{
+		{ID: 1, UserID: 7, Kind: "fact", Content: "Is visiting Lisbon.", Source: "auto", UpdatedAt: now},
+		{ID: 2, UserID: 7, Kind: "context", Content: "Learning to sail.", Source: "auto", UpdatedAt: now, ExpiresAt: now.Add(time.Hour)},
+	}
+	p := BuildPlan(PlanInput{UserID: 7, Existing: ex, Now: now}, []Op{
+		{Op: "update", ID: 1, Kind: "context", Content: "Is visiting Lisbon this week."},
+		{Op: "update", ID: 2, Kind: "project", Content: "Learning to sail; lessons every Sunday."},
+	})
+	if len(p.Changes) != 2 {
+		t.Fatalf("got %+v %v", p.Changes, p.Skipped)
+	}
+	if c := p.Changes[0]; !c.SetExpiry || !c.Memory.ExpiresAt.Equal(now.Add(ContextTTL)) {
+		t.Fatalf("fact->context should gain an expiry: %+v", c)
+	}
+	if c := p.Changes[1]; !c.SetExpiry || !c.Memory.ExpiresAt.IsZero() {
+		t.Fatalf("context->project should lose its expiry: %+v", c)
+	}
+}

@@ -115,7 +115,9 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				case sameText(dup.Content, content) && dup.Kind == kind && dup.DueAt.Equal(m.DueAt):
 					p.Changes = append(p.Changes, store.MemoryChange{Action: "touch", Memory: store.Memory{ID: dup.ID}})
 				default:
-					p.Changes = append(p.Changes, store.MemoryChange{Action: "update", Memory: store.Memory{ID: dup.ID, Content: content, Kind: kind, DueAt: m.DueAt}})
+					ch := store.MemoryChange{Action: "update", Memory: store.Memory{ID: dup.ID, Content: content, Kind: kind, DueAt: m.DueAt}}
+					expiryTransition(&ch, dup.Kind, kind, in.Now)
+					p.Changes = append(p.Changes, ch)
 				}
 				touched[dup.ID] = true
 				continue
@@ -173,7 +175,9 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			if sameText(content, old.Content) && effective == old.Kind && (ch.DueAt.IsZero() || ch.DueAt.Equal(old.DueAt)) {
 				continue
 			}
-			p.Changes = append(p.Changes, store.MemoryChange{Action: "update", Memory: ch})
+			change := store.MemoryChange{Action: "update", Memory: ch}
+			expiryTransition(&change, old.Kind, effective, in.Now)
+			p.Changes = append(p.Changes, change)
 
 		case "expire":
 			old, ok := byID[op.ID]
@@ -196,6 +200,18 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 		}
 	}
 	return p
+}
+
+// expiryTransition sets the expiry when a memory moves into or out of the
+// short-lived "context" kind, so it neither lingers nor vanishes wrongly.
+func expiryTransition(ch *store.MemoryChange, from, to string, now time.Time) {
+	switch {
+	case from == to:
+	case to == "context":
+		ch.SetExpiry, ch.Memory.ExpiresAt = true, now.Add(ContextTTL)
+	case from == "context":
+		ch.SetExpiry, ch.Memory.ExpiresAt = true, time.Time{}
+	}
 }
 
 func normKind(k string) string {

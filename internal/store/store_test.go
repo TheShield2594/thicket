@@ -55,7 +55,7 @@ func TestMemoryChangesAndRollback(t *testing.T) {
 	ctx := context.Background()
 	s, _ := open(t)
 	u, _ := s.CreateUser(ctx, "discord", "1", "Sam", "owner")
-	ids, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Likes tea.", Source: "user", Locked: true}}})
+	ids, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Likes tea.", Source: "auto"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestMemoryChangesAndRollback(t *testing.T) {
 		t.Fatalf("rollback: %d %v", n, err)
 	}
 	mems, _ := s.AllMemories(ctx, u.ID)
-	if len(mems) != 1 || mems[0].Content != "Likes tea." || !mems[0].Locked {
+	if len(mems) != 1 || mems[0].Content != "Likes tea." {
 		t.Fatalf("rollback did not restore: %+v", mems)
 	}
 	if _, err := s.RollbackRun(ctx, run); err == nil {
@@ -227,5 +227,43 @@ func TestSweepRemovesHistory(t *testing.T) {
 	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE memory_id = ?", ids[0]).Scan(&events)
 	if events != 0 {
 		t.Fatalf("%d history rows left after sweep", events)
+	}
+}
+
+func TestAutomaticReviewRespectsLateLock(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	u, _ := s.CreateUser(ctx, "discord", "1", "", "owner")
+	ids, _ := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Likes tea.", Source: "auto"}}})
+	s.LockMemory(ctx, ids[0]) // user locks it while a review is in flight
+	run, _ := s.CreateExtractionRun(ctx, 0, u.ID, "m")
+	if _, err := s.ApplyMemoryChanges(ctx, run, []MemoryChange{
+		{Action: "update", Memory: Memory{ID: ids[0], Content: "Likes coffee."}},
+		{Action: "expire", Memory: Memory{ID: ids[0]}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := s.MemoryByID(ctx, ids[0])
+	if m.Content != "Likes tea." || !m.ExpiresAt.IsZero() {
+		t.Fatalf("locked memory changed by review: %+v", m)
+	}
+}
+
+func TestMarkReviewedSkipsNewActivity(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return now })
+	u, _ := s.CreateUser(ctx, "discord", "1", "", "owner")
+	c, _ := s.OpenConversation(ctx, u.ID, "discord:dm", time.Hour)
+	s.AddMessage(ctx, c.ID, "user", "", "hi")
+	snapshot := now
+	now = now.Add(time.Minute)
+	s.AddMessage(ctx, c.ID, "user", "", "one more thing") // arrives during review
+	if ok, _ := s.MarkReviewed(ctx, c.ID, snapshot); ok {
+		t.Fatal("conversation with new messages was closed")
+	}
+	if ok, _ := s.MarkReviewed(ctx, c.ID, now); !ok {
+		t.Fatal("unchanged conversation should close")
 	}
 }

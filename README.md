@@ -39,7 +39,11 @@ the first sprig.
    ```
 
    In Portainer: Stacks → Add stack → paste `docker-compose.yml` → add
-   `DISCORD_TOKEN` as an environment variable → Deploy.
+   `DISCORD_TOKEN` as an environment variable → Deploy. This pulls
+   `ghcr.io/theshield2594/thicket:latest`, which CI publishes on every push
+   to `main`. (If the package is private, make it public in the repo's
+   Packages settings or log Portainer in to ghcr.io.) Any variable in the
+   configuration table below can be added the same way.
 3. **DM the bot.** Juni says hello and asks for an
    [OpenRouter](https://openrouter.ai/keys) key. Paste it in the DM: she
    checks it works and stores it encrypted. Then she'll learn your name,

@@ -1,7 +1,9 @@
 package backup
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -80,5 +82,34 @@ tools: [admin, characters, schedule, "mcp:gmail/*"]
 	}
 	if _, _, err := ImportCharacter(src, dir); err == nil {
 		t.Fatal("duplicate import should fail")
+	}
+}
+
+func TestRestoreLeavesInstallUntouchedOnBadArchive(t *testing.T) {
+	dst := t.TempDir()
+	os.WriteFile(filepath.Join(dst, "thicket.db"), []byte("old db"), 0o600)
+	os.WriteFile(filepath.Join(dst, "secret.key"), []byte("old key"), 0o600)
+	// An archive with a key but no database must not swap the key in.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "secret.key", Mode: 0o600, Size: 7, Typeflag: tar.TypeReg})
+	tw.Write([]byte("new key"))
+	tw.Close()
+	gz.Close()
+	if err := Restore(&buf, dst, filepath.Join(dst, "characters"), true); err == nil {
+		t.Fatal("expected failure")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "secret.key")); string(b) != "old key" {
+		t.Fatalf("key replaced by a failed restore: %q", b)
+	}
+}
+
+func TestImportCreatesCharactersDir(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "pip.md")
+	os.WriteFile(src, []byte("---\nid: pip\nname: Pip\nrole: r\npersonality: {traits: [a]}\nvoice: {style: [b]}\n---\n"), 0o644)
+	dir := filepath.Join(t.TempDir(), "not", "yet")
+	if _, _, err := ImportCharacter(src, dir); err != nil {
+		t.Fatalf("first import into a missing dir failed: %v", err)
 	}
 }

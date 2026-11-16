@@ -104,21 +104,36 @@ func addFile(tw *tar.Writer, path, name string, mode int64) error {
 	return err
 }
 
-// Restore unpacks an export into dataDir. It refuses to overwrite an
-// existing database unless force is set, in which case the old files are
-// moved aside rather than deleted.
+// maxEntry bounds any single file in an archive.
+const maxEntry int64 = 64 << 30
+
+// Restore unpacks an export into dataDir. The archive is extracted into a
+// staging directory and checked first; only then are the installation's
+// files swapped in. Existing files are moved aside (never deleted), and if
+// anything fails part-way the swap is undone so the database and key stay
+// consistent. An existing database is only replaced with force.
 func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 	dbPath := filepath.Join(dataDir, "thicket.db")
 	if _, err := os.Stat(dbPath); err == nil && !force {
 		return fmt.Errorf("%s already exists; stop Thicket and pass --force to replace it (the current files are kept as .before-restore)", dbPath)
 	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(dataDir, ".restore-staging-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+
+	// 1. Extract everything into staging.
+	type item struct{ staged, dest string }
+	var items []item
 	gz, err := gzip.NewReader(archive)
 	if err != nil {
 		return err
 	}
 	tr := tar.NewReader(gz)
-	suffix := ".before-restore-" + time.Now().UTC().Format("20060102T150405")
-	sawDB := false
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -133,46 +148,98 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 		}
 		var dest string
 		switch {
-		case name == "manifest.json":
-			continue
 		case name == "thicket.db":
-			dest, sawDB = dbPath, true
-			for _, ext := range []string{"", "-wal", "-shm"} {
-				if _, err := os.Stat(dbPath + ext); err == nil {
-					if err := os.Rename(dbPath+ext, dbPath+ext+suffix); err != nil {
-						return err
-					}
-				}
-			}
+			dest = dbPath
 		case name == "secret.key":
 			dest = filepath.Join(dataDir, "secret.key")
-		case strings.HasPrefix(name, "characters/"):
+		case strings.HasPrefix(name, "characters/") && h.Typeflag == tar.TypeReg:
 			dest = filepath.Join(charsDir, filepath.Base(name))
 		default:
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-			return err
+		if h.Size < 0 || h.Size > maxEntry {
+			return fmt.Errorf("%s in the archive is too large (%d bytes)", name, h.Size)
 		}
-		if _, err := os.Stat(dest); err == nil && dest != dbPath {
-			if err := os.Rename(dest, dest+suffix); err != nil {
-				return err
-			}
-		}
-		f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o644|0o600)
+		staged := filepath.Join(stage, strings.ReplaceAll(name, "/", "__"))
+		f, err := os.OpenFile(staged, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(f, io.LimitReader(tr, 4<<30)); err != nil {
+		n, err := io.CopyN(f, tr, h.Size)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil || n != h.Size {
+			return fmt.Errorf("%s in the archive is truncated or unreadable: %v", name, err)
+		}
+		items = append(items, item{staged, dest})
+	}
+
+	// 2. Validate before touching the installation.
+	var hasDB bool
+	for _, it := range items {
+		if it.dest == dbPath {
+			hdr := make([]byte, 16)
+			f, err := os.Open(it.staged)
+			if err != nil {
+				return err
+			}
+			_, err = io.ReadFull(f, hdr)
 			f.Close()
+			if err != nil || string(hdr) != "SQLite format 3\x00" {
+				return errors.New("thicket.db in the archive is not a SQLite database")
+			}
+			hasDB = true
+		}
+	}
+	if !hasDB {
+		return errors.New("archive has no thicket.db; is this a Thicket export?")
+	}
+
+	// 3. Swap files in, remembering how to undo each step.
+	suffix := ".before-restore-" + time.Now().UTC().Format("20060102T150405")
+	var undo []func()
+	rollback := func() {
+		for k := len(undo) - 1; k >= 0; k-- {
+			undo[k]()
+		}
+	}
+	moveAside := func(path string) error {
+		if _, err := os.Stat(path); err != nil {
+			return nil
+		}
+		if err := os.Rename(path, path+suffix); err != nil {
 			return err
 		}
-		if err := f.Close(); err != nil {
+		undo = append(undo, func() { os.Rename(path+suffix, path) })
+		return nil
+	}
+	for _, ext := range []string{"-wal", "-shm"} {
+		if err := moveAside(dbPath + ext); err != nil {
+			rollback()
 			return err
 		}
 	}
-	if !sawDB {
-		return errors.New("archive has no thicket.db; is this a Thicket export?")
+	for _, it := range items {
+		if err := os.MkdirAll(filepath.Dir(it.dest), 0o700); err != nil {
+			rollback()
+			return err
+		}
+		if err := moveAside(it.dest); err != nil {
+			rollback()
+			return err
+		}
+		if err := os.Rename(it.staged, it.dest); err != nil {
+			rollback()
+			return fmt.Errorf("restore %s: %w (nothing was changed)", filepath.Base(it.dest), err)
+		}
+		dest := it.dest
+		undo = append(undo, func() { os.Remove(dest) })
+		mode := os.FileMode(0o600)
+		if strings.HasPrefix(dest, charsDir) {
+			mode = 0o644
+		}
+		_ = os.Chmod(dest, mode)
 	}
 	return nil
 }
@@ -216,6 +283,9 @@ func ImportCharacter(src, charsDir string) (*character.Character, []string, erro
 	}
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, nil, fmt.Errorf("invalid character: %s", strings.Join(probs, "; "))
+	}
+	if err := os.MkdirAll(charsDir, 0o755); err != nil {
+		return nil, nil, err
 	}
 	dest := filepath.Join(charsDir, c.ID+".md")
 	if _, err := os.Stat(dest); err == nil {

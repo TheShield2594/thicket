@@ -88,6 +88,9 @@ func (s *Store) DueFollowups(ctx context.Context) ([]Memory, error) {
 type MemoryChange struct {
 	Action string // add | update | expire | delete | touch
 	Memory Memory // for add: the new memory; for update: ID + new Content/Kind/DueAt
+	// SetExpiry makes an update write Memory.ExpiresAt (zero clears it),
+	// e.g. when a memory changes to or from the short-lived "context" kind.
+	SetExpiry bool
 }
 
 func memJSON(m *Memory) string {
@@ -131,6 +134,11 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 			}
 			m.ID, _ = res.LastInsertId()
 		case "update":
+			// Re-check the lock inside the transaction: the user may have
+			// locked it while an automatic review was running.
+			if runID != 0 && before.Locked {
+				continue
+			}
 			kind := m.Kind
 			if kind == "" {
 				kind = before.Kind
@@ -139,11 +147,18 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 			if m.DueAt.IsZero() {
 				due = unixOrNil(before.DueAt)
 			}
-			if _, err := tx.ExecContext(ctx, "UPDATE memories SET content = ?, kind = ?, due_at = ?, updated_at = ? WHERE id = ?",
-				m.Content, kind, due, now, m.ID); err != nil {
+			exp := unixOrNil(before.ExpiresAt)
+			if ch.SetExpiry {
+				exp = unixOrNil(m.ExpiresAt)
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE memories SET content = ?, kind = ?, due_at = ?, expires_at = ?, updated_at = ? WHERE id = ?",
+				m.Content, kind, due, exp, now, m.ID); err != nil {
 				return nil, err
 			}
 		case "expire":
+			if runID != 0 && before.Locked {
+				continue
+			}
 			if _, err := tx.ExecContext(ctx, "UPDATE memories SET expires_at = ?, updated_at = ? WHERE id = ?", now, now, m.ID); err != nil {
 				return nil, err
 			}
