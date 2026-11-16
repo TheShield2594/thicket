@@ -336,6 +336,14 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolCreateCharacter,
 		},
 		{
+			Name:        "import_guide",
+			Description: "How to bring a character over from another app (OpenClaw, Hermes Agent, character cards from SillyTavern/Chub, Grok, ChatGPT, Character.AI, anything else): the steps, the import command, and for apps with no export a ready-to-paste prompt that gets the character to write itself out. Use when the user asks how to import or move a companion here.",
+			Params:      `{"type":"object","properties":{"platform":{"type":"string","description":"the app, as the user named it, e.g. openclaw, hermes, sillytavern, grok, chatgpt"},"memories":{"type":"boolean","description":"also bring what that app knows about the user (default true)"}},"required":["platform"]}`,
+			Scope:       "characters",
+			ChatOnly:    true,
+			Run:         e.toolImportGuide,
+		},
+		{
 			Name:        "grant_tools",
 			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,

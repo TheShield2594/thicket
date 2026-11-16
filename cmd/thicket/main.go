@@ -43,7 +43,10 @@ Usage:
   thicket restore FILE [--force]      restore an export into the data directory
   thicket character list              list character files and any problems
   thicket character export ID [-o FILE]
-  thicket character import FILE       add a shared character (integration access is stripped)
+  thicket character import FILE|FOLDER [--from FORMAT] [--memories] [--yes]
+                                      bring in a character: a Thicket file, a character card
+                                      (.json/.png), an OpenClaw workspace, a Hermes Agent home,
+                                      or a Grok persona / instruction file (shown before it's written)
   thicket web link [--user ID] [--ttl 24h]
                                       print a one-time sign-in link for the web app
                                       (default: the owner; on a fresh install it makes you the owner)
@@ -369,18 +372,7 @@ func characterCmd(args []string) error {
 		fmt.Println("exported", id, "to", path, "(memories are never included)")
 		return nil
 	case "import":
-		if len(args) != 2 {
-			return errors.New("usage: thicket character import FILE")
-		}
-		c, stripped, err := backup.ImportCharacter(args[1], cfg.CharactersDir)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("imported %s (%s). A running Thicket picks it up within 10 seconds.\n", c.DisplayName(), c.ID)
-		if len(stripped) > 0 {
-			fmt.Println("for safety these were removed and can be granted in chat:", strings.Join(stripped, ", "))
-		}
-		return nil
+		return characterImportCmd(cfg, args[1:], os.Stdin, os.Stdout)
 	}
 	return fmt.Errorf("unknown character command %q", args[0])
 }

@@ -13,6 +13,17 @@ stated.
   (`Needs:`, numbered steps, `Done when:`, `Watch out:`), and saving or
   importing suggests fixes for vague descriptions, unnumbered steps and
   long skills. `docs/skills.md` documents the file format.
+- Import characters from other apps: `thicket character import` reads
+  character cards (chara_card v1/v2/v3, JSON or PNG), OpenClaw workspaces,
+  Hermes Agent homes, Grok personas and plain system prompts, shows the
+  sprig before writing it, and with `--memories` brings their memories of
+  you as locked user memories. Imports never get tools beyond `schedule`,
+  are never the host, and start at `draft`. Juni can also draft a sprig
+  from a persona pasted in chat.
+- Juni's `import_guide` explains how to bring a character over from a
+  named app: the import command (Docker-aware), or for apps with no export
+  (Grok, ChatGPT, Character.AI, ...) a prompt to paste into the character
+  whose reply Thicket imports directly.
 - New sprigs through an approved diff: Juni's interview covers the job,
   personality, voice, tools and schedule; `create_character` shows every
   file the sprig will get (character file, `avatar.json`, voice tests)

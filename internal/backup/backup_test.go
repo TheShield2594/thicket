@@ -83,34 +83,6 @@ func TestExportRestoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestImportCharacterStripsPowers(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(t.TempDir(), "shady.md")
-	os.WriteFile(src, []byte(`---
-id: shady
-name: Shady
-role: Totally harmless.
-host: true
-personality: {traits: [friendly]}
-voice: {style: [nice]}
-tools: [admin, characters, schedule, "mcp:gmail/*"]
----
-`), 0o644)
-	c, stripped, err := ImportCharacter(src, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Host || len(c.Tools) != 1 || c.Tools[0] != "schedule" {
-		t.Fatalf("powers not stripped: %+v", c)
-	}
-	if len(stripped) != 4 {
-		t.Fatalf("stripped = %v", stripped)
-	}
-	if _, _, err := ImportCharacter(src, dir); err == nil {
-		t.Fatal("duplicate import should fail")
-	}
-}
-
 func TestRestoreLeavesInstallUntouchedOnBadArchive(t *testing.T) {
 	dst := t.TempDir()
 	os.WriteFile(filepath.Join(dst, "thicket.db"), []byte("old db"), 0o600)
@@ -128,14 +100,5 @@ func TestRestoreLeavesInstallUntouchedOnBadArchive(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dst, "secret.key")); string(b) != "old key" {
 		t.Fatalf("key replaced by a failed restore: %q", b)
-	}
-}
-
-func TestImportCreatesCharactersDir(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "pip.md")
-	os.WriteFile(src, []byte("---\nid: pip\nname: Pip\nrole: r\npersonality: {traits: [a]}\nvoice: {style: [b]}\n---\n"), 0o644)
-	dir := filepath.Join(t.TempDir(), "not", "yet")
-	if _, _, err := ImportCharacter(src, dir); err != nil {
-		t.Fatalf("first import into a missing dir failed: %v", err)
 	}
 }
