@@ -212,13 +212,19 @@ func signIn(t *testing.T, a *App, ctx context.Context, base string) *webClient {
 
 func TestWebEventStreamLifetime(t *testing.T) {
 	a, _, _, ctx := setup(t)
-	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
-	go a.Web.Run(runCtx, a.Engine.HandleIncoming)
-	waitFor(t, "web adapter", a.Web.Connected)
 	a.Web.PingEvery = 20 * time.Millisecond
 	srv := httptest.NewServer(a.Web.Handler())
 	defer srv.Close()
+	defer srv.CloseClientConnections() // so a failure doesn't hang in Close
+
+	// A stream opened before the adapter starts (App.Run starts the HTTP
+	// server and the adapter separately) still ends at shutdown.
+	early := openStream(t, signIn(t, a, ctx, srv.URL))
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	ran := make(chan struct{})
+	go func() { a.Web.Run(runCtx, a.Engine.HandleIncoming); close(ran) }()
+	waitFor(t, "web adapter", a.Web.Connected)
 
 	// Signing out in another tab ends a stream that is already open.
 	w := signIn(t, a, ctx, srv.URL)
@@ -231,14 +237,18 @@ func TestWebEventStreamLifetime(t *testing.T) {
 		t.Fatal("stream outlived its session")
 	}
 
-	// Shutting Thicket down ends open streams promptly.
+	// Shutting Thicket down ends open streams promptly, including the one
+	// opened before the adapter started.
 	w = signIn(t, a, ctx, srv.URL)
 	done = openStream(t, w)
 	stop()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("stream kept running after shutdown")
+	<-ran
+	for name, ch := range map[string]<-chan struct{}{"late": done, "early": early} {
+		select {
+		case <-ch:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s stream kept running after shutdown", name)
+		}
 	}
 }
 

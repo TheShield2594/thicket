@@ -78,6 +78,11 @@ type Adapter struct {
 	runCtx  context.Context
 	subs    map[int64]map[chan Event]struct{}
 
+	// stopped closes when Run returns. It exists from New, so a stream that
+	// opens before Run starts still sees shutdown.
+	stopped  chan struct{}
+	stopOnce sync.Once
+
 	loginMu      sync.Mutex
 	loginFails   int // failed redemptions in this window
 	loginPending int // admitted attempts still being redeemed
@@ -118,7 +123,7 @@ func (a *Adapter) loginEnd(failed bool) {
 }
 
 func New(db *store.Store, chars *character.Registry, log *slog.Logger) *Adapter {
-	return &Adapter{DB: db, Chars: chars, Log: log, subs: map[int64]map[chan Event]struct{}{}}
+	return &Adapter{DB: db, Chars: chars, Log: log, subs: map[int64]map[chan Event]struct{}{}, stopped: make(chan struct{})}
 }
 
 // ---- channel.Channel ----
@@ -133,6 +138,7 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	a.running.Store(true)
 	<-ctx.Done()
 	a.running.Store(false)
+	a.stopOnce.Do(func() { close(a.stopped) })
 	return nil
 }
 
@@ -611,14 +617,9 @@ func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) 
 		return
 	}
 	// Close open streams when Thicket shuts down: http.Server.Shutdown
-	// doesn't cancel requests, and a stream never goes idle.
-	a.mu.RLock()
-	runCtx := a.runCtx
-	a.mu.RUnlock()
-	var stopped <-chan struct{}
-	if runCtx != nil {
-		stopped = runCtx.Done()
-	}
+	// doesn't cancel requests, and a stream never goes idle. a.stopped is
+	// set up in New, so this holds even for a stream opened before Run.
+	stopped := a.stopped
 	every := a.PingEvery
 	if every <= 0 {
 		every = 25 * time.Second
