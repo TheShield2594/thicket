@@ -6,6 +6,13 @@ stated.
 
 ## Unreleased: sprigs that feel alive (schema v11)
 
+- Skills: a starter pack of six example skills (morning briefing, weekly
+  review, inbox digest, trip prep, research, Thicket checkup), added only
+  when you ask with `thicket skill starter`. `thicket skill check` checks
+  a skill file without saving it. Sprigs write skills in one layout
+  (`Needs:`, numbered steps, `Done when:`, `Watch out:`), and saving or
+  importing suggests fixes for vague descriptions, unnumbered steps and
+  long skills. `docs/skills.md` documents the file format.
 - New sprigs through an approved diff: Juni's interview covers the job,
   personality, voice, tools and schedule; `create_character` shows every
   file the sprig will get (character file, `avatar.json`, voice tests)

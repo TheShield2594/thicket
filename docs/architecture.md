@@ -132,7 +132,10 @@ prompt carries an index (first 40 skills); sprigs call `read_skill` for
 the steps, which are returned as instructions, not untrusted data. That's
 why saving is admin-only and the validator refuses secrets and
 `<untrusted>` content. `thicket skill export/import` moves them as
-Markdown with YAML frontmatter.
+Markdown with YAML frontmatter. The starter pack is embedded from
+`internal/agent/starterskills/` and written to the library only by
+`thicket skill starter`; `SkillHints` makes non-blocking suggestions on
+save and import.
 
 ## Model servers
 
