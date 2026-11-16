@@ -75,7 +75,7 @@ func TestInterruptedRunsAreReportedAtStart(t *testing.T) {
 	}
 	exec := &fakeExec{}
 	s := New(db, exec, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	s.failStale(ctx)
+	s.RecoverStale(ctx)
 	if len(exec.finished) != 1 || !errors.Is(exec.finished[0].Err, ErrInterrupted) {
 		t.Fatalf("interrupted run not reported: %+v", exec.finished)
 	}

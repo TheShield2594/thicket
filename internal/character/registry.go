@@ -105,17 +105,33 @@ func (r *Registry) ensureDefaultVoiceTests(id string) error {
 	if err != nil {
 		return nil // no bundled tests for this one
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Written to a temporary folder and renamed into place once complete,
+	// so a failure never leaves a half-filled folder that later starts
+	// would take as finished.
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), ".voice_tests-")
+	if err != nil {
 		return err
 	}
 	for _, f := range files {
 		b, err := defaultsFS.ReadFile("defaults/" + id + "/voice_tests/" + f.Name())
+		if err == nil {
+			err = os.WriteFile(filepath.Join(tmp, f.Name()), b, 0o644)
+		}
 		if err != nil {
+			os.RemoveAll(tmp)
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, f.Name()), b, 0o644); err != nil {
-			return err
-		}
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		os.RemoveAll(tmp)
+		return err
 	}
 	return nil
 }

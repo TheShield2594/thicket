@@ -20,6 +20,10 @@ func TestDoctor(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/models":
+			if r.Header.Get("Authorization") != "Bearer local-key" {
+				http.Error(w, "401", 401)
+				return
+			}
 			fmt.Fprint(w, `{"data":[{"id":"qwen2.5"}]}`)
 		case r.URL.Path == "/discord/users/@me":
 			if r.Header.Get("Authorization") != "Bot "+discordTok {
@@ -52,7 +56,7 @@ func TestDoctor(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, CharactersDir: filepath.Join(dir, "characters"), ModelURL: fake.URL + "/v1",
-		DiscordToken: discordTok, TelegramToken: telegramTok, HTTPAddr: ":0"}
+		DiscordToken: discordTok, TelegramToken: telegramTok, HTTPAddr: ":0", ModelAPIKey: "local-key"}
 	ctx := context.Background()
 	db, _ := store.Open(ctx, filepath.Join(dir, "thicket.db"))
 	db.PutMCPServer(ctx, store.MCPServer{Name: "files", Transport: "http", Target: fake.URL + "/mcp", Enabled: true})

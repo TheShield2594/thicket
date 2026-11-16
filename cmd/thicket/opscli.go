@@ -249,8 +249,13 @@ func runVoiceCheck(ctx context.Context, a *app.App, c *character.Character, reco
 	}
 	fmt.Fprintf(out, "Voice check for %s: %d test(s), model %s, judge %s\n\n", c.DisplayName(), len(tests),
 		orDefaultStr(c.Model, a.Settings.String(ctx, "model")), a.Settings.String(ctx, "cheap_model"))
-	drifted, broken := 0, 0
+	passed, drifted, broken, skipped, recorded := 0, 0, 0, 0, 0
 	for _, vt := range tests {
+		if vt.Reference == "" && !record {
+			skipped++ // nothing to judge against: don't spend a call
+			fmt.Fprintf(out, "SKIP   %s: no reference yet (run with --record to save the current reply)\n", vt.Name)
+			continue
+		}
 		reply, err := a.Engine.VoiceReply(ctx, c, vt.Prompt)
 		if err != nil {
 			broken++
@@ -258,15 +263,12 @@ func runVoiceCheck(ctx context.Context, a *app.App, c *character.Character, reco
 			continue
 		}
 		if vt.Reference == "" {
-			if record {
-				vt.Reference = reply
-				if err := character.SaveVoiceTest(vt); err != nil {
-					return err
-				}
-				fmt.Fprintf(out, "SAVED  %s: recorded the current reply as the reference\n       %s\n", vt.Name, oneLine(reply))
-			} else {
-				fmt.Fprintf(out, "SKIP   %s: no reference yet (run with --record to save the current reply)\n", vt.Name)
+			vt.Reference = reply
+			if err := character.SaveVoiceTest(vt); err != nil {
+				return err
 			}
+			recorded++
+			fmt.Fprintf(out, "SAVED  %s: recorded the current reply as the reference\n       %s\n", vt.Name, oneLine(reply))
 			continue
 		}
 		v, err := a.Engine.JudgeVoice(ctx, c, vt, reply)
@@ -280,10 +282,18 @@ func runVoiceCheck(ctx context.Context, a *app.App, c *character.Character, reco
 			fmt.Fprintf(out, "DRIFT  %s: %s. %s\n       you: %s\n       ref: %s\n       now: %s\n", vt.Name, strings.Join(v.Failed(), ", "), v.Note,
 				oneLine(vt.Prompt), oneLine(vt.Reference), oneLine(reply))
 		} else {
+			passed++
 			fmt.Fprintf(out, "ok     %s\n", vt.Name)
 		}
 	}
-	fmt.Fprintf(out, "\n%d of %d in voice", len(tests)-drifted-broken, len(tests))
+	// Only judged replies count as in voice.
+	fmt.Fprintf(out, "\n%d of %d in voice", passed, len(tests))
+	if skipped > 0 {
+		fmt.Fprintf(out, ", %d skipped (no reference)", skipped)
+	}
+	if recorded > 0 {
+		fmt.Fprintf(out, ", %d reference(s) recorded", recorded)
+	}
 	if drifted+broken > 0 {
 		fmt.Fprintf(out, ", %d drifted, %d errors\n", drifted, broken)
 		return errors.New("voice drift found")

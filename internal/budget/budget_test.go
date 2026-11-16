@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,6 +54,10 @@ func TestMonthlyCapWarnsAt80AndPausesAt100(t *testing.T) {
 	}
 	if _, err := g.Chat(ctx, llm.Request{}); err != nil { // $12: this call was allowed (under cap before it)
 		t.Fatal(err)
+	}
+	// Crossing the cap alerts at once, before any call is refused.
+	if last := (*alerts)[len(*alerts)-1]; last.Level != "error" || !strings.HasSuffix(last.Key, ":100") {
+		t.Fatalf("no alert when the cap was crossed: %+v", *alerts)
 	}
 	_, err := g.Chat(ctx, llm.Request{})
 	if !llm.IsBudget(err) {

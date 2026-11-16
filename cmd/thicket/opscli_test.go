@@ -111,8 +111,11 @@ func TestVoiceCheckCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "SKIP   06-new") {
 		t.Fatalf("no-reference test not skipped:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "5 of 6 in voice, 1 skipped") {
+		t.Fatalf("summary counted a skipped test as in voice:\n%s", out.String())
+	}
 	out.Reset()
-	if err := runVoiceCheck(ctx, a, juni, true, &out); err != nil || !strings.Contains(out.String(), "SAVED  06-new") {
+	if err := runVoiceCheck(ctx, a, juni, true, &out); err != nil || !strings.Contains(out.String(), "SAVED  06-new") || !strings.Contains(out.String(), "5 of 6 in voice, 1 reference(s) recorded") {
 		t.Fatalf("record: %v\n%s", err, out.String())
 	}
 	tests, _ := character.LoadVoiceTests(a.Chars.Dir(), "juniper")

@@ -74,40 +74,54 @@ func (e *Engine) DecideApproval(ctx context.Context, user *store.User, id int64,
 
 // decide records the answer, runs the action if approved, and lets the
 // sprig report. said is what the user typed ("" from the dashboard). It
-// returns false if the approval was no longer pending.
+// returns false if the approval was no longer pending. Everything that can
+// fail before the action runs happens before the approval is claimed, so a
+// failure leaves it pending for another try.
 func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval, approve bool, said string, isDM bool) (bool, error) {
+	char, ok := e.Chars.Get(a.Character)
+	gone := !ok
+	if gone {
+		// The sprig that asked was removed: never act under another
+		// sprig's permissions. The host only reports it.
+		if char, ok = e.Chars.Host(); !ok {
+			return false, errors.New("no host character is loaded")
+		}
+	}
+	conv, err := e.DB.OpenConversation(ctx, user.ID, a.ChatRef, e.Cfg.IdleAfter)
+	if err != nil {
+		return false, err
+	}
 	status := "approved"
-	if !approve {
+	switch {
+	case !approve:
 		status = "denied"
+	case gone:
+		status = "expired"
 	}
 	if ok, err := e.DB.DecideApproval(ctx, a.ID, status); err != nil || !ok {
 		return false, err
 	}
-	char, ok := e.Chars.Get(a.Character)
-	if !ok {
-		char, _ = e.Chars.Host()
-	}
-	conv, err := e.DB.OpenConversation(ctx, user.ID, a.ChatRef, e.Cfg.IdleAfter)
-	if err != nil {
-		return true, err
-	}
 	if said != "" {
 		_ = e.DB.AddMessage(ctx, conv.ID, "user", "", said)
 	} else {
-		_ = e.DB.AddMessage(ctx, conv.ID, "event", "", "The user "+status+" a request from the dashboard.")
+		_ = e.DB.AddMessage(ctx, conv.ID, "event", "", "The user answered a request from the dashboard.")
 	}
-	e.logActivity(ctx, "info", "approval", char.ID, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), a.Args)
+	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), e.Secrets.Redact(a.Args))
 	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM}
 	what := strings.TrimPrefix(a.Tool, internalPrefix)
-	if !approve {
+	switch {
+	case !approve:
 		return true, e.respond(ctx, t, fmt.Sprintf("The user said no to %s. Acknowledge briefly and don't try it again unless they ask.", what))
+	case gone:
+		_ = e.DB.SetApprovalResult(ctx, a.ID, "not run: the sprig that asked no longer exists")
+		return true, e.respond(ctx, t, fmt.Sprintf("The user approved %s, but the sprig that asked for it (%s) no longer exists, so nothing was run. Tell them briefly.", what, a.Character))
 	}
 	var result string
 	if strings.HasPrefix(a.Tool, internalPrefix) {
 		out, err := e.internalAction(ctx, user, a)
 		if err != nil {
-			out = "Error: " + err.Error()
-			e.logActivity(ctx, "warn", "approval", char.ID, user.ID, "approved "+what+" failed", err.Error())
+			out = "Error: " + e.Secrets.Redact(err.Error())
+			e.logActivity(ctx, "warn", "approval", char.ID, user.ID, "approved "+what+" failed", e.Secrets.Redact(err.Error()))
 		}
 		result = out
 	} else {
@@ -133,8 +147,9 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 	}
 	out, err := tool.Run(ctx, t, args)
 	if err != nil {
-		out = "Error: " + err.Error()
-		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "approved tool "+name+" failed", err.Error())
+		// Integration errors can quote credentials: redact before logging.
+		out = "Error: " + e.Secrets.Redact(err.Error())
+		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "approved tool "+name+" failed", out)
 	} else {
 		e.logActivity(ctx, "info", "tool", t.char.ID, t.user.ID, "ran approved tool "+name, e.Secrets.Redact(truncate(out, 500)))
 	}
@@ -176,16 +191,21 @@ func (e *Engine) RunDraft(ctx context.Context, user *store.User, id int64) error
 	}
 	unlock := e.lockChat(chatRef)
 	defer unlock()
-	if err := e.DB.ResolveInbox(ctx, it.ID, user.ID); err != nil {
-		return errors.New("that draft was already dealt with")
-	}
+	// Checks first, claim last: a draft stays open unless it's really run.
 	conv, err := e.DB.OpenConversation(ctx, user.ID, chatRef, e.Cfg.IdleAfter)
 	if err != nil {
 		return err
 	}
 	t := &turn{user: user, char: char, chatRef: chatRef, conv: conv, isDM: true}
-	if tool := e.toolsFor(ctx, t)[act.Tool]; tool != nil && e.toolLevel(ctx, char, tool) == store.LevelRead {
+	tool := e.toolsFor(ctx, t)[act.Tool]
+	if tool == nil {
+		return errors.New(char.DisplayName() + " can't use " + act.Tool + " any more")
+	}
+	if e.toolLevel(ctx, char, tool) == store.LevelRead {
 		return errors.New(char.DisplayName() + " is at read level for that tool now, so it can't be done")
+	}
+	if err := e.DB.ResolveInbox(ctx, it.ID, user.ID); err != nil {
+		return errors.New("that draft was already dealt with")
 	}
 	e.logActivity(ctx, "info", "draft", char.ID, user.ID, fmt.Sprintf("draft #%d approved from the dashboard", it.ID), "")
 	result := e.runApproved(ctx, t, act.Tool, act.Args, true)

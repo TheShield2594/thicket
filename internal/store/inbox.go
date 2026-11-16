@@ -43,11 +43,17 @@ func (s *Store) AddInbox(ctx context.Context, it InboxItem) (int64, error) {
 		err := s.db.QueryRowContext(ctx, "SELECT id FROM inbox WHERE user_id = ? AND kind = ? AND ref = ? AND status = 'open'",
 			it.UserID, it.Kind, it.Ref).Scan(&id)
 		if err == nil {
-			_, err = s.db.ExecContext(ctx, "UPDATE inbox SET count = count + 1, title = ?, detail = ?, updated_at = ? WHERE id = ?",
+			// Still open? It may have been resolved since it was found;
+			// then this is a new item.
+			res, err := s.db.ExecContext(ctx, "UPDATE inbox SET count = count + 1, title = ?, detail = ?, updated_at = ? WHERE id = ? AND status = 'open'",
 				it.Title, it.Detail, now, id)
-			return id, err
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
+			if err != nil {
+				return 0, err
+			}
+			if n, _ := res.RowsAffected(); n == 1 {
+				return id, nil
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
 			return 0, err
 		}
 	}

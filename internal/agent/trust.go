@@ -130,6 +130,15 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 	if !ok {
 		return "", fmt.Errorf("the sprig %q no longer exists", r.Sprig)
 	}
+	// The level may have changed since the request (lowered, say): only
+	// raise from the level the user was shown.
+	tool := e.toolsFor(ctx, &turn{user: user, char: c})[r.Tool]
+	if tool == nil {
+		return "", fmt.Errorf("%s no longer has %s", c.DisplayName(), r.Tool)
+	}
+	if cur := e.toolLevel(ctx, c, tool); cur != r.From {
+		return "", fmt.Errorf("%s's level for %s changed to %s since it asked (was %s), so nothing was changed; it can ask again", c.DisplayName(), r.Tool, cur, r.From)
+	}
 	if err := e.DB.SetToolLevel(ctx, c.ID, r.Tool, r.Level); err != nil {
 		return "", err
 	}

@@ -78,8 +78,10 @@ type item struct {
 
 // splitItems turns a tool's output into items with stable keys: elements
 // of a JSON array (or of the first array inside a JSON object), else
-// non-empty lines. An element's "id" (or uid, message_id...) is its key;
-// otherwise a hash of its text.
+// non-empty lines. An element with an "id" (or uid, message_id...) is keyed
+// by that id plus a hash of its content, so a known item whose content
+// changes (a container turning unhealthy) counts as new; other items are
+// keyed by a hash of their text.
 func splitItems(out string) []item {
 	var raw []json.RawMessage
 	var v any
@@ -131,7 +133,7 @@ func itemKey(r json.RawMessage, text string) string {
 	if json.Unmarshal(r, &obj) == nil {
 		for _, k := range []string{"id", "uid", "message_id", "messageId", "event_id", "uuid"} {
 			if v, ok := obj[k]; ok && v != nil {
-				return "id:" + fmt.Sprint(v)
+				return "id:" + fmt.Sprint(v) + "#" + hashKey(text)
 			}
 		}
 	}
@@ -187,6 +189,15 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 	if e.Budget.HeartbeatPause(ctx, j.Character) != "" {
 		return
 	}
+	// Access is checked on every poll, not only when the trigger was made:
+	// the sprig must still be allowed the tool, and the tool must still
+	// only read (so a dropped connection may be retried).
+	if why := e.pollRefusal(tr, j); why != "" {
+		_ = e.DB.SavePollError(ctx, tr.JobID, why)
+		e.deadLetter(ctx, store.InboxItem{UserID: j.UserID, Character: j.Character, Kind: store.InboxFailed, Ref: fmt.Sprintf("job:%d", j.ID),
+			Title: fmt.Sprintf("Trigger for “%s” is on hold", j.Name), Detail: why})
+		return
+	}
 	cctx, cancel := context.WithTimeout(ctx, pollCallTimeout)
 	res, err := e.MCP.Call(cctx, tr.Server, tr.Tool, json.RawMessage(tr.Args), true)
 	cancel()
@@ -200,62 +211,88 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 			Title: fmt.Sprintf("Trigger for “%s” can't read %s → %s", j.Name, tr.Server, tr.Tool), Detail: msg})
 		return
 	}
+	// Only a fixed window of the response is considered, the same on
+	// every poll, and what's remembered is that window as it is now: an
+	// unchanged item can never age out of memory and come back as "new".
 	items := splitItems(e.Secrets.Redact(res.Text))
-	seen := map[string]bool{}
-	for _, k := range tr.Seen {
-		seen[k] = true
+	if len(items) > store.MaxSeen {
+		items = items[:store.MaxSeen]
 	}
-	keys := append([]string(nil), tr.Seen...)
+	prev := map[string]bool{}
+	for _, k := range tr.Seen {
+		prev[k] = true
+	}
 	if !tr.Primed {
 		// First look: remember what's already there, fire on nothing.
-		for _, it := range items {
-			if !seen[it.key] {
-				seen[it.key] = true
-				keys = append(keys, it.key)
-			}
-		}
-		_ = e.DB.SavePoll(ctx, tr.JobID, keys, "")
+		_ = e.DB.SavePoll(ctx, tr.JobID, keysOf(items, nil), "")
 		return
 	}
-	var fresh, matched []item
+	var matched []item
 	for _, it := range items {
-		if seen[it.key] {
-			continue
-		}
-		seen[it.key] = true
-		fresh = append(fresh, it)
-		if Matches(tr.Match, it.text) {
+		if !prev[it.key] && Matches(tr.Match, it.text) {
 			matched = append(matched, it)
 		}
 	}
+	// Matched items not delivered this time (over the batch size, or the
+	// job couldn't start) stay unremembered, so the next poll offers them
+	// again.
+	pending := map[string]bool{}
 	errText := ""
-	fired := len(matched) == 0
 	if len(matched) > 0 {
+		batch := matched
+		if len(batch) > maxItemsPerFire {
+			batch = batch[:maxItemsPerFire]
+		}
+		for _, it := range matched[len(batch):] {
+			pending[it.key] = true
+		}
 		jj := *j
 		jj.Event = tr.Server + " → " + tr.Tool
-		jj.Payload = eventPayload(matched)
+		jj.Payload = eventPayload(batch, len(matched)-len(batch))
 		if err := e.Fire(jj); err != nil {
 			errText = "new items found, but the job couldn't start: " + err.Error()
-		} else {
-			fired = true
+			for _, it := range batch {
+				pending[it.key] = true
+			}
 		}
 	}
-	for _, it := range fresh {
-		// Matched items that didn't fire are tried again next poll.
-		if fired || !Matches(tr.Match, it.text) {
-			keys = append(keys, it.key)
-		}
-	}
-	_ = e.DB.SavePoll(ctx, tr.JobID, keys, errText)
+	_ = e.DB.SavePoll(ctx, tr.JobID, keysOf(items, pending), errText)
 }
 
-func eventPayload(items []item) string {
-	var b strings.Builder
-	n := len(items)
-	if n > maxItemsPerFire {
-		items = items[len(items)-maxItemsPerFire:]
+// pollRefusal says why a trigger may not poll now, or "".
+func (e *Engine) pollRefusal(tr store.Trigger, j *store.Job) string {
+	c, ok := e.Chars.Get(j.Character)
+	if !ok {
+		return fmt.Sprintf("the sprig %q that runs it no longer exists", j.Character)
 	}
-	fmt.Fprintf(&b, "%d new item(s) since the last check:\n", n)
+	if !c.AllowsMCP(tr.Server, tr.Tool) {
+		return fmt.Sprintf("%s no longer has access to %s → %s", c.DisplayName(), tr.Server, tr.Tool)
+	}
+	for _, st := range e.MCP.Tools() {
+		if st.Server == tr.Server && st.Tool.Name == tr.Tool {
+			if !st.Tool.ReadOnly() {
+				return fmt.Sprintf("%s → %s now says it changes things; a trigger may only watch a tool that only reads", tr.Server, tr.Tool)
+			}
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s → %s isn't available (is the integration connected?)", tr.Server, tr.Tool)
+}
+
+// keysOf lists the keys of items, minus those in skip.
+func keysOf(items []item, skip map[string]bool) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if !skip[it.key] {
+			out = append(out, it.key)
+		}
+	}
+	return out
+}
+
+func eventPayload(items []item, more int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d new item(s) since the last check:\n", len(items))
 	for _, it := range items {
 		text := it.text
 		if len(text) > maxItemChars {
@@ -263,8 +300,8 @@ func eventPayload(items []item) string {
 		}
 		b.WriteString("- " + text + "\n")
 	}
-	if n > len(items) {
-		fmt.Fprintf(&b, "(%d older ones not shown)\n", n-len(items))
+	if more > 0 {
+		fmt.Fprintf(&b, "(%d more will come in the next run)\n", more)
 	}
 	return b.String()
 }

@@ -200,7 +200,15 @@ func healthcheck() error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// Read it whole (1 MB is far beyond any /health answer): a cut-off
+	// body can't be parsed for the setup exception below.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > 1<<20 {
+		return errors.New("the /health answer is too large")
+	}
 	fmt.Println(strings.TrimSpace(string(body)))
 	// A missing model key is a setup state, not a crash: don't mark the
 	// container unhealthy for it alone.

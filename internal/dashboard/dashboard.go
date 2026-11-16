@@ -406,14 +406,14 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		if strings.HasPrefix(what, "thicket:") {
 			what = strings.ReplaceAll(strings.TrimPrefix(what, "thicket:"), "_", " ")
 		}
-		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: shorten(a.Args, 600)})
+		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: prettyJSON(a.Args)})
 	}
 	items, err := d.DB.OpenInbox(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
 	for _, it := range items {
-		p.Inbox = append(p.Inbox, inboxView{ID: it.ID, Kind: it.Kind, Title: it.Title, Detail: shorten(it.Detail, 600), Sprig: name(it.Character),
+		p.Inbox = append(p.Inbox, inboxView{ID: it.ID, Kind: it.Kind, Title: it.Title, Detail: it.Detail, Sprig: name(it.Character),
 			At: stamp(it.UpdatedAt), Count: it.Count, Draft: it.Kind == store.InboxDraft && it.Action != ""})
 	}
 	var acts []store.Activity
@@ -489,9 +489,14 @@ func (d *Dashboard) costs(ctx context.Context, name func(string) string) ([]cost
 	return sprigs, models, nil
 }
 
-func shorten(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
+// prettyJSON shows arguments in full (the box scrolls): a person must see
+// everything they approve.
+func prettyJSON(s string) string {
+	var v any
+	if json.Unmarshal([]byte(s), &v) == nil {
+		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
+			return string(b)
+		}
 	}
 	return s
 }

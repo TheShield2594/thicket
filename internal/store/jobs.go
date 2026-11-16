@@ -200,32 +200,31 @@ func (s *Store) RecordMissedRun(ctx context.Context, jobID int64, count int, at 
 	return err
 }
 
-// FailStaleRuns marks runs left 'running' by a stop or crash as errors
-// and returns them, so each can be reported.
-func (s *Store) FailStaleRuns(ctx context.Context) ([]JobRun, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, job_id, started_at FROM job_runs WHERE status = 'running'")
+// StaleRuns lists runs left 'running' by a stop or crash. Call it before
+// anything can start a run, then report and FailRun each.
+func (s *Store) StaleRuns(ctx context.Context) ([]JobRun, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, job_id, started_at FROM job_runs WHERE status = 'running' ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var out []JobRun
 	for rows.Next() {
 		var r JobRun
 		var st int64
 		if err := rows.Scan(&r.ID, &r.JobID, &st); err != nil {
-			rows.Close()
 			return nil, err
 		}
-		r.StartedAt, r.Status, r.Error = time.Unix(st, 0), "error", StaleRunError
+		r.StartedAt, r.Status = time.Unix(st, 0), "running"
 		out = append(out, r)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if _, err := s.db.ExecContext(ctx, "UPDATE job_runs SET status = 'error', error = ?, finished_at = ? WHERE status = 'running'", StaleRunError, s.unix()); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out, rows.Err()
+}
+
+// FailRun marks one stale run as failed (only if it is still running).
+func (s *Store) FailRun(ctx context.Context, runID int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE job_runs SET status = 'error', error = ?, finished_at = ? WHERE id = ? AND status = 'running'", StaleRunError, s.unix(), runID)
+	return err
 }
 
 // StaleRunError is the error recorded for a run Thicket stopped during.

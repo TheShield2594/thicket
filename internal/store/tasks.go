@@ -34,9 +34,17 @@ func (s *Store) FinishTask(ctx context.Context, id int64, status, errText string
 }
 
 // InterruptRunningTasks marks tasks left running by a stop or crash as
-// interrupted and returns them, so each can be reported.
-func (s *Store) InterruptRunningTasks(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, user_id, from_char, character, prompt, started_at FROM tasks WHERE status = 'running'")
+// interrupted and, in the same transaction, files the inbox item report
+// builds for each. Either both happen or neither: a task is never left
+// interrupted without its report. On error nothing changes and the tasks
+// are found again at the next start.
+func (s *Store) InterruptRunningTasks(ctx context.Context, report func(Task) InboxItem) ([]Task, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, "SELECT id, user_id, from_char, character, prompt, started_at FROM tasks WHERE status = 'running' ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -56,10 +64,23 @@ func (s *Store) InterruptRunningTasks(ctx context.Context) ([]Task, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	now := s.unix()
 	for _, t := range out {
-		if err := s.FinishTask(ctx, t.ID, "interrupted", "Thicket stopped while this task was in progress"); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'interrupted', error = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+			"Thicket stopped while this task was in progress", now, t.ID); err != nil {
 			return nil, err
 		}
+		if report == nil {
+			continue
+		}
+		it := report(t)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO inbox (user_id, character, kind, ref, title, detail, action, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, it.Title, it.Detail, it.Action, now, now); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

@@ -79,6 +79,7 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	}
 
 	red := secrets.NewRedactor()
+	red.Add(d.Cfg.ModelAPIKey)
 	red.Add(d.Cfg.DiscordToken)
 	red.Add(d.Cfg.TelegramToken)
 	var sec *secrets.Store
@@ -151,7 +152,11 @@ func (d *Doctor) model(ctx context.Context, st *settings.Settings, sec *secrets.
 		}
 		key, _ = sec.Get(ctx, name)
 	}
-	if _, err := d.get(ctx, base+"/models", nil); err != nil {
+	var auth map[string]string
+	if key != "" && !llm.IsOpenRouter(base) {
+		auth = map[string]string{"Authorization": "Bearer " + key} // a protected local server
+	}
+	if _, err := d.get(ctx, base+"/models", auth); err != nil {
 		c.Detail = fmt.Sprintf("%s isn't reachable: %s", base, red.Redact(err.Error()))
 		return c
 	}

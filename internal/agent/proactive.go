@@ -64,7 +64,9 @@ func (e *Engine) PausedReason(ctx context.Context, j store.Job) string {
 
 // JobFinished delivers a job's result, or reports its failure loudly.
 func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Result, next time.Time) {
-	user, err := e.DB.UserByID(ctx, j.UserID)
+	// The lookup must work during shutdown too, so failures still reach
+	// the inbox (delivery itself stays cancellable).
+	user, err := e.DB.UserByID(context.WithoutCancel(ctx), j.UserID)
 	if err != nil {
 		e.Log.Error("job finished for unknown user", "job", j.ID)
 		return

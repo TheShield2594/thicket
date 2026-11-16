@@ -116,7 +116,7 @@ func addFile(tw *tar.Writer, path, name string, mode int64) error {
 }
 
 // voiceTestPath matches a sprig's voice test in an archive.
-var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[A-Za-z0-9_-]+\.yaml$`)
+var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.yaml$`)
 
 // maxEntry bounds any single file in an archive.
 const maxEntry int64 = 64 << 30
@@ -177,7 +177,9 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 		if h.Size < 0 || h.Size > maxEntry {
 			return fmt.Errorf("%s in the archive is too large (%d bytes)", name, h.Size)
 		}
-		staged := filepath.Join(stage, strings.ReplaceAll(name, "/", "__"))
+		// Numbered, not derived from the name: two archive paths can never
+		// share a staging file.
+		staged := filepath.Join(stage, fmt.Sprintf("entry-%04d", len(items)))
 		f, err := os.OpenFile(staged, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err

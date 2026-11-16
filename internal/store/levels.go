@@ -73,6 +73,11 @@ func (s *Store) SetToolLevel(ctx context.Context, character, tool, level string)
 	if !ValidLevel(level) {
 		return errors.New("level must be read, draft, ask or act")
 	}
+	if character == AllSprigs && tool == AnyTool {
+		// ToolLevel never consults such a row: refuse rather than store a
+		// restriction that wouldn't apply.
+		return errors.New(`a level for every tool needs a sprig`)
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tool_levels (character, tool, level, updated_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT(character, tool) DO UPDATE SET level = excluded.level, updated_at = excluded.updated_at`, character, tool, level, s.unix())
 	return err

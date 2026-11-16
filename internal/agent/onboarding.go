@@ -159,7 +159,29 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 			return "", errors.New("only the owner or an admin can give a sprig integration access")
 		}
 	}
-	// The folder first: once the .md exists, the sprig is live.
+	for _, r := range p.Routines {
+		if _, err := scheduler.Parse(r.Schedule); err != nil {
+			return "", fmt.Errorf("routine %q: %w", r.Name, err)
+		}
+	}
+	// The character file goes last: once it exists the sprig is live. If
+	// anything before it fails, what was made is undone, so nothing is
+	// half-created and the same proposal can simply be made again.
+	bg := context.WithoutCancel(ctx)
+	var jobIDs []int64
+	var written []string
+	levelSet := false
+	undo := func() {
+		for _, id := range jobIDs {
+			_ = e.DB.DeleteJob(bg, id)
+		}
+		if levelSet {
+			_ = e.DB.SetToolLevel(bg, p.ID, store.AnyTool, "")
+		}
+		for _, f := range written {
+			_ = os.Remove(f) // only what this call wrote
+		}
+	}
 	dir := e.Chars.Dir()
 	for path, content := range p.Files {
 		if path == p.ID+".md" {
@@ -167,34 +189,44 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		}
 		clean := filepath.Clean(path)
 		if !strings.HasPrefix(clean, p.ID+string(filepath.Separator)) || strings.Contains(clean, "..") {
+			undo()
 			return "", fmt.Errorf("refusing to write %q", path)
 		}
 		full := filepath.Join(dir, clean)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			undo()
 			return "", err
+		}
+		if _, err := os.Stat(full); err == nil {
+			undo()
+			return "", fmt.Errorf("%s already exists; not overwriting it", filepath.Join("characters", clean))
 		}
 		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			undo()
 			return "", err
 		}
+		written = append(written, full)
 	}
 	// Every granted tool starts at draft, before the sprig can act.
 	if err := e.DB.SetToolLevel(ctx, c.ID, store.AnyTool, store.LevelDraft); err != nil {
+		undo()
 		return "", err
+	}
+	levelSet = true
+	var made []string
+	for _, r := range p.Routines {
+		j, err := e.DB.CreateJob(ctx, store.Job{UserID: user.ID, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
+		if err != nil {
+			undo()
+			return "", fmt.Errorf("couldn't schedule routine %q, so nothing was created: %w", r.Name, err)
+		}
+		jobIDs = append(jobIDs, j.ID)
+		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
 	}
 	path, err := e.Chars.Write(ctx, c)
 	if err != nil {
-		return "", err
-	}
-	var made []string
-	for _, r := range p.Routines {
-		if _, err := scheduler.Parse(r.Schedule); err != nil {
-			return "", fmt.Errorf("routine %q: %w", r.Name, err)
-		}
-		j, err := e.DB.CreateJob(ctx, store.Job{UserID: user.ID, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
-		if err != nil {
-			return "", err
-		}
-		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
+		undo()
+		return "", fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err)
 	}
 	e.drafts.Delete(user.ID)
 	e.logActivity(ctx, "info", "character", c.ID, user.ID, fmt.Sprintf("new sprig %s sprouted", c.DisplayName()), path)

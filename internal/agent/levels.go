@@ -122,6 +122,9 @@ func (e *Engine) toolSetLevel(ctx context.Context, t *turn, args json.RawMessage
 		}
 		who, label = c.ID, c.DisplayName()
 	}
+	if tool == store.AnyTool && who == store.AllSprigs {
+		return "", errors.New(`tool "*" needs a sprig: name the sprig whose granted tools it covers`)
+	}
 	level := a.Level
 	if level == "default" {
 		level = ""

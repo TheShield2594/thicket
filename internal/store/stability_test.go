@@ -146,19 +146,43 @@ func TestStaleRunsAndTasksAreReturned(t *testing.T) {
 	done, _ := s.StartTask(ctx, Task{UserID: u.ID, From: "juniper", Character: "pip", Prompt: "done already"})
 	s.FinishTask(ctx, done, "ok", "")
 
-	runs, err := s.FailStaleRuns(ctx)
+	runs, err := s.StaleRuns(ctx)
 	if err != nil || len(runs) != 1 || runs[0].JobID != j.ID {
 		t.Fatalf("stale runs: %+v %v", runs, err)
 	}
-	if again, _ := s.FailStaleRuns(ctx); len(again) != 0 {
-		t.Fatal("a stale run was reported twice")
+	// Only the run it was told about is failed: one started since stays.
+	later, _ := s.StartJobRun(ctx, j.ID, time.Now())
+	s.FailRun(ctx, runs[0].ID)
+	if again, _ := s.StaleRuns(ctx); len(again) != 1 || again[0].ID != later {
+		t.Fatalf("after failing one: %+v", again)
 	}
-	tasks, err := s.InterruptRunningTasks(ctx)
+	report := func(tk Task) InboxItem {
+		return InboxItem{UserID: tk.UserID, Character: tk.Character, Kind: InboxInterrupted, Title: "interrupted"}
+	}
+	tasks, err := s.InterruptRunningTasks(ctx, report)
 	if err != nil || len(tasks) != 1 || tasks[0].ID != tid {
 		t.Fatalf("interrupted tasks: %+v %v", tasks, err)
 	}
-	if again, _ := s.InterruptRunningTasks(ctx); len(again) != 0 {
+	if items, _ := s.OpenInbox(ctx, u.ID); len(items) != 1 || items[0].Kind != InboxInterrupted {
+		t.Fatalf("report not filed with the transition: %+v", items)
+	}
+	if again, _ := s.InterruptRunningTasks(ctx, report); len(again) != 0 {
 		t.Fatal("an interrupted task was reported twice")
+	}
+}
+
+// If filing the report fails, the task stays running for the next start.
+func TestInterruptIsAllOrNothing(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "discord", "1", "Sam", "owner")
+	s.StartTask(ctx, Task{UserID: u.ID, From: "juniper", Character: "pip", Prompt: "look"})
+	bad := func(tk Task) InboxItem { return InboxItem{UserID: tk.UserID, Kind: "bogus", Title: "x"} } // violates the kind CHECK
+	if _, err := s.InterruptRunningTasks(ctx, bad); err == nil {
+		t.Fatal("expected the report to fail")
+	}
+	if tasks, _ := s.InterruptRunningTasks(ctx, nil); len(tasks) != 1 {
+		t.Fatal("a task was marked interrupted without its report")
 	}
 }
 
@@ -209,5 +233,21 @@ func TestSprigWideLevel(t *testing.T) {
 	}
 	if LevelRank(LevelRead) >= LevelRank(LevelAct) || LevelRank("nope") != -1 {
 		t.Fatal("level ranks")
+	}
+}
+
+// A failure filed after its open item was resolved is a new open item.
+func TestInboxAfterResolve(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "discord", "1", "Sam", "owner")
+	id, _ := s.AddInbox(ctx, InboxItem{UserID: u.ID, Kind: InboxFailed, Ref: "job:1", Title: "a"})
+	s.ResolveInbox(ctx, id, u.ID)
+	id2, err := s.AddInbox(ctx, InboxItem{UserID: u.ID, Kind: InboxFailed, Ref: "job:1", Title: "b"})
+	if err != nil || id2 == id {
+		t.Fatalf("got %d (%v)", id2, err)
+	}
+	if items, _ := s.OpenInbox(ctx, u.ID); len(items) != 1 || items[0].Title != "b" {
+		t.Fatalf("open: %+v", items)
 	}
 }

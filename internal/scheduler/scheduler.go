@@ -131,7 +131,9 @@ type Scheduler struct {
 	running  map[int64]bool
 	admitted map[int64]time.Time // job id -> when Fire last started it
 	lastTick time.Time
-	wg       sync.WaitGroup
+	// recovered is set once stale runs have been dealt with.
+	recovered bool
+	wg        sync.WaitGroup
 }
 
 func New(db *store.Store, exec Executor, log *slog.Logger) *Scheduler {
@@ -150,7 +152,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.base = ctx
 	s.mu.Unlock()
-	s.failStale(ctx)
+	s.RecoverStale(ctx)
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	s.Tick(ctx)
@@ -170,20 +172,41 @@ func (s *Scheduler) Run(ctx context.Context) {
 // already have acted) and reported through JobFinished.
 var ErrInterrupted = errors.New(store.StaleRunError)
 
-// failStale fails runs a stop or crash left running, and reports each.
-func (s *Scheduler) failStale(ctx context.Context) {
-	runs, err := s.DB.FailStaleRuns(ctx)
+// RecoverStale reports and fails runs a stop or crash left running. Call
+// it once at startup, before anything (the clock, a webhook, the API) can
+// start a run; Run calls it if nobody has. A run is reported before it's
+// marked failed, so a crash in between repeats the report rather than
+// losing it. If the job can't be looked up for now, the run is left as it
+// is and retried at the next start; if the job was deleted, it's just
+// failed.
+func (s *Scheduler) RecoverStale(ctx context.Context) {
+	s.mu.Lock()
+	done := s.recovered
+	s.recovered = true
+	s.mu.Unlock()
+	if done {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	runs, err := s.DB.StaleRuns(ctx)
 	if err != nil {
-		s.Log.Error("fail stale runs", "err", err)
+		s.Log.Error("list stale runs", "err", err)
 		return
 	}
 	for _, r := range runs {
 		j, err := s.DB.JobByID(ctx, r.JobID)
-		if err != nil {
-			continue // the job was deleted since
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			s.Log.Error("look up job of an interrupted run; will retry at the next start", "job", r.JobID, "err", err)
+			continue
+		default:
+			s.Log.Warn("job run interrupted by a restart", "job", j.ID, "run", r.ID)
+			s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
 		}
-		s.Log.Warn("job run interrupted by a restart", "job", j.ID, "run", r.ID)
-		s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
+		if err := s.DB.FailRun(ctx, r.ID); err != nil {
+			s.Log.Error("fail stale run", "run", r.ID, "err", err)
+		}
 	}
 }
 

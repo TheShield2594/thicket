@@ -82,14 +82,15 @@ func (s *Store) PollTriggers(ctx context.Context) ([]Trigger, error) {
 	return out, rows.Err()
 }
 
-// maxSeen bounds how many item keys a trigger remembers.
-const maxSeen = 1000
+// MaxSeen is how many items of a tool's response a trigger considers (and
+// so remembers) per poll.
+const MaxSeen = 1000
 
-// SavePoll records a poll: the keys now seen (newest last), and the error
-// if it failed ("" for success).
+// SavePoll records a poll: the keys of what the tool returned now (the
+// trigger's whole memory, replacing the last), and the error if any.
 func (s *Store) SavePoll(ctx context.Context, jobID int64, seen []string, errText string) error {
-	if len(seen) > maxSeen {
-		seen = seen[len(seen)-maxSeen:]
+	if len(seen) > MaxSeen {
+		seen = seen[:MaxSeen]
 	}
 	b, _ := json.Marshal(nonNilSlice(seen))
 	_, err := s.db.ExecContext(ctx, "UPDATE triggers SET seen = ?, primed = 1, last_poll_at = ?, last_error = ? WHERE job_id = ?",

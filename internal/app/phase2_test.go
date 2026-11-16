@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -318,7 +319,7 @@ func TestCommonsHandoffByMention(t *testing.T) {
 }
 
 func TestIntegrationTrigger(t *testing.T) {
-	a, fc, fm, ctx, _, _ := ready(t)
+	a, fc, fm, ctx, reads, _ := ready(t)
 	e := a.Engine
 	e.HandleIncoming(ctx, dm("watch the switch"))
 	if !strings.Contains(lastToolResult(fm), "only reads") {
@@ -337,6 +338,8 @@ func TestIntegrationTrigger(t *testing.T) {
 	j := jobs[0]
 	now := time.Now()
 	e.Now = func() time.Time { return now }
+	a.DB.SetClock(func() time.Time { return now })
+	a.Scheduler.Now = func() time.Time { return now }
 	poll := func(state string) {
 		haState.Store(state)
 		now = now.Add(6 * time.Minute)
@@ -372,11 +375,11 @@ func TestIntegrationTrigger(t *testing.T) {
 	if out := fc.take(); len(out) == 0 || out[len(out)-1].persona != "Hal" {
 		t.Fatalf("result not delivered: %+v", out)
 	}
-	// Too soon: no poll.
-	calls := len(fm.reqs)
+	// Too soon: no poll (engine and store share the test clock).
+	n := reads.Load()
 	now = now.Add(time.Minute)
 	e.PollTriggers(ctx)
-	if len(fm.reqs) != calls {
+	if reads.Load() != n {
 		t.Fatal("polled before its interval")
 	}
 
@@ -386,8 +389,87 @@ func TestIntegrationTrigger(t *testing.T) {
 	poll("")
 	poll("")
 	items, _ := a.DB.OpenInbox(ctx, owner.ID)
-	if len(items) != 1 || items[0].Count != 2 || !strings.Contains(items[0].Title, "can't read ha → get_state") {
+	if len(items) != 1 || items[0].Count != 2 || !strings.Contains(items[0].Title, "on hold") || !strings.Contains(items[0].Detail, "isn't available") {
 		t.Fatalf("poll failure: %+v", items)
+	}
+}
+
+// A watched resource whose state changes fires; more than a batch of new
+// items are delivered over several runs; a sprig that loses access stops
+// polling.
+func TestTriggerStateChangesBatchesAndAccess(t *testing.T) {
+	a, _, fm, ctx, reads, _ := ready(t)
+	e := a.Engine
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	j, _ := a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "hal", Name: "Containers", Prompt: "Tell me what's unhealthy.", Kind: store.JobWebhook})
+	a.DB.PutTrigger(ctx, store.Trigger{JobID: j.ID, Source: store.TriggerMCP, Server: "ha", Tool: "get_state", EveryMin: 5, Match: "unhealthy"})
+	now := time.Now()
+	e.Now = func() time.Time { return now }
+	a.DB.SetClock(func() time.Time { return now })
+	a.Scheduler.Now = func() time.Time { return now }
+	poll := func(state string) {
+		haState.Store(state)
+		now = now.Add(6 * time.Minute)
+		e.PollTriggers(ctx)
+		a.Scheduler.Wait()
+	}
+	runs := func() int { r, _ := a.DB.JobRuns(ctx, j.ID, 50); return len(r) }
+
+	poll(`[{"id":"db","state":"healthy"}]`)
+	poll(`[{"id":"db","state":"healthy"}]`)
+	if runs() != 0 {
+		t.Fatal("fired with nothing new")
+	}
+	poll(`[{"id":"db","state":"unhealthy"}]`)
+	if runs() != 1 {
+		t.Fatal("a container turning unhealthy didn't fire")
+	}
+	poll(`[{"id":"db","state":"healthy"}]`)
+	poll(`[{"id":"db","state":"unhealthy"}]`)
+	if runs() != 2 {
+		t.Fatal("turning unhealthy a second time didn't fire")
+	}
+
+	// 25 new matches: 20 now, the other 5 next time, none lost.
+	var b strings.Builder
+	b.WriteString("[")
+	for i := 0; i < 25; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(`{"id":"c` + strconv.Itoa(i) + `","state":"unhealthy"}`)
+	}
+	b.WriteString("]")
+	before := len(fm.reqs)
+	poll(b.String())
+	now = now.Add(2 * time.Minute) // the webhook-style one-a-minute limit
+	poll(b.String())
+	if runs() != 4 {
+		t.Fatalf("batches: %d runs", runs())
+	}
+	var delivered int
+	for _, r := range fm.reqs[before:] {
+		for _, m := range r.Messages {
+			if strings.Contains(m.Content, "[Trigger job") {
+				delivered += strings.Count(m.Content, `"state":"unhealthy"`)
+			}
+		}
+	}
+	if delivered != 25 {
+		t.Fatalf("delivered %d of 25 items", delivered)
+	}
+
+	// Access removed: no more polling, and the user is told.
+	os.WriteFile(filepath.Join(a.Cfg.CharactersDir, "hal.md"), []byte(strings.Replace(hal, `tools: ["mcp:ha"]`, "tools: []", 1)), 0o644)
+	a.Chars.Load()
+	n := reads.Load()
+	poll(`[{"id":"new","state":"unhealthy"}]`)
+	if reads.Load() != n {
+		t.Fatal("polled an integration the sprig no longer has")
+	}
+	items, _ := a.DB.OpenInbox(ctx, owner.ID)
+	if len(items) == 0 || !strings.Contains(items[0].Detail, "no longer has access") {
+		t.Fatalf("not told: %+v", items)
 	}
 }
 
@@ -411,5 +493,65 @@ func TestWebhookFilter(t *testing.T) {
 	a.Settings.Set(ctx, "budget.monthly_usd", "0.000001")
 	if code, msg := a.Webhook(ctx, token, []byte(`status: unhealthy`), http.Header{}); code != 503 || !strings.Contains(msg, "spend cap") {
 		t.Fatalf("at the cap: %d %s", code, msg)
+	}
+}
+
+// Review fixes: an approval whose sprig was removed isn't run as anyone
+// else; a trust upgrade answered after the level changed doesn't apply;
+// a webhook filter sees the body, not the headers; /health hides MCP
+// error details.
+func TestApprovalEdgeCases(t *testing.T) {
+	a, fc, _, ctx, _, writes := ready(t)
+	a.Engine.HandleIncoming(ctx, dm("hal, turn on the light"))
+	fc.take()
+	os.Remove(filepath.Join(a.Cfg.CharactersDir, "hal.md"))
+	a.Chars.Load()
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	out := fc.take()
+	if writes.Load() != 0 || len(out) == 0 || out[0].persona != "Juni" {
+		t.Fatalf("a removed sprig's approval ran (writes %d): %+v", writes.Load(), out)
+	}
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	if apps, _ := a.DB.PendingApprovals(ctx, owner.ID, time.Hour); len(apps) != 0 {
+		t.Fatal("approval left pending")
+	}
+}
+
+func TestStaleTrustUpgradeIsRefused(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	a.DB.SetToolLevel(ctx, "hal", store.AnyTool, store.LevelDraft)
+	a.Engine.HandleIncoming(ctx, dm("hal, ask for more trust"))
+	fc.take()
+	a.DB.SetToolLevel(ctx, "hal", "mcp_ha__turn_on", store.LevelRead) // lowered meanwhile
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	if lv, _ := a.DB.ToolLevel(ctx, "hal", "mcp_ha__turn_on", true); lv != store.LevelRead {
+		t.Fatalf("a stale request raised the level to %q", lv)
+	}
+	if err := a.DB.SetToolLevel(ctx, store.AllSprigs, store.AnyTool, store.LevelRead); err == nil {
+		t.Fatal(`a level for every sprig and every tool was stored`)
+	}
+}
+
+func TestWebhookFilterSeesTheBody(t *testing.T) {
+	a, _, _, ctx, _, _ := ready(t)
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	token := "thk_" + strings.Repeat("b", 32)
+	j, _ := a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "hal", Name: "Down", Prompt: "x", Kind: store.JobWebhook, HookHash: agent.HookHash(token)})
+	a.DB.PutTrigger(ctx, store.Trigger{JobID: j.ID, Source: store.TriggerWebhook, Match: `/^down$/`})
+	h := http.Header{"Content-Type": {"text/plain"}}
+	if code, msg := a.Webhook(ctx, token, []byte("down"), h); code != 202 {
+		t.Fatalf("headers spoiled the match: %d %s", code, msg)
+	}
+	a.Scheduler.Wait()
+}
+
+func TestHealthHidesIntegrationErrors(t *testing.T) {
+	a, _, _, ctx, _, _ := ready(t)
+	s := store.MCPServer{Name: "broken", Transport: "http", Target: "http://127.0.0.1:1/mcp?token=sekrit", Enabled: true}
+	a.DB.PutMCPServer(ctx, s)
+	a.MCP.Connect(ctx, s)
+	c := a.health(ctx)["mcp.broken"]
+	if c.OK || strings.Contains(c.Detail, "sekrit") || strings.Contains(c.Detail, "127.0.0.1") {
+		t.Fatalf("health detail: %+v", c)
 	}
 }

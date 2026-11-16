@@ -20,8 +20,14 @@ be watched, and the sprig must already have access to that tool.
 | `args` | arguments for the tool, e.g. a search query |
 
 Items are the elements of a JSON array the tool returns (or the first
-array inside a JSON object), else lines of text. An element's `id` (or
-`uid`, `message_id`...) tells new from old; without one, its text does.
+array inside a JSON object), else lines of text. An item is new when it
+wasn't in the last check, or when an item with the same `id` (or `uid`,
+`message_id`...) has changed: a container that was healthy and is now
+unhealthy fires. Up to 20 items go to each run; the rest come in the
+next. The first 1,000 items of a response are considered.
+
+Each check also confirms the sprig still has access to the tool and that
+the tool still only reads; if not, the trigger holds and tells you.
 
 Examples:
 

@@ -233,14 +233,17 @@ func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, fr
 // already have acted, and running it again could do things twice. Pass
 // the result to ReportInterrupted once the chat apps are connected.
 func (e *Engine) RecoverInterrupted(ctx context.Context) []store.Task {
-	tasks, err := e.DB.InterruptRunningTasks(ctx)
+	ctx = context.WithoutCancel(ctx) // a stop during startup mustn't cut recovery short
+	tasks, err := e.DB.InterruptRunningTasks(ctx, func(tk store.Task) store.InboxItem {
+		return store.InboxItem{UserID: tk.UserID, Character: tk.Character, Kind: store.InboxInterrupted, Ref: fmt.Sprintf("task:%d", tk.ID),
+			Title:  fmt.Sprintf("%s's task was interrupted by a restart", e.charName(tk.Character)),
+			Detail: e.Secrets.Redact(truncate("Task: "+tk.Prompt, 4000))}
+	})
 	if err != nil {
-		e.Log.Error("recover interrupted tasks", "err", err)
+		e.Log.Error("recover interrupted tasks; will retry at the next start", "err", err)
 		return nil
 	}
 	for _, tk := range tasks {
-		e.deadLetter(ctx, store.InboxItem{UserID: tk.UserID, Character: tk.Character, Kind: store.InboxInterrupted, Ref: fmt.Sprintf("task:%d", tk.ID),
-			Title: fmt.Sprintf("%s's task was interrupted by a restart", e.charName(tk.Character)), Detail: "Task: " + tk.Prompt})
 		e.logActivity(ctx, "warn", "sprig", tk.Character, tk.UserID, fmt.Sprintf("task #%d interrupted by a restart", tk.ID), tk.Prompt)
 	}
 	return tasks

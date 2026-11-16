@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,12 +14,15 @@ func TestSplitItems(t *testing.T) {
 		}
 		return out
 	}
-	// JSON arrays: ids are keys.
-	if got := keys(splitItems(`[{"id":"a1","subject":"hi"},{"id":2}]`)); !reflect.DeepEqual(got, []string{"id:a1", "id:2"}) {
-		t.Fatalf("array: %v", got)
+	// JSON arrays: keyed by id and content, so a changed item is new.
+	healthy := keys(splitItems(`[{"id":"db","state":"healthy"},{"id":2}]`))
+	again := keys(splitItems(`[{"id":"db","state":"healthy"},{"id":2}]`))
+	sick := keys(splitItems(`[{"id":"db","state":"unhealthy"},{"id":2}]`))
+	if !reflect.DeepEqual(healthy, again) || healthy[0] == sick[0] || healthy[1] != sick[1] || !strings.HasPrefix(healthy[0], "id:db#") {
+		t.Fatalf("array keys: %v / %v", healthy, sick)
 	}
 	// The first array inside an object.
-	if got := splitItems(`{"count":2,"messages":[{"message_id":"m1"},{"message_id":"m2"}]}`); len(got) != 2 || got[0].key != "id:m1" {
+	if got := splitItems(`{"count":2,"messages":[{"message_id":"m1"},{"message_id":"m2"}]}`); len(got) != 2 || !strings.HasPrefix(got[0].key, "id:m1#") {
 		t.Fatalf("object: %+v", got)
 	}
 	// Plain text: lines, keyed by content.

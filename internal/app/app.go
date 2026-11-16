@@ -275,8 +275,14 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		detail += fmt.Sprintf(", %d file(s) with problems", n)
 	}
 	out["characters"] = server.Check{OK: ok && host != nil, Detail: detail}
+	// /health is public: connection errors can quote URLs and tokens, so
+	// only the state is shown. `thicket doctor` gives the details.
 	for name, st := range a.MCP.Status() {
-		out["mcp."+name] = server.Check{OK: !strings.HasPrefix(st, "error"), Detail: st, Optional: true}
+		c := server.Check{OK: !strings.HasPrefix(st, "error"), Detail: st, Optional: true}
+		if !c.OK {
+			c.Detail = "not connected (run thicket doctor for details)"
+		}
+		out["mcp."+name] = c
 	}
 	return out
 }
@@ -308,6 +314,7 @@ func (a *App) Run(parent context.Context) error {
 	// Before anything can start a new task: fail the ones a stop or crash
 	// cut short (reported once the chat apps are up).
 	interrupted := a.Engine.RecoverInterrupted(ctx)
+	a.Scheduler.RecoverStale(ctx)
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
 	mcpDone := make(chan struct{})
@@ -495,6 +502,18 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 	case err != nil:
 		return http.StatusUnauthorized, err.Error()
 	}
+	// A filter looks at the body as sent, before headers are added. Only
+	// "no filter" lets a call through unfiltered; a failed lookup doesn't.
+	tr, err := a.DB.TriggerFor(ctx, j.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		a.Log.Error("webhook trigger lookup", "job", j.ID, "err", err)
+		a.Engine.ReleaseDelivery(ctx, *j, header) // let the sender's retry through
+		return http.StatusServiceUnavailable, "try again shortly"
+	case tr.Source == store.TriggerWebhook && !agent.Matches(tr.Match, string(body)):
+		return http.StatusOK, "ignored: the body doesn't match this job's filter"
+	}
 	payload := string(body)
 	if !utf8.ValidString(payload) {
 		payload = fmt.Sprintf("(%d bytes of binary data, not shown)", len(body))
@@ -508,9 +527,6 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 	}
 	if len(head) > 0 {
 		payload = strings.Join(head, "\n") + "\n\n" + payload
-	}
-	if tr, err := a.DB.TriggerFor(ctx, j.ID); err == nil && tr.Source == store.TriggerWebhook && !agent.Matches(tr.Match, payload) {
-		return http.StatusOK, "ignored: the body doesn't match this job's filter"
 	}
 	j.Payload = payload
 	fireErr := a.Scheduler.Fire(*j)
