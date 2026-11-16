@@ -202,12 +202,27 @@ func (s *Scheduler) RecoverStale(ctx context.Context) {
 			continue
 		default:
 			s.Log.Warn("job run interrupted by a restart", "job", j.ID, "run", r.ID)
-			s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
+			if rep, ok := s.Exec.(InterruptReporter); ok {
+				// The run stays pending until its report is safely stored.
+				if err := rep.ReportInterruptedRun(ctx, *j); err != nil {
+					s.Log.Error("report an interrupted run; will retry at the next start", "job", j.ID, "err", err)
+					continue
+				}
+			} else {
+				s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
+			}
 		}
 		if err := s.DB.FailRun(ctx, r.ID); err != nil {
 			s.Log.Error("fail stale run", "run", r.ID, "err", err)
 		}
 	}
+}
+
+// InterruptReporter is optionally implemented by an Executor to report a
+// run a restart cut short, returning an error if the report couldn't be
+// stored (the run is then left for the next start).
+type InterruptReporter interface {
+	ReportInterruptedRun(ctx context.Context, job store.Job) error
 }
 
 // Pauser is optionally implemented by an Executor to hold back scheduled

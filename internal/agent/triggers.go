@@ -199,7 +199,9 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, pollCallTimeout)
-	res, err := e.MCP.Call(cctx, tr.Server, tr.Tool, json.RawMessage(tr.Args), true)
+	// CallReadOnly re-checks on the connection actually used, so a change
+	// between pollRefusal and the call can't slip through.
+	res, err := e.MCP.CallReadOnly(cctx, tr.Server, tr.Tool, json.RawMessage(tr.Args))
 	cancel()
 	if err == nil && res.IsError {
 		err = errors.New(res.Text)

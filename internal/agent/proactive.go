@@ -126,6 +126,34 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 	}
 }
 
+// ReportInterruptedRun records a job run a restart cut short in the inbox and
+// tells its owner (scheduler.InterruptReporter). It fails if the inbox
+// item can't be stored, so the run is reported again at the next start;
+// the chat message is best effort.
+func (e *Engine) ReportInterruptedRun(ctx context.Context, j store.Job) error {
+	ctx = context.WithoutCancel(ctx)
+	user, err := e.DB.UserByID(ctx, j.UserID)
+	if err != nil {
+		return fmt.Errorf("look up the job's owner: %w", err)
+	}
+	if _, err := e.DB.AddInbox(ctx, store.InboxItem{UserID: user.ID, Character: j.Character, Kind: store.InboxInterrupted,
+		Ref: fmt.Sprintf("job:%d", j.ID), Title: fmt.Sprintf("Job “%s” was interrupted by a restart", j.Name), Detail: store.StaleRunError}); err != nil {
+		return fmt.Errorf("store the report: %w", err)
+	}
+	e.logActivity(ctx, "error", "job", j.Character, user.ID, fmt.Sprintf("job #%d %q was interrupted by a restart", j.ID, j.Name), "")
+	char, ok := e.Chars.Get(j.Character)
+	if !ok {
+		char, ok = e.Chars.Host()
+	}
+	if ok {
+		msg := fmt.Sprintf("⚠️ Thicket restarted while my job “%s” was running, so it didn't finish. It'll run again at its next time.", j.Name)
+		if err := e.sendToUser(ctx, user, char, msg); err != nil {
+			e.Log.Error("tell the user about an interrupted job", "job", j.ID, "err", err) // it's in the inbox regardless
+		}
+	}
+	return nil
+}
+
 // deadLetter puts something that needs a person in the inbox. If even that
 // fails, the log is the last resort.
 func (e *Engine) deadLetter(ctx context.Context, it store.InboxItem) {

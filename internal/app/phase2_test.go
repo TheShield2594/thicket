@@ -93,6 +93,44 @@ func TestOnboardingShowsADiffAndWaitsForApproval(t *testing.T) {
 	}
 }
 
+// A conflict during creation undoes what was made (never the user's own
+// file), reports nothing created, and the same proposal works once fixed.
+func TestOnboardingUndoesOnFailure(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	dir := a.Cfg.CharactersDir
+	theirs := filepath.Join(dir, "wren", "voice_tests", "01-hello.yaml")
+	os.MkdirAll(filepath.Dir(theirs), 0o755)
+	os.WriteFile(theirs, []byte("prompt: mine\n"), 0o644)
+	a.Engine.HandleIncoming(ctx, dm("bring on wren please"))
+	a.Engine.HandleIncoming(ctx, dm("create wren"))
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	fc.take()
+	if _, ok := a.Chars.Get("wren"); ok {
+		t.Fatal("created despite the conflict")
+	}
+	if b, _ := os.ReadFile(theirs); string(b) != "prompt: mine\n" {
+		t.Fatal("the user's file was changed")
+	}
+	for _, f := range []string{"wren.md", "wren/avatar.json", "wren/voice_tests/02-what-do-you-do.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Fatalf("%s left behind", f)
+		}
+	}
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	if jobs, _ := a.DB.UserJobs(ctx, owner.ID); len(jobs) != 0 {
+		t.Fatalf("routines left behind: %+v", jobs)
+	}
+	if lv, _ := a.DB.ToolLevel(ctx, "wren", "schedule_job", true); lv != "" {
+		t.Fatalf("level left behind: %q", lv)
+	}
+	os.Remove(theirs)
+	a.Engine.HandleIncoming(ctx, dm("create wren"))
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	if _, ok := a.Chars.Get("wren"); !ok {
+		t.Fatal("the same proposal didn't work once the conflict was gone")
+	}
+}
+
 func TestOnboardingDenied(t *testing.T) {
 	a, fc, _, ctx, _, _ := ready(t)
 	a.Engine.HandleIncoming(ctx, dm("bring on wren please"))

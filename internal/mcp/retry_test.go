@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -95,5 +96,18 @@ func TestRetriesOnlyReadOnlyCalls(t *testing.T) {
 	_, err = r.Call(ctx, "ha", "get_state", nil, true)
 	if err == nil || !strings.Contains(err.Error(), "no longer listed as read-only") || calls.Load() != 1 {
 		t.Fatalf("retried a tool that stopped being read-only: %v (calls %d)", err, calls.Load())
+	}
+
+	// An automatic caller checks the connection it actually uses: the tool
+	// now says it changes things, so nothing is called at all.
+	r.Connect(ctx, s)
+	calls.Store(0)
+	if _, err := r.CallReadOnly(ctx, "ha", "get_state", nil); !errors.Is(err, ErrNotReadOnly) || calls.Load() != 0 {
+		t.Fatalf("CallReadOnly on a tool that changes things: %v (calls %d)", err, calls.Load())
+	}
+	readOnly.Store(true)
+	r.Connect(ctx, s)
+	if res, err := r.CallReadOnly(ctx, "ha", "get_state", nil); err != nil || res.Text != "done" {
+		t.Fatalf("CallReadOnly: %v %v", res, err)
 	}
 }

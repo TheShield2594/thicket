@@ -171,16 +171,29 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 	var jobIDs []int64
 	var written []string
 	levelSet := false
-	undo := func() {
+	// undo removes what this call made and returns cause, saying so if
+	// anything couldn't be removed (so "nothing was created" is never a lie).
+	undo := func(cause error) error {
+		var left []string
 		for _, id := range jobIDs {
-			_ = e.DB.DeleteJob(bg, id)
+			if err := e.DB.DeleteJob(bg, id); err != nil {
+				left = append(left, fmt.Sprintf("job #%d", id))
+			}
 		}
 		if levelSet {
-			_ = e.DB.SetToolLevel(bg, p.ID, store.AnyTool, "")
+			if err := e.DB.SetToolLevel(bg, p.ID, store.AnyTool, ""); err != nil {
+				left = append(left, "its draft level")
+			}
 		}
 		for _, f := range written {
-			_ = os.Remove(f) // only what this call wrote
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				left = append(left, f)
+			}
 		}
+		if len(left) > 0 {
+			return fmt.Errorf("%w; undoing it failed too, so remove these by hand: %s", cause, strings.Join(left, ", "))
+		}
+		return cause
 	}
 	dir := e.Chars.Dir()
 	for path, content := range p.Files {
@@ -189,44 +202,39 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		}
 		clean := filepath.Clean(path)
 		if !strings.HasPrefix(clean, p.ID+string(filepath.Separator)) || strings.Contains(clean, "..") {
-			undo()
-			return "", fmt.Errorf("refusing to write %q", path)
+			return "", undo(fmt.Errorf("refusing to write %q", path))
 		}
 		full := filepath.Join(dir, clean)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			undo()
-			return "", err
+			return "", undo(err)
 		}
 		if _, err := os.Stat(full); err == nil {
-			undo()
-			return "", fmt.Errorf("%s already exists; not overwriting it", filepath.Join("characters", clean))
+			return "", undo(fmt.Errorf("%s already exists; not overwriting it", filepath.Join("characters", clean)))
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-			undo()
-			return "", err
-		}
+		// It didn't exist a moment ago: from here on it's ours to remove,
+		// even if the write fails half-way.
 		written = append(written, full)
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			return "", undo(err)
+		}
 	}
 	// Every granted tool starts at draft, before the sprig can act.
 	if err := e.DB.SetToolLevel(ctx, c.ID, store.AnyTool, store.LevelDraft); err != nil {
-		undo()
-		return "", err
+		return "", undo(err)
 	}
 	levelSet = true
 	var made []string
 	for _, r := range p.Routines {
 		j, err := e.DB.CreateJob(ctx, store.Job{UserID: user.ID, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
 		if err != nil {
-			undo()
-			return "", fmt.Errorf("couldn't schedule routine %q, so nothing was created: %w", r.Name, err)
+			return "", undo(fmt.Errorf("couldn't schedule routine %q, so nothing was created: %w", r.Name, err))
 		}
 		jobIDs = append(jobIDs, j.ID)
 		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
 	}
 	path, err := e.Chars.Write(ctx, c)
 	if err != nil {
-		undo()
-		return "", fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err)
+		return "", undo(fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err))
 	}
 	e.drafts.Delete(user.ID)
 	e.logActivity(ctx, "info", "character", c.ID, user.ID, fmt.Sprintf("new sprig %s sprouted", c.DisplayName()), path)

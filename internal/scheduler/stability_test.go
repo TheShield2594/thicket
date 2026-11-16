@@ -84,3 +84,37 @@ func TestInterruptedRunsAreReportedAtStart(t *testing.T) {
 		t.Fatalf("run not failed cleanly: %+v", runs)
 	}
 }
+
+type reportingExec struct {
+	fakeExec
+	fail    bool
+	reports int
+}
+
+func (r *reportingExec) ReportInterruptedRun(context.Context, store.Job) error {
+	if r.fail {
+		return errors.New("inbox unavailable")
+	}
+	r.reports++
+	return nil
+}
+
+// A run stays pending until its interruption report is stored.
+func TestInterruptedRunKeptUntilReported(t *testing.T) {
+	ctx := context.Background()
+	db, _ := store.Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	defer db.Close()
+	u, _ := db.CreateUser(ctx, "discord", "1", "Sam", "owner")
+	j, _ := db.CreateJob(ctx, store.Job{UserID: u.ID, Character: "juniper", Name: "n", Schedule: "@daily", Prompt: "p"})
+	db.StartJobRun(ctx, j.ID, time.Now())
+	exec := &reportingExec{fail: true}
+	New(db, exec, slog.New(slog.NewTextHandler(io.Discard, nil))).RecoverStale(ctx)
+	if runs, _ := db.StaleRuns(ctx); len(runs) != 1 {
+		t.Fatal("the run was closed although its report failed")
+	}
+	exec.fail = false
+	New(db, exec, slog.New(slog.NewTextHandler(io.Discard, nil))).RecoverStale(ctx) // the next start
+	if runs, _ := db.StaleRuns(ctx); len(runs) != 0 || exec.reports != 1 {
+		t.Fatalf("not reported and closed: %d stale, %d reports", len(runs), exec.reports)
+	}
+}

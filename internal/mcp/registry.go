@@ -252,6 +252,20 @@ func (r *Registry) Status() map[string]string {
 // after a transport failure: only for read-only tools, since a dropped
 // connection doesn't mean the server didn't act.
 func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
+	return r.call(ctx, server, tool, args, retrySafe, false)
+}
+
+// CallReadOnly calls a tool only if the very connection used lists it as
+// read-only (for automatic callers, like trigger polls, that must never
+// run a tool that changes things). It's retried like any read-only call.
+func (r *Registry) CallReadOnly(ctx context.Context, server, tool string, args json.RawMessage) (*CallResult, error) {
+	return r.call(ctx, server, tool, args, true, true)
+}
+
+// ErrNotReadOnly means a tool isn't (or is no longer) listed as read-only.
+var ErrNotReadOnly = errors.New("is not listed as read-only")
+
+func (r *Registry) call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe, onlyReadOnly bool) (*CallResult, error) {
 	r.mu.Lock()
 	c := acquireLocked(r.conns[server])
 	r.mu.Unlock()
@@ -260,6 +274,10 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 		if c, err = r.reconnect(ctx, server); err != nil {
 			return nil, err
 		}
+	}
+	if onlyReadOnly && !listsReadOnly(c.tools, tool) {
+		r.release(c)
+		return nil, fmt.Errorf("%s → %s %w", server, tool, ErrNotReadOnly)
 	}
 	res, err := r.callOn(ctx, c, tool, args)
 	var rpcErr *RPCError
