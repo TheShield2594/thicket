@@ -250,6 +250,9 @@ func loadText(path, from string) (*Draft, error) {
 		src, app = "Grok persona", "Grok"
 	}
 	d := &Draft{Source: src}
+	if e, ok := parseExport(text); ok {
+		return d.fromExport(e, app), nil
+	}
 	name := guessName(text)
 	if name == "" {
 		name = nameFromFile(path)
@@ -270,6 +273,37 @@ func loadText(path, from string) (*Draft, error) {
 	c.Body = d.buildBody("", []section{{"Original instructions", text}})
 	d.Char = c
 	return d, nil
+}
+
+// fromExport builds a draft from a reply to ExportPrompt.
+func (d *Draft) fromExport(e export, app string) *Draft {
+	name := clip(e.fields["name"], 40)
+	c := &character.Character{
+		Name:       name,
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+	}
+	c.Role = role(e.fields["role"], name+", brought over from "+app+".")
+	c.Personality.Traits = traitList(e.fields["traits"])
+	if len(c.Personality.Traits) == 0 {
+		c.Personality.Traits = []string{"true to the character in the background"}
+		d.Notes = append(d.Notes, "the reply had no short trait list, so traits are a placeholder: tell Juni which 3-4 traits fit")
+	}
+	hasExamples := false
+	for _, s := range e.sections {
+		if strings.Contains(strings.ToLower(s.title), "example") && strings.TrimSpace(s.text) != "" {
+			hasExamples = true
+		}
+	}
+	c.Voice.Style = defaultVoice(name, hasExamples)
+	if v := e.fields["voice"]; v != "" {
+		c.Voice.Style = append([]string{clip(v, 300)}, c.Voice.Style[1:]...)
+	}
+	c.Body = d.buildBody("", e.sections)
+	d.Char = c
+	for _, f := range factLines(e.about) {
+		d.Memories = append(d.Memories, Memory{Kind: "fact", Content: f})
+	}
+	return d
 }
 
 var (

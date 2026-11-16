@@ -20,6 +20,10 @@ stated.
   you as locked user memories. Imports never get tools beyond `schedule`,
   are never the host, and start at `draft`. Juni can also draft a sprig
   from a persona pasted in chat.
+- Juni's `import_guide` explains how to bring a character over from a
+  named app: the import command (Docker-aware), or for apps with no export
+  (Grok, ChatGPT, Character.AI, ...) a prompt to paste into the character
+  whose reply Thicket imports directly.
 - New sprigs through an approved diff: Juni's interview covers the job,
   personality, voice, tools and schedule; `create_character` shows every
   file the sprig will get (character file, `avatar.json`, voice tests)

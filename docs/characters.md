@@ -186,6 +186,34 @@ Then:
   They're saved as yours (`source: user`, locked), so automatic review never
   changes them. They go to the owner unless you pass `--user ID`.
 
+### Asking in chat
+
+Ask Juni "how do I bring my companion over from Grok?" (or OpenClaw,
+Hermes, SillyTavern, ChatGPT, Character.AI, anything) and she gives you
+the steps for that app: the exact import command (with the `docker
+compose` lines if Thicket runs in Docker), or, for apps that can't export,
+a prompt to paste into the character there. Its reply comes back in a
+fixed layout:
+
+```
+Name: Ani
+Role: Your playful late-night companion.
+Traits: bubbly, teasing, loyal
+Voice: Short, warm messages with lots of energy.
+
+## Background
+...
+## Example lines
+...
+## What you know about me
+- ...
+```
+
+Paste that reply to Juni and she drafts the sprig from it, or save it as a
+file and import it with `--from grok` or `--from text`: the importer reads
+the labelled lines as name, role, traits and voice, and with `--memories`
+turns "What you know about me" into memories.
+
 Afterwards, ask Juni to tune anything that doesn't fit, such as traits
 marked as placeholders. You can also skip the command and paste a persona
 straight into chat ("bring on this character: ..."): Juni drafts it
