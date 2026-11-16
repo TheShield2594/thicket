@@ -1,0 +1,343 @@
+package app
+
+// Smoke test: the whole system wired together, with a fake Discord and a
+// scripted fake model. It walks first-run onboarding, memory, approvals,
+// handoffs, memory review and health.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/theshield2594/thicket/internal/channel"
+	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/llm"
+)
+
+type sent struct {
+	chat, persona, text string
+}
+
+type fakeChannel struct {
+	mu      sync.Mutex
+	sent    []sent
+	deleted []string
+}
+
+func (f *fakeChannel) Name() string { return "discord" }
+func (f *fakeChannel) Run(ctx context.Context, h channel.Handler) error {
+	<-ctx.Done()
+	return nil
+}
+func (f *fakeChannel) Send(_ context.Context, chatID string, p channel.Persona, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, sent{chatID, p.Name, text})
+	return nil
+}
+func (f *fakeChannel) SendDirect(ctx context.Context, userID string, p channel.Persona, text string) (string, error) {
+	return "dm-" + userID, f.Send(ctx, "dm-"+userID, p, text)
+}
+func (f *fakeChannel) Delete(_ context.Context, chatID, msgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, msgID)
+	return nil
+}
+func (f *fakeChannel) Typing(context.Context, string) {}
+func (f *fakeChannel) Connected() bool                { return true }
+
+func (f *fakeChannel) take() []sent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.sent
+	f.sent = nil
+	return out
+}
+
+// fakeModel answers based on who is speaking and what was asked.
+type fakeModel struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func toolCall(name string, args any) *llm.Response {
+	b, _ := json.Marshal(args)
+	return &llm.Response{Model: "fake", Usage: llm.Usage{PromptTokens: 100, CompletionTokens: 20, Cost: 0.001},
+		Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: name, Arguments: string(b)}}}}}
+}
+
+func text(s string) *llm.Response {
+	return &llm.Response{Model: "fake", Usage: llm.Usage{PromptTokens: 100, CompletionTokens: 20, Cost: 0.001}, Message: llm.Message{Role: "assistant", Content: s}}
+}
+
+func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+	sys := req.Messages[0].Content
+	last := req.Messages[len(req.Messages)-1]
+	switch {
+	case strings.Contains(sys, "You check whether a chat reply"):
+		return text(`{"in_character": true}`), nil
+	case strings.Contains(sys, "You maintain long-term memory"):
+		return text(`{"ops":[{"op":"add","scope":"shared","kind":"person","content":"Has a sister called Maya."}]}`), nil
+	case strings.HasPrefix(sys, "You are Pip"):
+		return text("Pip here! I'll sort your calendar."), nil
+	}
+	// Juniper.
+	if last.Role == "tool" {
+		if strings.HasPrefix(last.Content, "PENDING") {
+			return text("I'll jot that down as soon as you give me the nod."), nil
+		}
+		if strings.Contains(last.Content, "will pick this up") {
+			return text("Passing you to Pip."), nil
+		}
+		return text("Let me plant that thought. Done!"), nil
+	}
+	u := strings.ToLower(last.Content)
+	switch {
+	case strings.Contains(u, "remember my dog"):
+		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
+	case strings.Contains(u, "calendar"):
+		return toolCall("handoff", map[string]any{"to": "pip", "message": "help with the calendar"}), nil
+	case strings.Contains(u, "spin"):
+		return toolCall("list_memories", map[string]any{}), nil // always calls a tool: loop cap must stop it
+	}
+	return text("Hi! I'm Juni. Lovely to meet you."), nil
+}
+
+const pip = `---
+id: pip
+name: Pip
+role: Keeps the calendar and makes sure nothing is late.
+personality:
+  traits: [punctual, upbeat]
+voice:
+  style: [brisk and cheerful]
+tools: [schedule]
+---
+Pip is small and tidy.
+`
+
+func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
+	t.Helper()
+	dir := t.TempDir()
+	os.Setenv("THICKET_DATA_DIR", dir)
+	t.Cleanup(func() { os.Unsetenv("THICKET_DATA_DIR") })
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.HTTPAddr = "127.0.0.1:0"
+	fc := &fakeChannel{}
+	fm := &fakeModel{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	a, err := New(ctx, cfg, "test", Options{
+		Model:    fm,
+		KeyCheck: func(context.Context, string) error { return nil },
+		Channels: func(*slog.Logger) []channel.Channel { return []channel.Channel{fc} },
+		LogOut:   io.Discard,
+		NoHTTP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	return a, fc, fm, ctx
+}
+
+func dm(text string) channel.Incoming {
+	return channel.Incoming{Channel: "discord", ChatID: "dm-owner", MessageID: fmt.Sprint(time.Now().UnixNano()), UserID: "owner", UserName: "Sam", Text: text, IsDM: true}
+}
+
+func TestSmoke(t *testing.T) {
+	a, fc, _, ctx := setup(t)
+	e := a.Engine
+
+	// 1. First contact, no model key: scripted greeting, owner created.
+	e.HandleIncoming(ctx, dm("hello?"))
+	out := fc.take()
+	if len(out) != 1 || out[0].persona != "Juni" || !strings.Contains(out[0].text, "openrouter.ai/keys") {
+		t.Fatalf("bootstrap greeting: %+v", out)
+	}
+	owner, err := a.DB.UserByExternal(ctx, "discord", "owner")
+	if err != nil || owner.Role != "owner" {
+		t.Fatalf("owner not created: %+v %v", owner, err)
+	}
+
+	// 2. Strangers are turned away and not created.
+	e.HandleIncoming(ctx, channel.Incoming{Channel: "discord", ChatID: "dm-x", UserID: "stranger", Text: "hi", IsDM: true})
+	if out := fc.take(); len(out) != 1 || !strings.Contains(out[0].text, "private") {
+		t.Fatalf("stranger reply: %+v", out)
+	}
+	if _, err := a.DB.UserByExternal(ctx, "discord", "stranger"); err == nil {
+		t.Fatal("stranger should not get an account")
+	}
+
+	// 3. Owner pastes their key: captured, never stored as a message.
+	key := "sk-or-v1-" + strings.Repeat("ab12", 16)
+	e.HandleIncoming(ctx, dm(key))
+	out = fc.take()
+	if len(out) != 2 || !strings.Contains(out[0].text, "it works") || !strings.Contains(out[1].text, "Juni") {
+		t.Fatalf("key capture: %+v", out)
+	}
+	if !a.Secrets.Has(ctx, "openrouter_api_key") {
+		t.Fatal("key not stored")
+	}
+	assertNoLeak(t, a, key)
+
+	// 4. Memory: the user asks Juni to remember something.
+	e.HandleIncoming(ctx, dm("Juni, please remember my dog is called Biscuit"))
+	out = fc.take()
+	if len(out) != 1 || !strings.Contains(out[0].text, "plant that thought") {
+		t.Fatalf("remember reply: %+v", out)
+	}
+	mems, _ := a.DB.AllMemories(ctx, owner.ID)
+	if len(mems) != 1 || !mems[0].Locked || mems[0].Content != "Has a dog named Biscuit." {
+		t.Fatalf("memory not saved/locked: %+v", mems)
+	}
+
+	// 5. Approvals: require approval for remember, then approve.
+	if err := a.DB.SetToolPolicy(ctx, "remember", "always"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.ApplyMemoryChanges(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.HandleIncoming(ctx, dm("remember my dog is a beagle too"))
+	out = fc.take()
+	if len(out) != 2 || !strings.Contains(out[1].text, "approve") || !strings.Contains(out[1].text, "remember") {
+		t.Fatalf("approval prompt: %+v", out)
+	}
+	e.HandleIncoming(ctx, dm("approve"))
+	out = fc.take()
+	if len(out) != 1 {
+		t.Fatalf("after approval: %+v", out)
+	}
+	runs, _ := a.DB.RecentActivity(ctx, 50, "info")
+	if !hasActivity(runs, "approved") || !hasActivity(runs, "ran approved tool remember") {
+		t.Fatal("approval not logged")
+	}
+
+	// 6. Handoff to another sprig (added as a file, picked up on reload).
+	if err := os.WriteFile(filepath.Join(a.Cfg.CharactersDir, "pip.md"), []byte(pip), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	e.HandleIncoming(ctx, dm("can someone help with my calendar?"))
+	out = fc.take()
+	if len(out) != 2 || out[0].persona != "Juni" || out[1].persona != "Pip" || !strings.Contains(out[1].text, "Pip here") {
+		t.Fatalf("handoff: %+v", out)
+	}
+	// Pip stays the active sprig in this chat.
+	e.HandleIncoming(ctx, dm("thanks!"))
+	if out = fc.take(); len(out) != 1 || out[0].persona != "Pip" {
+		t.Fatalf("sticky character: %+v", out)
+	}
+
+	// 7. Runaway tool loops are capped.
+	e.HandleIncoming(ctx, dm("Juni, spin forever"))
+	if out = fc.take(); len(out) != 1 {
+		t.Fatalf("loop cap: %+v", out)
+	}
+
+	// 8. A secret pasted in a server channel is deleted, never processed.
+	e.HandleIncoming(ctx, channel.Incoming{Channel: "discord", ChatID: "general", MessageID: "m1", UserID: "owner", Text: "Juni, token ghp_" + strings.Repeat("a", 36), Mentioned: true})
+	if out = fc.take(); len(out) != 1 || !strings.Contains(out[0].text, "deleted") {
+		t.Fatalf("guild secret: %+v", out)
+	}
+	if len(fc.deleted) == 0 || fc.deleted[len(fc.deleted)-1] != "m1" {
+		t.Fatal("secret message not deleted")
+	}
+	assertNoLeak(t, a, "ghp_"+strings.Repeat("a", 36))
+
+	// 9. Memory review of the idle conversation.
+	a.DB.SetClock(func() time.Time { return time.Now().Add(2 * time.Hour) })
+	a.Reviewer.ReviewPending(ctx)
+	mems, _ = a.DB.AllMemories(ctx, owner.ID)
+	found := false
+	for _, m := range mems {
+		found = found || m.Content == "Has a sister called Maya."
+	}
+	if !found {
+		t.Fatalf("review did not add memory: %+v", mems)
+	}
+	reviews, _ := a.DB.ListExtractionRuns(ctx, 5)
+	if len(reviews) == 0 || reviews[0].Status != "ok" {
+		t.Fatalf("extraction runs: %+v", reviews)
+	}
+
+	// 10. Usage was recorded and health is green.
+	spent, _ := a.DB.SpendSince(ctx, time.Now().Add(-time.Hour), "")
+	if spent <= 0 {
+		t.Fatal("usage not recorded")
+	}
+	a.Scheduler.Tick(ctx)
+	for name, c := range a.health(ctx) {
+		if !c.OK {
+			t.Errorf("health %s not ok: %s", name, c.Detail)
+		}
+	}
+}
+
+func TestBudgetCapStopsCalls(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm("hi"))
+	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("cd34", 16)))
+	fc.take()
+	if err := a.Settings.Set(ctx, "budget.daily_usd", "0.0001"); err != nil {
+		t.Fatal(err)
+	}
+	before := fm.calls
+	e.HandleIncoming(ctx, dm("hello again"))
+	out := fc.take()
+	if fm.calls != before {
+		t.Fatalf("model called past the cap (%d -> %d)", before, fm.calls)
+	}
+	// The user gets the in-character refusal; the owner gets the alert.
+	var gotReply, gotAlert bool
+	for _, s := range out {
+		gotReply = gotReply || strings.Contains(s.text, "spending cap")
+		gotAlert = gotAlert || strings.Contains(s.text, "daily spend cap")
+	}
+	if !gotReply || !gotAlert {
+		t.Fatalf("budget messages: %+v", out)
+	}
+}
+
+func assertNoLeak(t *testing.T, a *App, secret string) {
+	t.Helper()
+	for _, q := range []string{"SELECT content FROM messages", "SELECT summary || detail FROM activity", "SELECT content FROM memories"} {
+		rows, err := a.DB.DB().Query(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var s string
+			rows.Scan(&s)
+			if strings.Contains(s, secret) {
+				rows.Close()
+				t.Fatalf("secret leaked via %q: %s", q, s)
+			}
+		}
+		rows.Close()
+	}
+}
+
+func hasActivity(acts interface{}, substr string) bool {
+	b, _ := json.Marshal(acts)
+	return strings.Contains(string(b), substr)
+}

@@ -1,0 +1,158 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strconv"
+	"time"
+)
+
+type Job struct {
+	ID        int64
+	UserID    int64
+	Character string
+	Name      string
+	Schedule  string
+	Prompt    string
+	Enabled   bool
+	LastRunAt time.Time
+	CreatedAt time.Time
+}
+
+type JobRun struct {
+	ID         int64
+	JobID      int64
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Status     string // running | ok | empty | error | missed
+	Output     string
+	Error      string
+	CostUSD    float64
+}
+
+const jobCols = "id, user_id, character, name, schedule, prompt, enabled, last_run_at, created_at"
+
+func scanJob(r interface{ Scan(...any) error }) (*Job, error) {
+	var j Job
+	var en int
+	var last sql.NullInt64
+	var created int64
+	if err := r.Scan(&j.ID, &j.UserID, &j.Character, &j.Name, &j.Schedule, &j.Prompt, &en, &last, &created); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	j.Enabled, j.LastRunAt, j.CreatedAt = en == 1, timeOf(last), time.Unix(created, 0)
+	return &j, nil
+}
+
+func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO jobs (user_id, character, name, schedule, prompt, enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+		j.UserID, j.Character, j.Name, j.Schedule, j.Prompt, s.unix())
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.JobByID(ctx, id)
+}
+
+func (s *Store) JobByID(ctx context.Context, id int64) (*Job, error) {
+	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobCols+" FROM jobs WHERE id = ?", id))
+}
+
+func (s *Store) listJobs(ctx context.Context, q string, args ...any) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) EnabledJobs(ctx context.Context) ([]Job, error) {
+	return s.listJobs(ctx, "SELECT "+jobCols+" FROM jobs WHERE enabled = 1 ORDER BY id")
+}
+
+func (s *Store) UserJobs(ctx context.Context, userID int64) ([]Job, error) {
+	return s.listJobs(ctx, "SELECT "+jobCols+" FROM jobs WHERE user_id = ? ORDER BY id", userID)
+}
+
+func (s *Store) SetJobEnabled(ctx context.Context, id int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx, "UPDATE jobs SET enabled = ? WHERE id = ?", v, id)
+	return err
+}
+
+func (s *Store) DeleteJob(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM jobs WHERE id = ?", id)
+	return err
+}
+
+// StartJobRun records the start of a run and advances last_run_at so a
+// crash mid-run can't cause the job to fire in a tight loop.
+func (s *Store) StartJobRun(ctx context.Context, jobID int64, at time.Time) (int64, error) {
+	if _, err := s.db.ExecContext(ctx, "UPDATE jobs SET last_run_at = ? WHERE id = ?", at.Unix(), jobID); err != nil {
+		return 0, err
+	}
+	res, err := s.db.ExecContext(ctx, "INSERT INTO job_runs (job_id, started_at, status) VALUES (?, ?, 'running')", jobID, s.unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) FinishJobRun(ctx context.Context, runID int64, status, output, errText string, cost float64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE job_runs SET finished_at = ?, status = ?, output = ?, error = ?, cost_usd = ? WHERE id = ?",
+		s.unix(), status, output, errText, cost, runID)
+	return err
+}
+
+// RecordMissedRun notes runs that were skipped while Thicket was down, so
+// history shows the gap instead of silently hiding it.
+func (s *Store) RecordMissedRun(ctx context.Context, jobID int64, count int, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, "INSERT INTO job_runs (job_id, started_at, finished_at, status, error) VALUES (?, ?, ?, 'missed', ?)",
+		jobID, at.Unix(), at.Unix(), "missed "+strconv.Itoa(count)+" scheduled run(s) while Thicket was offline")
+	return err
+}
+
+// FailStaleRuns marks runs left 'running' by a crash as errors.
+func (s *Store) FailStaleRuns(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE job_runs SET status = 'error', error = 'Thicket stopped while this run was in progress', finished_at = ? WHERE status = 'running'", s.unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) JobRuns(ctx context.Context, jobID int64, limit int) ([]JobRun, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, job_id, started_at, finished_at, status, output, error, cost_usd FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?", jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JobRun
+	for rows.Next() {
+		var r JobRun
+		var st int64
+		var fin sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.JobID, &st, &fin, &r.Status, &r.Output, &r.Error, &r.CostUSD); err != nil {
+			return nil, err
+		}
+		r.StartedAt, r.FinishedAt = time.Unix(st, 0), timeOf(fin)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

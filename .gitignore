@@ -1,0 +1,7 @@
+/thicket
+/data/
+*.db
+*.db-wal
+*.db-shm
+thicket-export-*.tar.gz
+.env

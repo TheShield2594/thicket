@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet
+        run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: unit and smoke tests
+        run: go test -race -count=1 ./...
+      - name: build
+        run: CGO_ENABLED=0 go build -o thicket ./cmd/thicket
+      - name: binary smoke test
+        run: |
+          ./thicket version
+          # With no DISCORD_TOKEN the first-run check must fail loudly and name it.
+          if THICKET_DATA_DIR=$(mktemp -d) ./thicket check 2> check.txt; then exit 1; fi
+          grep -q "DISCORD_TOKEN is not set" check.txt
+          THICKET_DATA_DIR=$(mktemp -d) ./thicket migrate
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build image
+        run: docker build --build-arg VERSION=${{ github.sha }} -t thicket:ci .
+      - name: image smoke test
+        run: docker run --rm thicket:ci version
