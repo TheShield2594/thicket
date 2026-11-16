@@ -15,14 +15,15 @@ internal/llm         OpenAI-compatible client (OpenRouter or a local server), re
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
 internal/channel     channel interface; adapters in channel/discord and channel/telegram
+internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
-internal/server      /health, /avatars, /hooks, and /api (mounted from internal/api)
-internal/api         local HTTP API: an internal "api" channel plus token auth
-internal/web         page fetching (public addresses only) and SearXNG search
-internal/dashboard   read-only /dashboard: one-time sign-in links, session cookies, server-rendered page
+internal/server      /health, /avatars, /hooks, /api/v1, /dashboard, and mounts the web app at /
+internal/api         local HTTP API (/api/v1): an internal "api" channel plus token auth
+internal/websearch   page fetching (public addresses only) and SearXNG search
+internal/dashboard   read-only /dashboard, signed in through the web app's session
 ```
 
 ## A message's journey
@@ -182,20 +183,17 @@ user by DM from the sprig that did it.
 so their output is wrapped as data. Search goes to SearXNG
 (`search_url`) or, on OpenRouter, to the cheap model with OpenRouter's
 `web` plugin, whose `url_citation` annotations become the source list.
-`web.Fetcher` refuses non-public addresses in the dialer's `Control`
+`websearch.Fetcher` refuses non-public addresses in the dialer's `Control`
 hook, after DNS resolution, so a redirect or a hostname that resolves to
 a private address is stopped the same way; it bypasses any HTTP proxy
 for that reason. HTML becomes text with the standard library only.
 
 ## Dashboard
 
-`/dashboard` is server-rendered with `html/template` (no JavaScript). A
-sign-in link (`dashboard_link` tool, DMed by code, or `thicket
-dashboard-link`) is a random token whose hash is stored in
-`web_sessions` as kind `login` for 10 minutes; opening it deletes that
-row, stores a `session` row for 7 days, sets an HttpOnly, SameSite=Strict
-cookie scoped to `/dashboard`, and redirects so the token leaves the
-address bar. Every response carries a CSP with `default-src 'none'`, no
+`/dashboard` is server-rendered with `html/template` (no JavaScript). It
+has no sign-in of its own: it reads the web app's session cookie and
+looks it up with `WebSessionUser`, which also keeps the session alive.
+Every response carries a CSP with `default-src 'none'`, no
 framing, no referrer and no caching. A user sees their own memories and
 jobs; spending, health and activity are added for admins.
 
@@ -229,3 +227,25 @@ is where proactive messages go. Linking uses a one-time code issued by
 by DMing it from the new account. `LinkIdentity` never merges two
 histories and never changes a role: an account with its own memories,
 jobs or owner role is refused.
+
+## The web app
+
+`internal/web` is both a channel adapter and an HTTP handler. Chats are
+`web:<user id>.<sprig id>` (one thread per sprig) or `web:<user id>.all`
+(the shared room). The adapter authenticates the browser itself and passes
+`Incoming.UserRef`, so a web session acts as an existing Thicket user,
+from any app. (The local API does the same with its tokens.) Messages
+with a `UserRef` never change where proactive messages go and can't
+redeem link codes. `Incoming.Character` pins a thread to its sprig unless the
+user addresses another by name.
+
+Everything a user sees in a web chat is kept in `web_messages`, which is
+the transcript the app loads; the engine's own `messages` table is
+unchanged. Both are pruned by `THICKET_MESSAGE_RETENTION`. Live updates
+(messages, typing, deletions of scrubbed secrets) go out over one
+Server-Sent Events stream per signed-in tab.
+
+Sign-in links (`web_links`) and sessions (`web_sessions`) store only a
+SHA-256 of their token. Links work once. Writes need an `X-Thicket: 1`
+header, which cross-site pages can't send, and the app is served with a
+strict Content Security Policy.

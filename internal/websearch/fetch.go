@@ -1,11 +1,11 @@
-// Package web reads web pages and searches the web for sprigs.
+// Package websearch reads web pages and searches the web for sprigs.
 //
 // Page addresses come from the model, which may have been steered by what
 // it read, so fetching refuses anything that isn't a public internet
 // address: loopback, private networks, link-local (cloud metadata),
 // carrier-grade NAT and the like. The check runs when connecting, after
 // DNS, so redirects and DNS tricks can't get around it.
-package web
+package websearch
 
 import (
 	"context"

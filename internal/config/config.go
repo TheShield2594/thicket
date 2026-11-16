@@ -97,6 +97,18 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
+// WebBaseURL is where the web app is reached: THICKET_PUBLIC_URL, or the
+// local HTTP address.
+func (c *Config) WebBaseURL() string {
+	if c.PublicURL != "" {
+		return c.PublicURL
+	}
+	if strings.HasPrefix(c.HTTPAddr, ":") {
+		return "http://localhost" + c.HTTPAddr
+	}
+	return "http://" + c.HTTPAddr
+}
+
 // Problem is one item in the first-run check.
 type Problem struct {
 	Fatal bool
@@ -107,10 +119,14 @@ type Problem struct {
 // Check reports exactly what is missing. Fatal problems stop `serve`.
 func (c *Config) Check() []Problem {
 	var out []Problem
-	if c.DiscordToken == "" && c.TelegramToken == "" {
-		out = append(out, Problem{true, "no chat app is set up (DISCORD_TOKEN or TELEGRAM_TOKEN)",
-			"For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN. " +
-				"For Telegram, message @BotFather, send /newbot, and set TELEGRAM_TOKEN. You can use both."})
+	// The web app always runs; Discord and Telegram are optional.
+	if c.DiscordToken == "" {
+		out = append(out, Problem{false, "DISCORD_TOKEN is not set, so Discord is off",
+			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN."})
+	}
+	if c.TelegramToken == "" {
+		out = append(out, Problem{false, "TELEGRAM_TOKEN is not set, so Telegram is off",
+			"For Telegram, message @BotFather, send /newbot, and set TELEGRAM_TOKEN (see docs/telegram.md)."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -134,7 +150,7 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
 			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or set THICKET_SECRET_KEY to keep it outside the volume."})
 	}
-	if c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
+	if (c.DiscordToken != "" || c.TelegramToken != "") && c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
 		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID)",
 			"The first person to DM the bot becomes the owner."})
 	}

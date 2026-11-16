@@ -16,21 +16,20 @@ To change anything, ask a sprig: the page only shows.
 
 ## Signing in
 
-Ask Juni: "send me a dashboard link". Thicket DMs you a link that works
-once, within 10 minutes; opening it signs that browser in for a week.
-Juni never sees the link. On the server, `thicket dashboard-link` prints
-one for the owner (or `--user discord:ID`). "Sign out" ends the session.
+The dashboard uses the web app's sign-in. Open the web app (ask Juni for a
+web app link, or run `thicket web link` on the server), then go to
+`/dashboard`; the page also links back to the app. Signing out of the web
+app signs you out here too.
 
 ## Reaching it
 
 The dashboard is served on port 8080 at `/dashboard`, which the compose
 file publishes only to the host itself. Either:
 
-- set `THICKET_PUBLIC_URL` and expose `/dashboard` through your HTTPS
-  reverse proxy (links then use that address, and the cookie is marked
-  secure); or
+- set `THICKET_PUBLIC_URL` and expose the web app (including
+  `/dashboard`) through your HTTPS reverse proxy; or
 - open a tunnel from your computer, `ssh -L 8080:localhost:8080 your-server`,
-  and use the link as sent (`http://localhost:8080/...`).
+  and use `http://localhost:8080/dashboard`.
 
 The page uses no JavaScript, can't be embedded in other sites, and is
 never cached.

@@ -1,15 +1,11 @@
 // Package dashboard serves a small read-only web page: your sprigs,
 // memories, jobs and skills, and for admins spending, health and the
-// activity log. Sign-in is by one-time link (from Juni, or
-// `thicket dashboard-link`), exchanged for a session cookie.
+// activity log. It has no sign-in of its own: it uses the web app's
+// session (sign in there, then open /dashboard).
 package dashboard
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,46 +18,8 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-const (
-	LoginTTL   = 10 * time.Minute
-	sessionTTL = 7 * 24 * time.Hour
-	cookieName = "thicket_session"
-	loginPath  = "/dashboard/login"
-)
-
-func newToken() (token, hash string, err error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", "", err
-	}
-	token = base64.RawURLEncoding.EncodeToString(b)
-	return token, hashToken(token), nil
-}
-
-func hashToken(t string) string {
-	sum := sha256.Sum256([]byte(t))
-	return hex.EncodeToString(sum[:])
-}
-
-// LoginLink makes a one-time sign-in link for a user. base is the public
-// address (THICKET_PUBLIC_URL), or "" for a localhost one.
-func LoginLink(ctx context.Context, db *store.Store, userID int64, base, httpAddr string) (string, error) {
-	token, hash, err := newToken()
-	if err != nil {
-		return "", err
-	}
-	if err := db.AddWebSession(ctx, hash, userID, "login", LoginTTL); err != nil {
-		return "", err
-	}
-	if base == "" {
-		port := "8080"
-		if i := strings.LastIndex(httpAddr, ":"); i >= 0 && i < len(httpAddr)-1 {
-			port = httpAddr[i+1:]
-		}
-		base = "http://localhost:" + port
-	}
-	return strings.TrimRight(base, "/") + loginPath + "?t=" + token, nil
-}
+// SessionCookie is the web app's session cookie (path "/").
+const SessionCookie = "thicket_session"
 
 // HealthFunc reports named checks (the same ones /health shows).
 type HealthFunc func(ctx context.Context) map[string]Check
@@ -78,9 +36,10 @@ type Dashboard struct {
 	Health   HealthFunc
 	Version  string
 	Log      *slog.Logger
-	// Secure marks the cookie Secure (the dashboard is reached over https).
-	Secure bool
-	Now    func() time.Time
+	// SessionTTL is the web app's session lifetime: seeing the dashboard
+	// keeps the session alive, as using the app does.
+	SessionTTL time.Duration
+	Now        func() time.Time
 }
 
 func (d *Dashboard) now() time.Time {
@@ -94,8 +53,6 @@ func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /dashboard", d.page)
 	mux.HandleFunc("GET /dashboard/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/dashboard", http.StatusSeeOther) })
-	mux.HandleFunc("GET "+loginPath, d.login)
-	mux.HandleFunc("POST /dashboard/logout", d.logout)
 	return secureHeaders(mux)
 }
 
@@ -111,47 +68,12 @@ func secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
-	uid, err := d.DB.UseWebLogin(r.Context(), hashToken(r.URL.Query().Get("t")))
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = signInTmpl.Execute(w, map[string]string{"Problem": "That sign-in link has expired or was already used. Ask Juni for a new one."})
-		return
-	}
-	token, hash, err := newToken()
-	if err == nil {
-		err = d.DB.AddWebSession(r.Context(), hash, uid, "session", sessionTTL)
-	}
-	if err != nil {
-		d.Log.Error("dashboard session", "err", err)
-		http.Error(w, "couldn't sign you in", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/dashboard", MaxAge: int(sessionTTL.Seconds()),
-		HttpOnly: true, Secure: d.Secure || r.TLS != nil, SameSite: http.SameSiteStrictMode})
-	// Redirect so the link's token leaves the address bar and history.
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
-}
-
-func (d *Dashboard) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		_ = d.DB.DeleteWebSession(r.Context(), hashToken(c.Value))
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/dashboard", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = signInTmpl.Execute(w, map[string]string{"Problem": "You're signed out."})
-}
-
 func (d *Dashboard) user(r *http.Request) (*store.User, error) {
-	c, err := r.Cookie(cookieName)
+	c, err := r.Cookie(SessionCookie)
 	if err != nil {
 		return nil, err
 	}
-	uid, err := d.DB.WebSessionUser(r.Context(), hashToken(c.Value), "session")
-	if err != nil {
-		return nil, err
-	}
-	return d.DB.UserByID(r.Context(), uid)
+	return d.DB.WebSessionUser(r.Context(), c.Value, d.SessionTTL)
 }
 
 func (d *Dashboard) page(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +81,7 @@ func (d *Dashboard) page(w http.ResponseWriter, r *http.Request) {
 	u, err := d.user(r)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = signInTmpl.Execute(w, map[string]string{})
+		_ = signInTmpl.Execute(w, nil)
 		return
 	}
 	data, err := d.gather(r.Context(), u)

@@ -25,16 +25,15 @@ button{font:inherit;background:none;border:1px solid var(--line);border-radius:8
 var signInTmpl = template.Must(template.New("signin").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Thicket</title>` + style + `</head>
 <body><main><section><h1>Thicket</h1>
-{{if .Problem}}<p>{{.Problem}}</p>{{end}}
-<p>To see your dashboard, ask Juni for a sign-in link ("send me a dashboard link"). It arrives in your DMs and works once, for 10 minutes.</p>
-<p class="muted small">On the server, <code>thicket dashboard-link</code> prints one too.</p>
+<p>The dashboard uses the web app's sign-in. Ask Juni for a web app link ("send me a web app link"), open it, then come back to <a href="/dashboard">/dashboard</a>.</p>
+<p class="muted small">On the server, <code>thicket web link</code> prints a sign-in link too.</p>
 </section></main></body></html>`))
 
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Thicket</title>` + style + `</head>
 <body><main>
 <header><h1>🌱 Thicket</h1>
-<form method="post" action="/dashboard/logout"><span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} </span><button type="submit">Sign out</button></form></header>
+<span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} · <a href="/">Open the chat app</a></span></header>
 <nav><a href="#sprigs">Sprigs</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a>{{if .Admin}}<a href="#spending">Spending</a><a href="#health">Health</a><a href="#activity">Activity</a>{{end}}</nav>
 <p class="muted small">Read-only. To change anything, ask a sprig. Thinking with {{.Model}}.</p>
 

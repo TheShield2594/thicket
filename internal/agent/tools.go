@@ -404,12 +404,12 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolLinkAccount,
 		},
 		{
-			Name:        "dashboard_link",
-			Description: "When the user wants to see their dashboard (a read-only web page of their sprigs, memories, jobs and skills, plus spending for admins): Thicket DMs them a one-time sign-in link. You never see it.",
+			Name:        "web_app_link",
+			Description: "Post a one-time sign-in link to the Thicket web app, where the user can chat with every sprig side by side; once signed in, its read-only dashboard (/dashboard: memories, jobs, skills, and spending for admins) works too. Thicket posts the link itself right after your reply; never write or guess a URL.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "host",
 			ChatOnly:    true,
-			Run:         e.toolDashboardLink,
+			Run:         e.toolWebLink,
 		},
 		{
 			Name:        "memory_reviews",
@@ -1220,4 +1220,29 @@ func (e *Engine) toolMemoryReviews(ctx context.Context, t *turn, args json.RawMe
 		return "No memory reviews yet.", nil
 	}
 	return b.String(), nil
+}
+
+// webLinkTTL is how long a sign-in link posted in chat stays valid.
+const webLinkTTL = 15 * time.Minute
+
+// toolWebLink posts a sign-in link outside the model: the token never
+// reaches the provider, the history or the logs.
+func (e *Engine) toolWebLink(ctx context.Context, t *turn, _ json.RawMessage) (string, error) {
+	if !t.isDM {
+		return "Sign-in links are private: tell the user to ask for one in a DM.", nil
+	}
+	if strings.HasPrefix(t.chatRef, "web:") {
+		return "The user is already in the web app.", nil
+	}
+	token, err := e.DB.CreateWebLink(ctx, t.user.ID, webLinkTTL)
+	if err != nil {
+		return "", err
+	}
+	t.afterReply = append(t.afterReply, post{text: "🔑 Your web app sign-in link (works once, for 15 minutes):\n" + e.Cfg.WebBaseURL() + "/login#" + token})
+	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "web sign-in link issued", "")
+	note := "The link will be posted right after your reply."
+	if e.Cfg.PublicURL == "" {
+		note += " THICKET_PUBLIC_URL isn't set, so it points at localhost: it only works on the machine running Thicket unless they swap in the right address."
+	}
+	return note, nil
 }

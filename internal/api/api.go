@@ -213,7 +213,7 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	defer cancel()
 	err := a.Engine.Handle(ctx, channel.Incoming{
 		Channel: "api", ChatID: chatID, MessageID: "api-" + strconv.FormatInt(a.seq.Add(1), 10),
-		UserID: strconv.FormatInt(c.user.ID, 10), UserName: c.user.Name, Text: text, IsDM: true, KnownUser: c.user.ID,
+		UserID: strconv.FormatInt(c.user.ID, 10), UserName: c.user.Name, Text: text, IsDM: true, UserRef: c.user.ID,
 	})
 	a.mu.Lock()
 	out := append([]Reply{}, replies...)

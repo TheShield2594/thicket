@@ -17,7 +17,7 @@ First version.
   required on its own.
 - Linked accounts: one person can use several apps with one profile.
   `link_account` DMs a one-time code to send from the other app.
-  Proactive messages go to the app last written from. Schema v4 adds an
+  Proactive messages go to the app last written from. Schema v5 adds an
   `identities` table (existing users carry over).
 - Chat bot tokens are now redacted from logs.
 - Local API and CLI: `POST /api/v1/messages` sends a sprig a message and
@@ -25,13 +25,13 @@ First version.
   sprigs and jobs; run a job now with an optional payload. CLI:
   `thicket api-token create|list|revoke`, `thicket ask`, `thicket jobs`,
   `thicket run-job`. Tokens act as one user and are stored hashed. Schema
-  v5 adds `api_tokens`. Rate-limited messages now report it to the API.
+  v6 adds `api_tokens`. Rate-limited messages now report it to the API.
 - Skills: a shared library of versioned procedures. Sprigs see an index
   in their prompt and `read_skill` when a task matches; owners and admins
   `save_skill` (sprigs offer after a multi-step task), view history,
   restore and delete with `manage_skill`. Stale edits are refused instead
   of overwriting. Secrets and untrusted content are refused in steps.
-  `thicket skill list|export|import` shares them as Markdown. Schema v6
+  `thicket skill list|export|import` shares them as Markdown. Schema v7
   adds `skills` and `skill_versions`.
 - Local models: run on Ollama, LM Studio, llama.cpp or vLLM instead of
   OpenRouter. On the first DM, send Juni the server's address (or
@@ -46,7 +46,7 @@ First version.
   messages are folded into a running summary after the reply goes out,
   and later replies see the summary plus the recent messages. A model
   whose context is still too small gets the turn again with half the
-  history. Schema v7 adds `conversations.summary` and `summary_upto`.
+  history. Schema v8 adds `conversations.summary` and `summary_upto`.
 - Stop: "stop", "never mind", 🛑 or `/stop` while a sprig is working stops
   the reply (and any handoff) at once instead of queueing behind it,
   reports what had already been done, and sets aside messages sent in the
@@ -65,10 +65,9 @@ First version.
   addresses (checked at connect time, so redirects and DNS can't get
   around it). Results are treated as data.
 - Dashboard: a read-only `/dashboard` with your sprigs, memories, jobs and
-  runs, and skills; admins also get spending, health and activity. Sign
-  in with a one-time link from Juni (`dashboard_link`) or
-  `thicket dashboard-link`; sessions last a week. No JavaScript, strict
-  security headers. Schema v8 adds `web_sessions`.
+  runs, and skills; admins also get spending, health and activity. It
+  uses the web app's sign-in (open the web app, then `/dashboard`). No
+  JavaScript, strict security headers.
 - Webhook signatures: a webhook can require calls signed the way GitHub,
   Gitea/Forgejo or GitLab sign them (`signature` on `create_webhook`, or
   `set_signature` on `update_job`). Thicket generates the secret, keeps
@@ -90,7 +89,7 @@ First version.
   is kept in the conversation, so later questions about it work without
   sending it again. When the model read the PDF itself, a cheap parse-only
   call (free `cloudflare-ai` parser, or `mistral-ocr` if chosen) gets the
-  text. Memory review skips document text. Schema v2: messages gain a
+  text. Memory review skips document text. Schema v3: messages gain a
   `document` role (the table is rebuilt; a backup is taken first).
 - Character system: one Markdown file per sprig with YAML frontmatter;
   validation, hot reload, never overwrites hand edits. Juniper ("Juni")
@@ -110,10 +109,19 @@ First version.
   `POST /hooks/<token>`, with the body as untrusted input. The URL is DMed
   privately (only its hash is stored, the model never sees it) and can be
   replaced. Capped at one run a minute and 50 a day per webhook. Schema
-  v3 adds `jobs.kind` and `jobs.hook_hash`.
+  v4 adds `jobs.kind` and `jobs.hook_hash`.
 - Spend tracking per sprig and job, daily and monthly caps with alerts.
 - Retries and fallback model.
 - Encrypted secret store; secrets never reach the model or logs.
 - `/health`, structured JSON logs, activity log, failures reported in chat.
 - Export / restore, daily snapshots, character import and export.
 - Schema migration 0001.
+- **Web app.** Every sprig in one place: a thread per sprig, an Everyone
+  room, up to three chats side by side, a details panel with memories and
+  routines, live typing and replies, light and dark themes. Installable
+  as an app (PWA) on phones and desktops.
+- One-time sign-in links from `thicket web link`, from Juni in a Discord
+  DM (`web_app_link`), or from the startup log on a fresh install.
+- Discord is now optional: without `DISCORD_TOKEN` Thicket runs as a web
+  app only.
+- Schema migration 0002 (web sign-in, sessions and transcripts).

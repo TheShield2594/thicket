@@ -71,8 +71,3 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id int64) error {
 	}
 	return nil
 }
-
-// OwnerUser returns the first owner, the default user for API tokens.
-func (s *Store) OwnerUser(ctx context.Context) (*User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, "SELECT "+userCols+" FROM users WHERE role = 'owner' ORDER BY id LIMIT 1"))
-}

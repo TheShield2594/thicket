@@ -281,8 +281,6 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		var v int
 		fmt.Sscanf(u, "restore briefing to %d", &v)
 		return toolCall("manage_skill", map[string]any{"id": "briefing", "action": "restore", "version": v}), nil
-	case strings.Contains(u, "my dashboard"):
-		return toolCall("dashboard_link", map[string]any{}), nil
 	case strings.HasPrefix(u, "search the web for "):
 		return toolCall("web_search", map[string]any{"query": strings.TrimPrefix(u, "search the web for ")}), nil
 	case strings.HasPrefix(u, "read the page "):

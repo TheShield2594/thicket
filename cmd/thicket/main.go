@@ -43,6 +43,9 @@ Usage:
   thicket character list              list character files and any problems
   thicket character export ID [-o FILE]
   thicket character import FILE       add a shared character (integration access is stripped)
+  thicket web link [--user ID] [--ttl 24h]
+                                      print a one-time sign-in link for the web app
+                                      (default: the owner; on a fresh install it makes you the owner)
   thicket skill list                  list saved skills (procedures sprigs follow)
   thicket skill export ID [-o FILE]   write a skill as Markdown, to share
   thicket skill import FILE           add a skill, or a new version of one with the same id
@@ -59,8 +62,6 @@ Usage:
   thicket run-job JOB_ID [--payload TEXT|-]
                                       run a job now, optionally with input (needs THICKET_API_TOKEN)
   thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
-  thicket dashboard-link [--user APP:ID]
-                                      print a one-time sign-in link for the read-only dashboard
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -90,6 +91,8 @@ func main() {
 		err = memoryCmd(args)
 	case "skill", "skills":
 		err = skillCmd(args)
+	case "web":
+		err = webCmd(args)
 	case "migrate":
 		err = migrate()
 	case "api-token", "api-tokens":
@@ -102,8 +105,6 @@ func main() {
 		err = runJobCmd(args)
 	case "stop":
 		err = stopCmd(args)
-	case "dashboard-link":
-		err = dashboardLinkCmd(args)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":
@@ -162,7 +163,7 @@ func serve() error {
 		if cfg.TelegramToken != "" {
 			chs = append(chs, telegram.New(cfg.TelegramToken, cfg.TelegramListenChats, log))
 		}
-		return chs
+		return chs // none: the web app alone
 	}})
 	if err != nil {
 		return err
@@ -423,5 +424,49 @@ func migrate() error {
 		return err
 	}
 	fmt.Println("schema version", v)
+	return nil
+}
+
+func webCmd(args []string) error {
+	if len(args) == 0 || args[0] != "link" {
+		return errors.New("usage: thicket web link [--user ID] [--ttl 24h]")
+	}
+	fs := flag.NewFlagSet("web link", flag.ContinueOnError)
+	userID := fs.Int64("user", 0, "Thicket user id to sign in as (default: the owner)")
+	ttl := fs.Duration("ttl", 24*time.Hour, "how long the link stays valid")
+	pos, err := parseFlags(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 || *ttl <= 0 || *ttl > 7*24*time.Hour {
+		return errors.New("usage: thicket web link [--user ID] [--ttl 24h] (ttl up to 168h)")
+	}
+	cfg := loadConfig()
+	db, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	who := "the owner"
+	if *userID != 0 {
+		u, err := db.UserByID(ctx, *userID)
+		if err != nil {
+			return fmt.Errorf("user %d: %w", *userID, err)
+		}
+		who = fmt.Sprintf("user %d (%s)", u.ID, u.Role)
+	} else if has, err := db.HasOwner(ctx); err != nil {
+		return err
+	} else if !has {
+		who = "a new owner (nobody owns this Thicket yet)"
+	}
+	token, err := db.CreateWebLink(ctx, *userID, *ttl)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Sign-in link for %s, valid once for %s:\n\n  %s/login#%s\n\n", who, *ttl, cfg.WebBaseURL(), token)
+	if cfg.PublicURL == "" {
+		fmt.Println("Set THICKET_PUBLIC_URL if you reach Thicket through another address.")
+	}
 	return nil
 }

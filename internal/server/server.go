@@ -1,5 +1,6 @@
-// Package server exposes Thicket's small HTTP surface: /health, character
-// avatars for Discord webhooks, and webhook triggers for jobs.
+// Package server exposes Thicket's HTTP surface: /health, character
+// avatars, webhook triggers (/hooks), the local API (/api/v1), the
+// read-only dashboard (/dashboard), and (mounted at "/") the web app.
 package server
 
 import (
@@ -25,18 +26,25 @@ type HealthFunc func(ctx context.Context) map[string]Check
 // returns the HTTP status and a short message for the caller.
 type HookFunc func(ctx context.Context, token string, body []byte, header http.Header) (int, string)
 
-// New builds the HTTP server. api, if set, serves /api/; dash serves
-// /dashboard.
-func New(addr, version, charsDir string, health HealthFunc, hooks HookFunc, maxBody int, api, dash http.Handler) *http.Server {
+// Routes are the optional parts of the HTTP surface.
+type Routes struct {
+	Hooks       HookFunc     // POST /hooks/{token}
+	MaxHookBody int          // bytes
+	API         http.Handler // /api/v1/ (the web app owns the rest of /api/)
+	Dashboard   http.Handler // /dashboard
+	App         http.Handler // the web app, at "/"
+}
+
+func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Server {
 	mux := http.NewServeMux()
-	if api != nil {
-		mux.Handle("/api/", api)
+	if rt.API != nil {
+		mux.Handle("/api/v1/", rt.API)
 	}
-	if dash != nil {
-		mux.Handle("/dashboard", dash)
-		mux.Handle("/dashboard/", dash)
+	if rt.Dashboard != nil {
+		mux.Handle("/dashboard", rt.Dashboard)
+		mux.Handle("/dashboard/", rt.Dashboard)
 	}
-	if hooks != nil {
+	if hooks, maxBody := rt.Hooks, rt.MaxHookBody; hooks != nil {
 		mux.HandleFunc("POST /hooks/{token}", func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBody)))
 			var tooBig *http.MaxBytesError
@@ -80,6 +88,9 @@ func New(addr, version, charsDir string, health HealthFunc, hooks HookFunc, maxB
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		http.ServeFile(w, r, filepath.Join(charsDir, name))
 	})
+	if rt.App != nil {
+		mux.Handle("/", rt.App)
+	}
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 }
 

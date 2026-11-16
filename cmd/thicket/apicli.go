@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/api"
-	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -46,7 +45,7 @@ func apiTokenCmd(args []string) error {
 		}
 		var u *store.User
 		if *who == "" {
-			u, err = db.OwnerUser(ctx)
+			u, err = db.Owner(ctx)
 			if errors.Is(err, store.ErrNotFound) {
 				return errors.New("there's no owner yet: DM the bot first, then create a token")
 			}
@@ -320,40 +319,5 @@ func stopCmd(args []string) error {
 	default:
 		fmt.Println("nothing was running")
 	}
-	return nil
-}
-
-func dashboardLinkCmd(args []string) error {
-	fs := flag.NewFlagSet("dashboard-link", flag.ContinueOnError)
-	who := fs.String("user", "", "who signs in, as discord:ID or telegram:ID (default: the owner)")
-	if _, err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	cfg := loadConfig()
-	db, err := openStore(cfg)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	ctx := context.Background()
-	var u *store.User
-	if *who == "" {
-		u, err = db.OwnerUser(ctx)
-	} else if app, id, ok := strings.Cut(*who, ":"); ok {
-		u, err = db.UserByExternal(ctx, app, id)
-	} else {
-		return errors.New("--user must look like discord:123 or telegram:456")
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		return errors.New("no such user (with no --user: there's no owner yet; DM the bot first)")
-	} else if err != nil {
-		return err
-	}
-	link, err := dashboard.LoginLink(ctx, db, u.ID, cfg.PublicURL, cfg.HTTPAddr)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stderr, "One-time sign-in link, valid for 10 minutes:")
-	fmt.Println(link)
 	return nil
 }

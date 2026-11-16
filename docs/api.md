@@ -104,5 +104,7 @@ paused, `429` within a minute of the last run or after 50 runs in a day.
 
 The API is served on port 8080 with `/health`. The compose file publishes
 that port on `127.0.0.1` only, so only the host and the container can call
-it. If you put a reverse proxy in front of Thicket for webhooks, don't
-expose `/api/` unless you mean to: the token is then all that protects it.
+it. If you put a reverse proxy in front of Thicket (for the web app or
+webhooks), don't expose `/api/v1/` unless you mean to: the token is then
+all that protects it. The rest of `/api/` belongs to the web app and does
+need to be reachable for it.

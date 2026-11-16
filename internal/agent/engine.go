@@ -25,7 +25,7 @@ import (
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
-	"github.com/theshield2594/thicket/internal/web"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // Limits that keep agents from running away.
@@ -52,9 +52,9 @@ type Engine struct {
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only
 	// reaches public addresses. Tests replace it.
-	Fetcher        *web.Fetcher
+	Fetcher        *websearch.Fetcher
 	fetchOnce      sync.Once
-	defaultFetcher *web.Fetcher
+	defaultFetcher *websearch.Fetcher
 	// ListModels asks a model server which models it has; nil means
 	// llm.ListModels.
 	ListModels func(ctx context.Context, base, key string) ([]string, error)
@@ -149,7 +149,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if !in.IsDM && !in.Mentioned && !in.Listening && addressed == nil {
 		return nil
 	}
-	if in.IsDM && in.KnownUser == 0 && linkCodeRe.MatchString(in.Text) {
+	if in.IsDM && in.UserRef == 0 && linkCodeRe.MatchString(in.Text) {
 		return e.redeemLinkCode(ctx, in)
 	}
 	user, err := e.resolveUser(ctx, in)
@@ -159,7 +159,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	_ = e.DB.TouchUser(ctx, user.ID)
 	// Proactive messages go to the app the user last wrote from (never
 	// to an internal channel like the API, which can't receive them).
-	if in.KnownUser == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
+	if in.UserRef == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
 		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
 	}
 	if !e.allow(user.ID) {
@@ -241,6 +241,8 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	char := host
 	if addressed != nil {
 		char = addressed
+	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" {
+		char = c // a per-sprig web thread
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
 		if c, ok := e.Chars.Get(id.(string)); ok {
 			char = c
@@ -354,8 +356,12 @@ func shortErr(err error) string {
 // resolveUser maps a channel user to a Thicket user, creating the owner on
 // first contact and politely turning away strangers.
 func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.User, error) {
-	if in.KnownUser != 0 {
-		return e.DB.UserByID(ctx, in.KnownUser)
+	if in.UserRef != 0 { // already authenticated by the adapter
+		u, err := e.DB.UserByID(ctx, in.UserRef)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return u, err
 	}
 	u, err := e.DB.UserByExternal(ctx, in.Channel, in.UserID)
 	if err == nil {
