@@ -91,6 +91,9 @@ exactly what's missing, and `GET /health` reports each part.
 - Let other things wake a sprig: "Make a webhook that tells me when a CI
   build fails." Thicket DMs you a private URL; anything that POSTs to it
   starts the job with what it sent. See [Webhooks](docs/webhooks.md).
+- Script it: `thicket ask --sprig pip "what's on tomorrow?"` prints the
+  reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API
+  with tokens from `thicket api-token create`. See [Local API](docs/api.md).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**.
 
@@ -119,7 +122,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
-| `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/` and `/hooks/` |
+| `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/`, `/hooks/` and `/api/` |
 | `THICKET_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Backups and moving house
@@ -150,6 +153,7 @@ grant it.
 - [Integrations (MCP) setup](docs/mcp.md)
 - [Webhooks](docs/webhooks.md)
 - [Telegram](docs/telegram.md)
+- [Local API and CLI](docs/api.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

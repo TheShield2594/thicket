@@ -89,18 +89,32 @@ func (e *Engine) lockChat(ref string) func() {
 	return mu.Unlock
 }
 
+// ErrRateLimited means the user sent too many messages in the last minute.
+var ErrRateLimited = errors.New("too many messages in the last minute")
+
 // HandleIncoming is the entry point for every user message from a channel.
 func (e *Engine) HandleIncoming(ctx context.Context, in channel.Incoming) {
+	if err := e.Handle(ctx, in); err != nil && !errors.Is(err, ErrRateLimited) {
+		e.Log.Error("handle message", "err", err, "chat", in.ChatRef())
+	}
+}
+
+// Handle processes a message and returns once every reply has been sent.
+// Replies go out through the channel, as always; the error is for callers
+// that answer someone directly (the local API).
+func (e *Engine) Handle(ctx context.Context, in channel.Incoming) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			e.Log.Error("panic handling message", "panic", p)
 			e.logActivity(ctx, "error", "system", "", 0, "panic while handling a message", fmt.Sprint(p))
+			err = fmt.Errorf("internal error")
 		}
 	}()
-	if err := e.handle(ctx, in); err != nil {
-		e.Log.Error("handle message", "err", err, "chat", in.ChatRef())
+	err = e.handle(ctx, in)
+	if err != nil && !errors.Is(err, ErrRateLimited) {
 		e.logActivity(ctx, "error", "system", "", 0, "failed to handle a message", err.Error())
 	}
+	return err
 }
 
 func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
@@ -109,7 +123,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if !in.IsDM && !in.Mentioned && !in.Listening && addressed == nil {
 		return nil
 	}
-	if in.IsDM && linkCodeRe.MatchString(in.Text) {
+	if in.IsDM && in.KnownUser == 0 && linkCodeRe.MatchString(in.Text) {
 		return e.redeemLinkCode(ctx, in)
 	}
 	user, err := e.resolveUser(ctx, in)
@@ -117,13 +131,14 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		return err
 	}
 	_ = e.DB.TouchUser(ctx, user.ID)
-	// Proactive messages go to the app the user last wrote from.
-	if user.Channel != in.Channel || user.ExternalID != in.UserID {
+	// Proactive messages go to the app the user last wrote from (never
+	// to an internal channel like the API, which can't receive them).
+	if in.KnownUser == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
 		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
 	}
 	if !e.allow(user.ID) {
 		e.Log.Warn("rate limited", "user", user.ID)
-		return nil
+		return ErrRateLimited
 	}
 	unlock := e.lockChat(in.ChatRef())
 	defer unlock()
@@ -268,6 +283,9 @@ func shortErr(err error) string {
 // resolveUser maps a channel user to a Thicket user, creating the owner on
 // first contact and politely turning away strangers.
 func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.User, error) {
+	if in.KnownUser != 0 {
+		return e.DB.UserByID(ctx, in.KnownUser)
+	}
 	u, err := e.DB.UserByExternal(ctx, in.Channel, in.UserID)
 	if err == nil {
 		return u, nil
@@ -366,7 +384,7 @@ func (e *Engine) addressedCharacter(text string) (*character.Character, string) 
 
 // persona is how a character appears in chat.
 func (e *Engine) persona(c *character.Character) channel.Persona {
-	p := channel.Persona{Name: c.DisplayName(), Color: c.ColorInt()}
+	p := channel.Persona{ID: c.ID, Name: c.DisplayName(), Color: c.ColorInt()}
 	switch {
 	case strings.HasPrefix(c.Avatar, "https://") || strings.HasPrefix(c.Avatar, "http://"):
 		p.AvatarURL = c.Avatar

@@ -19,7 +19,8 @@ internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
-internal/server      /health, /avatars and /hooks
+internal/server      /health, /avatars, /hooks, and /api (mounted from internal/api)
+internal/api         local HTTP API: an internal "api" channel plus token auth
 ```
 
 ## A message's journey
@@ -89,6 +90,18 @@ key. `Fire` refuses paused jobs, overlapping runs, a run within a minute
 of the last and more than 50 a day; the body (64 KB max, secrets
 redacted) is wrapped as untrusted data in the job prompt. Runs are
 recorded and reported exactly like scheduled ones.
+
+## Local API
+
+`internal/api` is a channel named `api` that no platform drives: an HTTP
+request becomes a `channel.Incoming` with `KnownUser` set from the token,
+goes through `Engine.Handle` (the same path as a DM, returning only after
+every reply and handoff), and the replies the engine `Send`s to that chat
+are collected and returned in the response. One request runs per
+conversation at a time. `KnownUser` messages never change where proactive
+messages go and can't redeem link codes. Tokens are stored as SHA-256
+hashes and made by the CLI. `POST /api/v1/jobs/{id}/run` goes through
+`Scheduler.Fire`, with the webhook limits.
 
 ## Reliability rules
 

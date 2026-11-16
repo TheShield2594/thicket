@@ -6,6 +6,7 @@ import "context"
 
 // Persona is how a character appears in a chat.
 type Persona struct {
+	ID        string // character id
 	Name      string
 	AvatarURL string
 	Color     int
@@ -24,6 +25,9 @@ type Incoming struct {
 	Mentioned bool
 	// Listening is true for group chats where the bot answers everything.
 	Listening bool
+	// KnownUser is a Thicket user id an internal adapter (the local API)
+	// has already authenticated. Platform adapters leave it 0.
+	KnownUser int64
 	// Attachments are files sent with the message. Text holds only what
 	// the user typed; the engine decides what to download.
 	Attachments []Attachment

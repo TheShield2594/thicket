@@ -46,6 +46,15 @@ Usage:
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket migrate                     apply database migrations and print the schema version
+  thicket api-token create NAME [--user APP:ID]
+                                      make a token for the local API (acts as the owner by default)
+  thicket api-token list | revoke ID
+  thicket ask [--sprig ID] [--conversation NAME] [--json] MESSAGE
+                                      message a sprig through the running server and print the reply
+                                      (MESSAGE or stdin; needs THICKET_API_TOKEN)
+  thicket jobs                        list your jobs (needs THICKET_API_TOKEN)
+  thicket run-job JOB_ID [--payload TEXT|-]
+                                      run a job now, optionally with input (needs THICKET_API_TOKEN)
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -75,6 +84,14 @@ func main() {
 		err = memoryCmd(args)
 	case "migrate":
 		err = migrate()
+	case "api-token", "api-tokens":
+		err = apiTokenCmd(args)
+	case "ask":
+		err = askCmd(args)
+	case "jobs":
+		err = jobsCmd()
+	case "run-job":
+		err = runJobCmd(args)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":

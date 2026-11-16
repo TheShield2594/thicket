@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/agent"
+	"github.com/theshield2594/thicket/internal/api"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
@@ -57,6 +58,7 @@ type App struct {
 	Engine    *agent.Engine
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
+	API       *api.API
 	HTTP      *http.Server
 	channels  []channel.Channel
 
@@ -176,9 +178,13 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 				"My memory review keeps failing ("+shortErr(err)+"). Nothing is lost, but I'm not learning from recent chats until it's fixed.")
 		}}
 	a.Scheduler = scheduler.New(db, a.Engine, log)
+	// The local API is an internal channel: replies to its messages come
+	// back through it. It isn't listed in /health like the chat apps.
+	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
+	a.Engine.AddChannel(a.API)
 
 	if !opts.NoHTTP {
-		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Webhook, agent.MaxWebhookPayload)
+		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Webhook, agent.MaxWebhookPayload, a.API.Handler())
 	}
 	return a, nil
 }

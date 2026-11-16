@@ -20,6 +20,12 @@ First version.
   Proactive messages go to the app last written from. Schema v4 adds an
   `identities` table (existing users carry over).
 - Chat bot tokens are now redacted from logs.
+- Local API and CLI: `POST /api/v1/messages` sends a sprig a message and
+  returns its replies (handoffs and approval prompts included); list
+  sprigs and jobs; run a job now with an optional payload. CLI:
+  `thicket api-token create|list|revoke`, `thicket ask`, `thicket jobs`,
+  `thicket run-job`. Tokens act as one user and are stored hashed. Schema
+  v5 adds `api_tokens`. Rate-limited messages now report it to the API.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are
