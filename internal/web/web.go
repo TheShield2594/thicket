@@ -68,12 +68,42 @@ type Adapter struct {
 	Status func(ctx context.Context, admin bool) Status
 	// SecureCookies forces the Secure flag (set when PublicURL is https).
 	SecureCookies bool
+	// PingEvery is how often an open event stream is kept alive and its
+	// session re-checked (default 25s).
+	PingEvery time.Duration
 
 	running atomic.Bool
 	mu      sync.RWMutex
 	handler channel.Handler
 	runCtx  context.Context
 	subs    map[int64]map[chan Event]struct{}
+
+	loginMu    sync.Mutex
+	loginFails int
+	loginStart time.Time
+}
+
+// Failed sign-ins are limited globally: tokens are unguessable, so this
+// only stops a flood of bad requests from tying up the database.
+const (
+	loginFailLimit  = 30
+	loginFailWindow = time.Minute
+)
+
+// loginAllowed reports whether another sign-in attempt may hit the database.
+func (a *Adapter) loginAllowed(now time.Time) bool {
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
+	if now.Sub(a.loginStart) >= loginFailWindow {
+		a.loginStart, a.loginFails = now, 0
+	}
+	return a.loginFails < loginFailLimit
+}
+
+func (a *Adapter) loginFailed() {
+	a.loginMu.Lock()
+	a.loginFails++
+	a.loginMu.Unlock()
 }
 
 func New(db *store.Store, chars *character.Registry, log *slog.Logger) *Adapter {
@@ -299,8 +329,14 @@ func (a *Adapter) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	if !a.loginAllowed(time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		writeErr(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
+		return
+	}
 	uid, err := a.DB.RedeemWebLink(ctx, body.Token)
 	if errors.Is(err, store.ErrNotFound) {
+		a.loginFailed()
 		writeErr(w, http.StatusUnauthorized, "That link has expired or was already used. Ask for a new one.")
 		return
 	}
@@ -558,17 +594,42 @@ func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no") // nginx: don't buffer
+	session, err := r.Cookie(sessionCookie)   // auth already checked it
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	// Close open streams when Thicket shuts down: http.Server.Shutdown
+	// doesn't cancel requests, and a stream never goes idle.
+	a.mu.RLock()
+	runCtx := a.runCtx
+	a.mu.RUnlock()
+	var stopped <-chan struct{}
+	if runCtx != nil {
+		stopped = runCtx.Done()
+	}
+	every := a.PingEvery
+	if every <= 0 {
+		every = 25 * time.Second
+	}
 	ch := a.subscribe(u.ID)
 	defer a.unsubscribe(u.ID, ch)
 	fmt.Fprint(w, "retry: 3000\n: hello\n\n")
 	fl.Flush()
-	ping := time.NewTicker(25 * time.Second)
+	ping := time.NewTicker(every)
 	defer ping.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-stopped:
+			return
 		case <-ping.C:
+			// A session signed out elsewhere, expired or revoked stops
+			// receiving; a live one has its expiry slid forward.
+			if _, err := a.DB.WebSessionUser(r.Context(), session.Value, sessionTTL); errors.Is(err, store.ErrNotFound) {
+				return
+			}
 			fmt.Fprint(w, ": ping\n\n")
 			fl.Flush()
 		case ev := <-ch:

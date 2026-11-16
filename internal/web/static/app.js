@@ -24,6 +24,7 @@ const S = {
   drafts: new Map(),
   lastRead: load('thicket.read', {}),
   online: true,
+  session: 0,          // bumped on sign-out; stale responses are dropped
 };
 
 // ---------- small helpers ----------
@@ -253,7 +254,9 @@ function showSignedOut() {
 }
 
 async function refreshMe() {
+  const session = S.session;
   const me = await api('/api/me');
+  if (session !== S.session) throw new Error('signed out');
   S.me = me;
   S.status = me.status || {};
   S.sprigs = new Map(me.sprigs.map((s) => [s.id, s]));
@@ -312,7 +315,7 @@ function connect() {
 async function resync() {
   try { await refreshMe(); } catch { return; }
   for (const chat of S.panes) await loadChat(chat, { fresh: true });
-  renderShell();
+  if (S.me) renderShell();
 }
 
 function onMessage(chat, m) {
@@ -375,18 +378,28 @@ document.addEventListener('visibilitychange', () => {
 
 async function loadChat(chat, opts = {}) {
   let c = S.chats.get(chat);
-  if (!c) { c = { messages: [], more: false, loaded: false, loading: false }; S.chats.set(chat, c); }
+  if (!c) { c = { messages: [], more: false, loaded: false, loading: false, error: '' }; S.chats.set(chat, c); }
   if (c.loading || (c.loaded && !opts.fresh && !opts.older)) return;
   c.loading = true;
   try {
     const before = opts.older && c.messages.length ? c.messages[0].id : 0;
     const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages${before ? '?before=' + before : ''}`);
-    if (opts.older) c.messages = res.messages.concat(c.messages);
-    else c.messages = res.messages.concat(c.messages.filter((m) => m.pending || m.failed));
+    if (opts.older) {
+      c.messages = res.messages.concat(c.messages);
+    } else {
+      // Keep what arrived over the event stream while this request was in
+      // flight (newer than the snapshot), plus unsent messages.
+      const ids = new Set(res.messages.map((m) => m.id));
+      const top = res.messages.length ? res.messages[res.messages.length - 1].id : 0;
+      const live = c.messages.filter((m) => m.pending || m.failed || (m.id > top && !ids.has(m.id)));
+      c.messages = res.messages.concat(live);
+    }
     c.more = res.more;
     c.loaded = true;
+    c.error = '';
   } catch (e) {
-    toast('Couldn’t load messages: ' + e.message);
+    if (!c.loaded) c.error = e.message || 'network error';
+    else toast('Couldn’t refresh messages: ' + e.message);
   } finally {
     c.loading = false;
   }
@@ -413,7 +426,7 @@ async function send(chat, text) {
     const i = c.messages.indexOf(m);
     const dup = c.messages.some((x) => x.id === res.message.id);
     if (i >= 0) { if (dup) c.messages.splice(i, 1); else c.messages.splice(i, 1, res.message); }
-    S.latest.set(chat, res.message);
+    if ((S.latest.get(chat)?.id || 0) < res.message.id) S.latest.set(chat, res.message);
     renderSidebar();
   } catch (e) {
     m.pending = false; m.failed = e.message || 'Not sent';
@@ -440,6 +453,7 @@ async function openChat(chat, opts = {}) {
   persistLayout();
   renderShell();
   await loadChat(chat);
+  if (!S.me) return; // signed out meanwhile
   markRead(chat);
   renderFeed(chat);
   renderSidebar();
@@ -491,7 +505,17 @@ async function toggleNotify() {
 async function signOut() {
   try { await api('/api/logout', { method: 'POST' }); } catch { /* signed out anyway */ }
   es?.close();
+  clearTimeout(downTimer);
   save('thicket.layout', null);
+  // Drop everything the previous account loaded. Pending requests check
+  // S.me (and the cleared pane nodes) before touching the screen.
+  S.session++;
+  S.me = null;
+  S.panes = []; S.focus = 0; S.details = false; S.filter = '';
+  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.drafts].forEach((m) => m.clear());
+  S.order = [];
+  paneEls.clear();
+  $sidebar = $main = null;
   showSignedOut();
 }
 
@@ -537,7 +561,7 @@ function sprigRow(chat) {
 }
 
 function renderSidebar() {
-  if (!$sidebar) return;
+  if (!$sidebar || !S.me) return;
   const theme = document.documentElement.dataset.theme || 'auto';
   const q = S.filter.toLowerCase();
   const matches = (id) => {
@@ -709,6 +733,15 @@ function renderFeed(chat, animateId, forceBottom) {
   const meta = paneMeta(chat);
   const kids = [];
 
+  if (c?.error && !c.loaded) {
+    // No automatic retry: a persistent failure must not loop.
+    inner.replaceChildren(h('div.hello', { role: 'alert' },
+      h('h2', {}, 'Couldn’t load this chat'), h('p', {}, c.error),
+      h('div.chips', { style: { 'margin-top': '10px' } }, h('button.chip.primary', {
+        onclick: () => { c.error = ''; renderFeed(chat); },
+      }, 'Try again'))));
+    return;
+  }
   if (!c || !c.loaded) {
     if (!c?.loading) loadChat(chat).then(() => renderFeed(chat, null, true));
     inner.replaceChildren(h('div.hello', {}, h('div.boot-orb')));

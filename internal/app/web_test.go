@@ -171,3 +171,93 @@ func TestWebApp(t *testing.T) {
 		t.Fatalf("me after logout: %d", code)
 	}
 }
+
+// openStream starts GET /api/events and returns a channel that closes when
+// the server ends the stream.
+func openStream(t *testing.T, w *webClient) <-chan struct{} {
+	t.Helper()
+	req, _ := http.NewRequest("GET", w.base+"/api/events", nil)
+	res, err := w.c.Do(req)
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("events: %v %v", res, err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer res.Body.Close()
+		buf := make([]byte, 512)
+		for {
+			if _, err := res.Body.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+func signIn(t *testing.T, a *App, ctx context.Context, base string) *webClient {
+	t.Helper()
+	token, err := a.DB.CreateWebLink(ctx, 0, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, _ := cookiejar.New(nil)
+	w := &webClient{t: t, base: base, c: &http.Client{Jar: jar}}
+	if code, out := w.do("POST", "/api/login", map[string]string{"token": token}, true); code != 200 {
+		t.Fatalf("login: %d %v", code, out)
+	}
+	return w
+}
+
+func TestWebEventStreamLifetime(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go a.Web.Run(runCtx, a.Engine.HandleIncoming)
+	waitFor(t, "web adapter", a.Web.Connected)
+	a.Web.PingEvery = 20 * time.Millisecond
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+
+	// Signing out in another tab ends a stream that is already open.
+	w := signIn(t, a, ctx, srv.URL)
+	other := &webClient{t: t, base: srv.URL, c: &http.Client{Jar: w.c.Jar}}
+	done := openStream(t, w)
+	other.do("POST", "/api/logout", nil, true)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream outlived its session")
+	}
+
+	// Shutting Thicket down ends open streams promptly.
+	w = signIn(t, a, ctx, srv.URL)
+	done = openStream(t, w)
+	stop()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream kept running after shutdown")
+	}
+}
+
+func TestWebLoginThrottle(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+	w := &webClient{t: t, base: srv.URL, c: &http.Client{}}
+	for i := 0; i < 30; i++ {
+		if code, _ := w.do("POST", "/api/login", map[string]string{"token": fmt.Sprint("bad", i)}, true); code != http.StatusUnauthorized {
+			t.Fatalf("bad token %d: %d", i, code)
+		}
+	}
+	// Once the window's failures are used up, even a good link waits.
+	token, _ := a.DB.CreateWebLink(ctx, 0, time.Hour)
+	if code, _ := w.do("POST", "/api/login", map[string]string{"token": token}, true); code != http.StatusTooManyRequests {
+		t.Fatalf("throttled login: %d", code)
+	}
+	// The link wasn't spent by the refused attempt.
+	if uid, err := a.DB.RedeemWebLink(ctx, token); err != nil || uid != 0 {
+		t.Fatalf("link should still work: %d %v", uid, err)
+	}
+}
