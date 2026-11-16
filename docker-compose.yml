@@ -31,6 +31,9 @@ services:
       THICKET_MODEL_API_KEY: ${THICKET_MODEL_API_KEY:-}
       # Optional. Your SearXNG for web search (see docs/web.md); without it, OpenRouter's is used.
       THICKET_SEARCH_URL: ${THICKET_SEARCH_URL:-}
+      # Optional. 1 sends fetch_page through HTTPS_PROXY/HTTP_PROXY, if your network needs one
+      # (see docs/web.md for the trade-off). Set those variables here too.
+      THICKET_WEB_PROXY: ${THICKET_WEB_PROXY:-}
       # Optional overrides; each can also be changed later by asking Juni.
       THICKET_MODEL: ${THICKET_MODEL:-}
       THICKET_FALLBACK_MODEL: ${THICKET_FALLBACK_MODEL:-}

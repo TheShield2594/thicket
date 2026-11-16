@@ -62,6 +62,15 @@ stated.
 
 First version.
 
+- Telegram: a photo album now gets one reply. Its photos arrive as
+  separate messages; they're gathered (until none has arrived for 1.5 s,
+  5 s at most) and passed on as one message with every photo and the
+  caption.
+- Web pages behind a proxy: `THICKET_WEB_PROXY=1` sends `fetch_page`
+  through `HTTPS_PROXY` / `HTTP_PROXY`. Targets and redirects are looked
+  up first and refused unless every address is public; this is weaker
+  than the direct connection check, so it's off by default (see
+  docs/web.md).
 - Discord channel: DMs and server channels, per-sprig name and avatar
   through webhooks, embeds in DMs.
 - Telegram channel: Bot API over long polling (no open port), DMs and

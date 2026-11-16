@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/llm"
@@ -23,7 +24,12 @@ func (e *Engine) fetcher() *websearch.Fetcher {
 	if e.Fetcher != nil {
 		return e.Fetcher
 	}
-	e.fetchOnce.Do(func() { e.defaultFetcher = &websearch.Fetcher{} })
+	e.fetchOnce.Do(func() {
+		e.defaultFetcher = &websearch.Fetcher{}
+		if e.Cfg != nil && e.Cfg.WebProxy {
+			e.defaultFetcher.Proxy = http.ProxyFromEnvironment
+		}
+	})
 	return e.defaultFetcher
 }
 

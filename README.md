@@ -190,6 +190,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
 | `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
+| `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |
 | `THICKET_CHEAP_MODEL` *chat* | `anthropic/claude-haiku-5.5` | memory review and personality checks |

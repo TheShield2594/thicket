@@ -12,8 +12,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +25,11 @@ import (
 const (
 	pollTimeout = 50 // seconds a getUpdates call waits for messages
 	maxText     = 3500
+	// An album arrives as one message per photo, sharing a media group id,
+	// usually within a second. Parts are gathered until none has arrived
+	// for albumWait, but never for longer than albumMaxWait.
+	albumWait    = 1500 * time.Millisecond
+	albumMaxWait = 5 * time.Second
 )
 
 type Adapter struct {
@@ -37,6 +44,23 @@ type Adapter struct {
 	connected   atomic.Bool
 	botID       int64
 	botUsername string
+
+	albumsMu sync.Mutex
+	albums   map[string]*album
+	// albumWait and albumMaxWait are the constants above; tests shorten them.
+	albumWait, albumMaxWait time.Duration
+}
+
+// album gathers the messages of one media group.
+type album struct {
+	first time.Time
+	timer *time.Timer
+	parts []albumPart
+}
+
+type albumPart struct {
+	id int64
+	in channel.Incoming
 }
 
 func New(token string, listenChats []string, log *slog.Logger) *Adapter {
@@ -45,8 +69,10 @@ func New(token string, listenChats []string, log *slog.Logger) *Adapter {
 		l[c] = true
 	}
 	return &Adapter{token: token, listen: l, log: log, BaseURL: "https://api.telegram.org",
-		http: &http.Client{Timeout: 30 * time.Second},
-		poll: &http.Client{Timeout: (pollTimeout + 20) * time.Second}}
+		http:      &http.Client{Timeout: 30 * time.Second},
+		poll:      &http.Client{Timeout: (pollTimeout + 20) * time.Second},
+		albums:    map[string]*album{},
+		albumWait: albumWait, albumMaxWait: albumMaxWait}
 }
 
 func (a *Adapter) Name() string    { return "telegram" }
@@ -171,6 +197,8 @@ type message struct {
 	Voice    *file  `json:"voice"`
 	Audio    *file  `json:"audio"`
 	Video    *file  `json:"video"`
+	// MediaGroupID is shared by the messages of one album.
+	MediaGroupID string `json:"media_group_id"`
 }
 
 type update struct {
@@ -228,11 +256,64 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 				continue
 			}
 			if in, ok := a.incoming(u.Message); ok {
-				go h(ctx, in)
+				a.deliver(ctx, h, u.Message, in)
 			}
 		}
 	}
 	return nil
+}
+
+// deliver hands a message to the engine, holding album parts back until
+// the whole album has arrived so it gets one reply, not one per photo.
+func (a *Adapter) deliver(ctx context.Context, h channel.Handler, m *message, in channel.Incoming) {
+	if m.MediaGroupID == "" {
+		go h(ctx, in)
+		return
+	}
+	key := in.ChatID + "/" + m.MediaGroupID
+	a.albumsMu.Lock()
+	defer a.albumsMu.Unlock()
+	al := a.albums[key]
+	if al == nil {
+		al = &album{first: time.Now()}
+		al.timer = time.AfterFunc(a.albumWait, func() { a.flushAlbum(ctx, h, key, al) })
+		a.albums[key] = al
+	} else if wait := min(a.albumWait, a.albumMaxWait-time.Since(al.first)); wait > 0 && al.timer.Stop() {
+		// Still gathering: wait a little longer for the rest. If Stop
+		// fails, the flush is already waiting for the lock and will
+		// include this part.
+		al.timer.Reset(wait)
+	}
+	al.parts = append(al.parts, albumPart{id: m.MessageID, in: in})
+}
+
+// flushAlbum merges an album's parts into one message: the caption as the
+// text (Telegram usually puts it on one photo only) and every attachment,
+// in order.
+func (a *Adapter) flushAlbum(ctx context.Context, h channel.Handler, key string, al *album) {
+	a.albumsMu.Lock()
+	if a.albums[key] == al {
+		delete(a.albums, key)
+	}
+	parts := al.parts
+	al.parts = nil
+	a.albumsMu.Unlock()
+	if len(parts) == 0 || ctx.Err() != nil {
+		return
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].id < parts[j].id })
+	in := parts[0].in
+	in.Attachments = nil
+	var texts []string
+	for _, p := range parts {
+		if p.in.Text != "" {
+			texts = append(texts, p.in.Text)
+		}
+		in.Mentioned = in.Mentioned || p.in.Mentioned
+		in.Attachments = append(in.Attachments, p.in.Attachments...)
+	}
+	in.Text = strings.Join(texts, "\n\n")
+	h(ctx, in)
 }
 
 // incoming normalises a message. ok is false for messages to ignore.

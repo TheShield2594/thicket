@@ -5,6 +5,12 @@
 // address: loopback, private networks, link-local (cloud metadata),
 // carrier-grade NAT and the like. The check runs when connecting, after
 // DNS, so redirects and DNS tricks can't get around it.
+//
+// On networks where web traffic must go through a proxy, the proxy makes
+// the connection instead, so that check can't run. With Proxy set, the
+// target's name is resolved here first and refused unless every address
+// is public. That is weaker (the proxy resolves the name again, and DNS
+// can change in between), so it is opt-in: THICKET_WEB_PROXY.
 package websearch
 
 import (
@@ -63,6 +69,15 @@ func Public(a netip.Addr) bool {
 // Fetcher reads pages. The zero value is safe; AllowPrivate is for tests.
 type Fetcher struct {
 	AllowPrivate bool
+	// Proxy, when set, picks a proxy per request (http.ProxyFromEnvironment
+	// in production). Targets are checked by resolving them first; requests
+	// it sends direct keep the connect-time check.
+	Proxy func(*http.Request) (*url.URL, error)
+	// resolve looks up a host's addresses; tests replace it.
+	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	// proxies are the proxy addresses (host:port) handed to the
+	// transport: connections to them are the proxy's, not the target's.
+	proxies sync.Map
 	// allowAddr lets tests reach one local address while every other
 	// connection still gets the public-address check.
 	allowAddr func(address string) bool
@@ -90,11 +105,22 @@ func (f *Fetcher) setup() {
 		}
 		return nil
 	}}
+	plain := &net.Dialer{Timeout: 10 * time.Second}
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if _, ok := f.proxies.Load(address); ok {
+			return plain.DialContext(ctx, network, address)
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	var proxy func(*http.Request) (*url.URL, error) // none: it would connect past the check above
+	if f.Proxy != nil {
+		proxy = f.viaProxy
+	}
 	f.client = &http.Client{
 		Timeout: fetchTimeout,
 		Transport: &http.Transport{
-			Proxy:               nil, // a proxy would connect for us, past the check above
-			DialContext:         dialer.DialContext,
+			Proxy:               proxy,
+			DialContext:         dial,
 			TLSHandshakeTimeout: 10 * time.Second,
 			MaxIdleConns:        4,
 			IdleConnTimeout:     30 * time.Second,
@@ -109,6 +135,66 @@ func (f *Fetcher) setup() {
 			return nil
 		},
 	}
+}
+
+// viaProxy runs for every request, redirects included. It refuses
+// targets that resolve to anything but public addresses, then returns the
+// proxy to use (or nil to connect directly, which the dialer checks).
+func (f *Fetcher) viaProxy(req *http.Request) (*url.URL, error) {
+	host, port := req.URL.Hostname(), req.URL.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[req.URL.Scheme]
+	}
+	target := net.JoinHostPort(host, port)
+	if !f.AllowPrivate && (f.allowAddr == nil || !f.allowAddr(target)) {
+		if err := f.checkHost(req.Context(), host); err != nil {
+			return nil, err
+		}
+	}
+	p, err := f.Proxy(req)
+	if err != nil || p == nil {
+		if _, isProxy := f.proxies.Load(target); isProxy && err == nil {
+			// Sent direct to the proxy's own address: that connection
+			// would skip the dialer's check, so refuse it.
+			return nil, ErrBlocked
+		}
+		return p, err
+	}
+	pport := p.Port()
+	if pport == "" {
+		pport = map[string]string{"http": "80", "https": "443", "socks5": "1080"}[p.Scheme]
+	}
+	f.proxies.Store(net.JoinHostPort(p.Hostname(), pport), true)
+	return p, nil
+}
+
+// checkHost refuses a host unless all its addresses are public.
+func (f *Fetcher) checkHost(ctx context.Context, host string) error {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if !Public(ip) {
+			return ErrBlocked
+		}
+		return nil
+	}
+	resolve := f.resolve
+	if resolve == nil {
+		resolve = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	addrs, err := resolve(ctx, host)
+	if err != nil {
+		return fmt.Errorf("couldn't look up %s: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("couldn't look up %s", host)
+	}
+	for _, a := range addrs {
+		if !Public(a) {
+			return ErrBlocked
+		}
+	}
+	return nil
 }
 
 // Page is a fetched page as text.

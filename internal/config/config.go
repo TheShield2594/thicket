@@ -45,6 +45,9 @@ type Config struct {
 	ModelURL    string
 	ModelAPIKey string // optional key for a self-hosted server
 	SearchURL   string // a SearXNG instance for web search (optional)
+	// WebProxy sends fetch_page through HTTPS_PROXY/HTTP_PROXY (see
+	// docs/web.md for the trade-off).
+	WebProxy bool
 
 	Model         string
 	FallbackModel string
@@ -82,6 +85,13 @@ func Load() (*Config, error) {
 		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
 		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
 		CommonsRef:            commonsRef(env("THICKET_COMMONS_CHANNEL", "")),
+	}
+	switch strings.ToLower(env("THICKET_WEB_PROXY", "")) {
+	case "", "0", "false", "no", "off":
+	case "1", "true", "yes", "on":
+		c.WebProxy = true
+	default:
+		return nil, fmt.Errorf("THICKET_WEB_PROXY must be 1 or 0, not %q", os.Getenv("THICKET_WEB_PROXY"))
 	}
 	c.CharactersDir = env("THICKET_CHARACTERS_DIR", filepath.Join(c.DataDir, "characters"))
 
