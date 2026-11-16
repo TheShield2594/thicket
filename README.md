@@ -101,6 +101,10 @@ exactly what's missing, and `GET /health` reports each part.
   with tokens from `thicket api-token create`. See [Local API](docs/api.md).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**.
+- Changed your mind? Say **stop** (or "never mind", 🛑, `/stop`) while a
+  sprig is working: it stops at once, tells you anything it had already
+  done, and sets aside messages you sent in the meantime. With no reply
+  running, "stop" stops your running jobs.
 
 ## Configuration
 

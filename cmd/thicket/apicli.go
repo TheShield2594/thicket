@@ -293,3 +293,31 @@ func jobsCmd() error {
 	}
 	return nil
 }
+
+func stopCmd(args []string) error {
+	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
+	conv := fs.String("conversation", "", "the conversation to stop (default: \"default\")")
+	if _, err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Reply bool     `json:"stopped_reply"`
+		Jobs  []string `json:"stopped_jobs"`
+	}
+	if err := c.do(http.MethodPost, "/api/v1/stop", map[string]string{"conversation": *conv}, &resp); err != nil {
+		return err
+	}
+	switch {
+	case resp.Reply:
+		fmt.Println("stopped the reply in progress")
+	case len(resp.Jobs) > 0:
+		fmt.Println("stopped jobs:", strings.Join(resp.Jobs, ", "))
+	default:
+		fmt.Println("nothing was running")
+	}
+	return nil
+}

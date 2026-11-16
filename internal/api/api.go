@@ -124,6 +124,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/sprigs", a.auth(a.getSprigs))
 	mux.HandleFunc("GET /api/v1/jobs", a.auth(a.getJobs))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/run", a.auth(a.runJob))
+	mux.HandleFunc("POST /api/v1/stop", a.auth(a.stop))
 	return mux
 }
 
@@ -311,4 +312,29 @@ func (a *API) runJob(w http.ResponseWriter, r *http.Request, c caller) {
 		a.Log.Error("api run job", "job", j.ID, "err", err)
 		fail(w, http.StatusInternalServerError, "couldn't start the job")
 	}
+}
+
+// stop stops the reply in progress in one of the token's conversations
+// (or, with none running, the user's running jobs). It doesn't wait for
+// the conversation's lock: the reply it stops is holding it.
+func (a *API) stop(w http.ResponseWriter, r *http.Request, c caller) {
+	var req struct {
+		Conversation string `json:"conversation"`
+	}
+	if r.ContentLength != 0 {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req)
+	}
+	conv := strings.ToLower(req.Conversation)
+	if conv == "" {
+		conv = "default"
+	}
+	if !convRe.MatchString(conv) {
+		fail(w, http.StatusBadRequest, "conversation: up to 40 lowercase letters, digits, - or _")
+		return
+	}
+	stopped, jobs := a.Engine.Stop(fmt.Sprintf("api:t%d.%s", c.token.ID, conv), c.user)
+	if jobs == nil {
+		jobs = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stopped_reply": stopped, "stopped_jobs": jobs})
 }

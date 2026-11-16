@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/budget"
@@ -66,9 +67,16 @@ type Engine struct {
 	// compactBackoff: conversation id -> time before which summarising
 	// isn't retried (it failed).
 	compactBackoff sync.Map
-	linkMu         sync.Mutex
-	links          map[string]linkCode    // code -> pending link
-	linkFails      map[string][]time.Time // channel:user -> failed attempts
+	// Stopping: replies and jobs in progress, messages waiting per chat,
+	// and the arrival number up to which a chat's queue was stopped.
+	turnsIn     sync.Map // chatRef -> *inFlight
+	jobsRunning sync.Map // job id -> *inFlight
+	waitingIn   sync.Map // chatRef -> *atomic.Int32
+	stopSeq     sync.Map // chatRef -> uint64
+	arrivals    atomic.Uint64
+	linkMu      sync.Mutex
+	links       map[string]linkCode    // code -> pending link
+	linkFails   map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -145,8 +153,40 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		e.Log.Warn("rate limited", "user", user.ID)
 		return ErrRateLimited
 	}
+	seq := e.arrivals.Add(1)
+	stopText := in.Text
+	if addressed != nil {
+		stopText = rest // "Pip, stop"
+	}
+	if isStopRequest(stopText) && len(in.Attachments) == 0 {
+		stopped, jobs := e.Stop(in.ChatRef(), user)
+		if stopped {
+			return nil // the reply being stopped says so itself
+		}
+		if len(jobs) > 0 {
+			host, _ := e.Chars.Host()
+			return e.send(ctx, in.ChatRef(), host, "Okay, I've stopped "+quoteJoin(jobs)+".")
+		}
+		// Nothing running: an ordinary message (it may deny an approval).
+	}
+	w := e.waiting(in.ChatRef())
+	w.Add(1)
 	unlock := e.lockChat(in.ChatRef())
+	w.Add(-1)
 	defer unlock()
+	if v, ok := e.stopSeq.Load(in.ChatRef()); ok && seq <= v.(uint64) {
+		return nil // sent before a stop: set aside, as the stop said
+	}
+	ctx, flight, done := e.track(ctx, &e.turnsIn, in.ChatRef(), user.ID, "")
+	defer done()
+	defer func() {
+		// A stop that came after the reply was already out: say so.
+		if flight.stopped.Load() && flight.acked.CompareAndSwap(false, true) {
+			if host, ok := e.Chars.Host(); ok {
+				_ = e.send(context.WithoutCancel(ctx), in.ChatRef(), host, "I'd already finished, so there was nothing left to stop.")
+			}
+		}
+	}()
 
 	// What the user typed, minus a leading sprig name. Attachment markers
 	// go after it, so secret and approval checks see them as before.
@@ -213,6 +253,11 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
 	reply, err := e.runTurn(ctx, t, event)
+	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
+		// Stopped: no reply, no approval prompts, no handoff.
+		e.stopAck(ctx, t, f)
+		return nil
+	}
 	if err != nil {
 		reply = e.failureReply(ctx, t, err)
 	}
@@ -248,6 +293,9 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	if sendErr != nil {
 		return sendErr
+	}
+	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
+		return nil // stopped after the reply went out: no handoff
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
@@ -470,4 +518,12 @@ func (e *Engine) Notify(ctx context.Context, key string, window time.Duration, l
 			e.Log.Error("notify admin", "user", a.ID, "err", err)
 		}
 	}
+}
+
+func quoteJoin(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = "“" + n + "”"
+	}
+	return strings.Join(q, ", ")
 }

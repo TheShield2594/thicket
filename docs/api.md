@@ -74,6 +74,15 @@ A message is handled exactly like a DM: anything that looks like a key or
 password is refused, not stored. `429` means more than 20 messages in a
 minute.
 
+### `POST /api/v1/stop`
+
+`{"conversation": "ci"}` (optional; default `default`) stops the reply in
+progress there, without waiting for it: the stopped request then returns
+the sprig's "Okay, stopped." With no reply running, it stops your running
+jobs. Answers `{"stopped_reply": true, "stopped_jobs": []}`. From the
+command line: `thicket stop [--conversation NAME]`. Pressing Ctrl-C during
+`thicket ask` also stops the reply.
+
 ### `GET /api/v1/sprigs`
 
 `{"sprigs": [{"id": "juniper", "name": "Juni", "role": "…", "host": true}]}`

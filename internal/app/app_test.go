@@ -98,6 +98,26 @@ type fakeModel struct {
 	compactFail  bool
 	contextLimit int
 	compactions  int
+	// "slow task" in a request makes it hang until the context ends (a
+	// stop) or release closes; entered is signalled as it starts waiting.
+	// "slow tool task" first calls a tool, then hangs.
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
+	m.mu.Lock()
+	entered, release := m.entered, m.release
+	m.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-release:
+		return text("Finished the slow task."), nil
+	}
 }
 
 // annotations builds OpenRouter-style parse annotations for the files in
@@ -187,6 +207,18 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	sys := req.Messages[0].Content
 	last := req.Messages[len(req.Messages)-1]
+	if !strings.HasPrefix(sys, "You check whether") {
+		all := ""
+		for _, msg := range req.Messages[1:] {
+			all += msg.Content + "\n"
+		}
+		switch {
+		case strings.Contains(all, "slow tool task") && last.Role != "tool":
+			return toolCall("remember", map[string]any{"content": "Likes slow tasks.", "scope": "shared", "kind": "fact"}), nil
+		case strings.Contains(all, "slow tool task"), strings.Contains(lastUserText(req.Messages)+last.Content, "slow task"):
+			return m.hang(ctx)
+		}
+	}
 	switch {
 	case strings.Contains(sys, "You check whether a chat reply"):
 		return text(`{"in_character": true}`), nil

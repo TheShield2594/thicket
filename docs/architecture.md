@@ -139,6 +139,21 @@ candidate, and sets `model_url`, `model`, `cheap_model` and
 tool definitions gets the turn again without tools, and admins are told
 once a day.
 
+## Stopping
+
+Messages in a chat take turns behind a lock, so a stop request
+(`isStopRequest`: "stop", "cancel", "never mind", 🛑, `/stop`, also after a
+sprig's name) is handled before the lock. `Engine.Stop` cancels the
+context of the reply in progress in that chat (registered in `turnsIn` by
+`handle`; only its user or an admin may stop it) and records the arrival
+number, so messages already queued are dropped when they get the lock.
+`respond` sees the stop, sends nothing but the acknowledgement (which
+lists tools that already ran, from `turn.done`), registers no approvals
+and starts no handoff, and records an event so the next reply knows. With
+no reply running, a stop cancels the user's running jobs (`jobsRunning`),
+whose runs are recorded as "stopped by the user" without a failure
+report. Tools that finished stay done: nothing is rolled back.
+
 ## Reliability rules
 
 - Success is checked in code: exit status, API responses, run records. The

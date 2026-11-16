@@ -58,6 +58,7 @@ Usage:
   thicket jobs                        list your jobs (needs THICKET_API_TOKEN)
   thicket run-job JOB_ID [--payload TEXT|-]
                                       run a job now, optionally with input (needs THICKET_API_TOKEN)
+  thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -97,6 +98,8 @@ func main() {
 		err = jobsCmd()
 	case "run-job":
 		err = runJobCmd(args)
+	case "stop":
+		err = stopCmd(args)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":

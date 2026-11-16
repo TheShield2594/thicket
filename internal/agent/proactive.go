@@ -33,11 +33,16 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 		return scheduler.Result{Err: fmt.Errorf("the sprig %q that owns this job no longer exists", j.Character)}
 	}
 	t := &turn{user: user, char: char, job: &j, query: j.Name + " " + j.Prompt}
+	ctx, flight, done := e.track(ctx, &e.jobsRunning, j.ID, user.ID, j.Name)
+	defer done()
 	jctx := llm.WithMeta(ctx, llm.Meta{UserID: user.ID, Character: char.ID, JobID: j.ID, Purpose: "job"})
 	jctx, cancel := context.WithTimeout(jctx, 5*time.Minute)
 	defer cancel()
 	out, err := e.runTurn(jctx, t, "")
-	cost, _ := e.DB.JobSpendSince(ctx, j.ID, start.Add(-time.Second))
+	cost, _ := e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+	if flight.stopped.Load() {
+		return scheduler.Result{Err: ErrStopped, Cost: cost}
+	}
 	if err != nil {
 		return scheduler.Result{Err: err, Cost: cost}
 	}
@@ -59,6 +64,11 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 		char, _ = e.Chars.Host()
 	}
 	if char == nil {
+		return
+	}
+	if errors.Is(res.Err, ErrStopped) {
+		// The user asked for it and was told: no failure report.
+		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q stopped by the user", j.ID, j.Name), "")
 		return
 	}
 	switch res.Status {

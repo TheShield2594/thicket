@@ -41,7 +41,8 @@ type turn struct {
 	toolCalls       int
 	handoff         *handoffReq
 	nothingToReport bool
-	afterReply      []post // canned posts after the reply (approval prompts)
+	done            []string // tools that ran, for a stop acknowledgement
+	afterReply      []post   // canned posts after the reply (approval prompts)
 	noTools         bool
 }
 
@@ -283,6 +284,8 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if err != nil {
 		level, summary = "warn", "tool "+name+" failed"
 		out = "Error: " + err.Error()
+	} else {
+		t.done = append(t.done, tool.Label())
 	}
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, e.Secrets.Redact(truncate(string(args), 500)+" → "+truncate(out, 500)))
 	if tool.Untrusted {

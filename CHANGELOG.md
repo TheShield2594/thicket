@@ -47,6 +47,12 @@ First version.
   and later replies see the summary plus the recent messages. A model
   whose context is still too small gets the turn again with half the
   history. Schema v7 adds `conversations.summary` and `summary_upto`.
+- Stop: "stop", "never mind", 🛑 or `/stop` while a sprig is working stops
+  the reply (and any handoff) at once instead of queueing behind it,
+  reports what had already been done, and sets aside messages sent in the
+  meantime. Only the person who started it, or an admin, can stop it.
+  With no reply running, it stops the user's running jobs. Also
+  `POST /api/v1/stop` and `thicket stop`.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are
