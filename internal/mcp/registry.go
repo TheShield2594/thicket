@@ -51,11 +51,48 @@ func FuncName(server, tool string) string {
 	return n + suffix
 }
 
+// conn is one live connection. Calls hold a reference while they use the
+// client; a replaced or removed connection is only closed once the last
+// in-flight call releases it.
 type conn struct {
-	client *Client
-	tools  []Tool
-	err    error
-	at     time.Time
+	client  *Client
+	tools   []Tool
+	err     error
+	at      time.Time
+	refs    int  // guarded by Registry.mu
+	retired bool // guarded by Registry.mu
+}
+
+// retireLocked marks c as replaced and closes it if nothing is using it.
+// r.mu must be held.
+func (r *Registry) retireLocked(c *conn) {
+	if c == nil || c.retired {
+		return
+	}
+	c.retired = true
+	if c.refs == 0 && c.client != nil {
+		c.client.Close()
+	}
+}
+
+// acquireLocked takes a reference on c for a call. r.mu must be held.
+func acquireLocked(c *conn) *conn {
+	if c == nil || c.client == nil || c.retired {
+		return nil
+	}
+	c.refs++
+	return c
+}
+
+// release drops a call's reference, closing a retired connection once the
+// last call is done with it.
+func (r *Registry) release(c *conn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c.refs--
+	if c.retired && c.refs == 0 && c.client != nil {
+		c.client.Close()
+	}
 }
 
 // Registry connects to the MCP servers stored in the database.
@@ -103,7 +140,7 @@ func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error)
 
 // Connect (re)connects one server and lists its tools.
 func (r *Registry) Connect(ctx context.Context, s store.MCPServer) ([]Tool, error) {
-	c, err := r.connect(ctx, s)
+	c, err := r.connect(ctx, s, false)
 	if err != nil {
 		return nil, err
 	}
@@ -112,13 +149,11 @@ func (r *Registry) Connect(ctx context.Context, s store.MCPServer) ([]Tool, erro
 
 // connect dials a server and publishes the connection, unless the server
 // was removed or reconnected by someone else while we were dialling.
-func (r *Registry) connect(ctx context.Context, s store.MCPServer) (*conn, error) {
+func (r *Registry) connect(ctx context.Context, s store.MCPServer, hold bool) (*conn, error) {
 	r.mu.Lock()
 	r.gen[s.Name]++
 	myGen := r.gen[s.Name]
-	if old := r.conns[s.Name]; old != nil && old.client != nil {
-		old.client.Close()
-	}
+	r.retireLocked(r.conns[s.Name])
 	delete(r.conns, s.Name)
 	r.mu.Unlock()
 
@@ -143,6 +178,9 @@ func (r *Registry) connect(ctx context.Context, s store.MCPServer) (*conn, error
 		return nil, fmt.Errorf("integration %q was removed or reconnected while connecting", s.Name)
 	}
 	r.conns[s.Name] = cn
+	if hold && err == nil {
+		cn.refs++ // taken under the same lock that publishes it
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", s.Name, err)
@@ -174,9 +212,7 @@ func (r *Registry) Disconnect(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.gen[name]++ // invalidates any connection attempt in flight
-	if c := r.conns[name]; c != nil && c.client != nil {
-		c.client.Close()
-	}
+	r.retireLocked(r.conns[name])
 	delete(r.conns, name)
 }
 
@@ -214,21 +250,15 @@ func (r *Registry) Status() map[string]string {
 // connection doesn't mean the server didn't act.
 func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
 	r.mu.Lock()
-	c := r.conns[server]
+	c := acquireLocked(r.conns[server])
 	r.mu.Unlock()
-	var client *Client
-	if c != nil {
-		client = c.client
-	}
-	if client == nil {
+	if c == nil {
 		var err error
-		if client, err = r.reconnect(ctx, server); err != nil {
+		if c, err = r.reconnect(ctx, server); err != nil {
 			return nil, err
 		}
 	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	res, err := client.CallTool(cctx, tool, args)
+	res, err := r.callOn(ctx, c, tool, args)
 	var rpcErr *RPCError
 	if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
 		return res, err
@@ -236,29 +266,32 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 	if !retrySafe {
 		return nil, fmt.Errorf("the connection to %s failed mid-call (%v), so I can't tell whether it took effect; check before trying again", server, err)
 	}
-	client, rerr := r.reconnect(ctx, server)
+	c2, rerr := r.reconnect(ctx, server)
 	if rerr != nil {
 		return nil, err
 	}
-	cctx2, cancel2 := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel2()
-	return client.CallTool(cctx2, tool, args)
+	return r.callOn(ctx, c2, tool, args)
 }
 
-// reconnect connects a configured server and returns its client directly,
-// so a concurrent replacement can't leave the caller holding nothing.
-func (r *Registry) reconnect(ctx context.Context, server string) (*Client, error) {
+// callOn runs one call on a held connection and releases it afterwards.
+func (r *Registry) callOn(ctx context.Context, c *conn, tool string, args json.RawMessage) (*CallResult, error) {
+	defer r.release(c)
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return c.client.CallTool(cctx, tool, args)
+}
+
+// reconnect connects a configured server and returns the new connection
+// already held for the caller, so a concurrent replacement can't close it
+// before (or while) the caller uses it.
+func (r *Registry) reconnect(ctx context.Context, server string) (*conn, error) {
 	servers, err := r.DB.MCPServers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range servers {
 		if s.Name == server && s.Enabled {
-			c, err := r.connect(ctx, s)
-			if err != nil {
-				return nil, err
-			}
-			return c.client, nil
+			return r.connect(ctx, s, true)
 		}
 	}
 	return nil, fmt.Errorf("integration %q is not configured", server)
@@ -268,9 +301,7 @@ func (r *Registry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range r.conns {
-		if c.client != nil {
-			c.client.Close()
-		}
+		r.retireLocked(c)
 	}
 	r.conns = map[string]*conn{}
 }
