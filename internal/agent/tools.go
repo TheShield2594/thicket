@@ -404,6 +404,14 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolLinkAccount,
 		},
 		{
+			Name:        "dashboard_link",
+			Description: "When the user wants to see their dashboard (a read-only web page of their sprigs, memories, jobs and skills, plus spending for admins): Thicket DMs them a one-time sign-in link. You never see it.",
+			Params:      `{"type":"object","properties":{}}`,
+			Scope:       "host",
+			ChatOnly:    true,
+			Run:         e.toolDashboardLink,
+		},
+		{
 			Name:        "memory_reviews",
 			Description: "List recent automatic memory review runs, or roll one back (undoing every change it made) with rollback_run_id.",
 			Params:      `{"type":"object","properties":{"rollback_run_id":{"type":"integer"}}}`,

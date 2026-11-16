@@ -25,11 +25,16 @@ type HealthFunc func(ctx context.Context) map[string]Check
 // returns the HTTP status and a short message for the caller.
 type HookFunc func(ctx context.Context, token string, body []byte, contentType string) (int, string)
 
-// New builds the HTTP server. api, if set, serves /api/.
-func New(addr, version, charsDir string, health HealthFunc, hooks HookFunc, maxBody int, api http.Handler) *http.Server {
+// New builds the HTTP server. api, if set, serves /api/; dash serves
+// /dashboard.
+func New(addr, version, charsDir string, health HealthFunc, hooks HookFunc, maxBody int, api, dash http.Handler) *http.Server {
 	mux := http.NewServeMux()
 	if api != nil {
 		mux.Handle("/api/", api)
+	}
+	if dash != nil {
+		mux.Handle("/dashboard", dash)
+		mux.Handle("/dashboard/", dash)
 	}
 	if hooks != nil {
 		mux.HandleFunc("POST /hooks/{token}", func(w http.ResponseWriter, r *http.Request) {

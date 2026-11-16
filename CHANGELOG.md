@@ -64,6 +64,11 @@ First version.
   `fetch_page`, which reads pages as text but only from public internet
   addresses (checked at connect time, so redirects and DNS can't get
   around it). Results are treated as data.
+- Dashboard: a read-only `/dashboard` with your sprigs, memories, jobs and
+  runs, and skills; admins also get spending, health and activity. Sign
+  in with a one-time link from Juni (`dashboard_link`) or
+  `thicket dashboard-link`; sessions last a week. No JavaScript, strict
+  security headers. Schema v8 adds `web_sessions`.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

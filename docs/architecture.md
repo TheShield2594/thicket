@@ -22,6 +22,7 @@ internal/backup      export, restore, daily snapshots, character import
 internal/server      /health, /avatars, /hooks, and /api (mounted from internal/api)
 internal/api         local HTTP API: an internal "api" channel plus token auth
 internal/web         page fetching (public addresses only) and SearXNG search
+internal/dashboard   read-only /dashboard: one-time sign-in links, session cookies, server-rendered page
 ```
 
 ## A message's journey
@@ -180,6 +181,18 @@ so their output is wrapped as data. Search goes to SearXNG
 hook, after DNS resolution, so a redirect or a hostname that resolves to
 a private address is stopped the same way; it bypasses any HTTP proxy
 for that reason. HTML becomes text with the standard library only.
+
+## Dashboard
+
+`/dashboard` is server-rendered with `html/template` (no JavaScript). A
+sign-in link (`dashboard_link` tool, DMed by code, or `thicket
+dashboard-link`) is a random token whose hash is stored in
+`web_sessions` as kind `login` for 10 minutes; opening it deletes that
+row, stores a `session` row for 7 days, sets an HttpOnly, SameSite=Strict
+cookie scoped to `/dashboard`, and redirects so the token leaves the
+address bar. Every response carries a CSP with `default-src 'none'`, no
+framing, no referrer and no caching. A user sees their own memories and
+jobs; spending, health and activity are added for admins.
 
 ## Reliability rules
 

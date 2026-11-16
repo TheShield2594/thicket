@@ -47,8 +47,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - thicket-data:/data
-    # /health, /avatars and /hooks. Put it behind your reverse proxy for avatars
-    # or webhooks (see docs/webhooks.md). Telegram needs no open port.
+    # /health, /avatars, /hooks, /api and /dashboard. Put it behind your reverse proxy
+    # for avatars, webhooks or the dashboard (see docs). Telegram needs no open port.
     ports:
       - "127.0.0.1:8080:8080"
 

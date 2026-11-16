@@ -15,7 +15,7 @@ func TestHookRoute(t *testing.T) {
 		gotToken, gotBody, gotCT = token, string(body), ct
 		return http.StatusAccepted, "started"
 	}
-	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return nil }, hooks, 16, nil).Handler)
+	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return nil }, hooks, 16, nil, nil).Handler)
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/hooks/thk_abc", "text/plain", strings.NewReader("hello"))

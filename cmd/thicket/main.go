@@ -59,6 +59,8 @@ Usage:
   thicket run-job JOB_ID [--payload TEXT|-]
                                       run a job now, optionally with input (needs THICKET_API_TOKEN)
   thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
+  thicket dashboard-link [--user APP:ID]
+                                      print a one-time sign-in link for the read-only dashboard
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -100,6 +102,8 @@ func main() {
 		err = runJobCmd(args)
 	case "stop":
 		err = stopCmd(args)
+	case "dashboard-link":
+		err = dashboardLinkCmd(args)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":

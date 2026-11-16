@@ -97,6 +97,9 @@ exactly what's missing, and `GET /health` reports each part.
 - Let other things wake a sprig: "Make a webhook that tells me when a CI
   build fails." Thicket DMs you a private URL; anything that POSTs to it
   starts the job with what it sent. See [Webhooks](docs/webhooks.md).
+- See it all on one page: ask Juni for a dashboard link to see your sprigs,
+  memories, jobs and skills (and spending, for admins). See
+  [Dashboard](docs/dashboard.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -141,7 +144,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
-| `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/`, `/hooks/` and `/api/` |
+| `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/`, `/hooks/`, `/api/` and `/dashboard` |
 | `THICKET_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Backups and moving house
@@ -176,6 +179,7 @@ grant it.
 - [Skills](docs/skills.md)
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
+- [Dashboard](docs/dashboard.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

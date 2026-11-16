@@ -23,6 +23,7 @@ import (
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -59,6 +60,7 @@ type App struct {
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
 	API       *api.API
+	Dashboard *dashboard.Dashboard
 	HTTP      *http.Server
 	channels  []channel.Channel
 
@@ -192,9 +194,18 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	// back through it. It isn't listed in /health like the chat apps.
 	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
 	a.Engine.AddChannel(a.API)
+	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
+		Secure: strings.HasPrefix(cfg.PublicURL, "https://"),
+		Health: func(ctx context.Context) map[string]dashboard.Check {
+			out := map[string]dashboard.Check{}
+			for k, c := range a.health(ctx) {
+				out[k] = dashboard.Check{OK: c.OK, Detail: c.Detail}
+			}
+			return out
+		}}
 
 	if !opts.NoHTTP {
-		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Webhook, agent.MaxWebhookPayload, a.API.Handler())
+		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Webhook, agent.MaxWebhookPayload, a.API.Handler(), a.Dashboard.Handler())
 	}
 	return a, nil
 }

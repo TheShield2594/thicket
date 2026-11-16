@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/channel"
+	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -150,4 +151,26 @@ func (e *Engine) redeemLinkCode(ctx context.Context, in channel.Incoming) error 
 		name = "you"
 	}
 	return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("Linked! This account is now part of your profile, %s: same sprigs, same memories. I'll message you on whichever app you last wrote from.", name))
+}
+
+// toolDashboardLink DMs the user a one-time sign-in link for the
+// read-only dashboard. Like link codes, it goes straight to the channel,
+// never through the model or the history.
+func (e *Engine) toolDashboardLink(ctx context.Context, t *turn, _ json.RawMessage) (string, error) {
+	link, err := dashboard.LoginLink(ctx, e.DB, t.user.ID, e.Cfg.PublicURL, e.Cfg.HTTPAddr)
+	if err != nil {
+		return "", err
+	}
+	msg := "📊 Your dashboard: " + link + "\nIt works once, for the next 10 minutes, and keeps you signed in on that browser for a week. Don't share it."
+	if e.Cfg.PublicURL == "" {
+		msg += "\n\nTHICKET_PUBLIC_URL isn't set, so this only opens on the machine running Thicket. From another computer, open a tunnel first: `ssh -L 8080:localhost:8080 your-server`."
+	}
+	ch := e.channels[t.user.Channel]
+	if ch == nil {
+		return "", fmt.Errorf("no channel %q", t.user.Channel)
+	}
+	if _, err := ch.SendDirect(ctx, t.user.ExternalID, e.persona(t.char), msg); err != nil {
+		return "", fmt.Errorf("couldn't DM the link: %w", err)
+	}
+	return "Thicket DMed the user a one-time dashboard link (you can't see it). The dashboard is read-only: their sprigs, memories, jobs and skills, and for admins spending, health and activity.", nil
 }
