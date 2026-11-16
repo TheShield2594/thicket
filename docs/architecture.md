@@ -14,12 +14,13 @@ internal/scheduler   cron jobs with run history
 internal/llm         OpenRouter client, retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
-internal/channel     channel interface; channel/discord is the only adapter in v1
+internal/channel     channel interface; channel/discord is the Discord adapter
+internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
-internal/server      /health and /avatars
+internal/server      /health, /avatars, and mounts the web app at /
 ```
 
 ## A message's journey
@@ -85,3 +86,23 @@ Implement `channel.Channel` (Run, Send, SendDirect, Delete, Typing,
 Connected), then register it in `cmd/thicket` alongside Discord. Chat
 references are stored as `<channel>:<chat id>`, and users are keyed by
 `(channel, external id)`, so nothing else needs to change.
+
+## The web app
+
+`internal/web` is both a channel adapter and an HTTP handler. Chats are
+`web:<user id>.<sprig id>` (one thread per sprig) or `web:<user id>.all`
+(the shared room). The adapter authenticates the browser itself and passes
+`Incoming.UserRef`, so a web session acts as an existing Thicket user,
+Discord or web. `Incoming.Character` pins a thread to its sprig unless the
+user addresses another by name.
+
+Everything a user sees in a web chat is kept in `web_messages`, which is
+the transcript the app loads; the engine's own `messages` table is
+unchanged. Both are pruned by `THICKET_MESSAGE_RETENTION`. Live updates
+(messages, typing, deletions of scrubbed secrets) go out over one
+Server-Sent Events stream per signed-in tab.
+
+Sign-in links (`web_links`) and sessions (`web_sessions`) store only a
+SHA-256 of their token. Links work once. Writes need an `X-Thicket: 1`
+header, which cross-site pages can't send, and the app is served with a
+strict Content Security Policy.

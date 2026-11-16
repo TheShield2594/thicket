@@ -6,6 +6,9 @@ import "context"
 
 // Persona is how a character appears in a chat.
 type Persona struct {
+	// ID is the character id. Adapters that keep one thread per character
+	// (the web app) use it; Discord ignores it.
+	ID        string
 	Name      string
 	AvatarURL string
 	Color     int
@@ -24,6 +27,12 @@ type Incoming struct {
 	Mentioned bool
 	// Listening is true for group chats where the bot answers everything.
 	Listening bool
+	// UserRef is the Thicket user id when the adapter has already
+	// authenticated the sender (the web app). 0 means "look up UserID".
+	UserRef int64
+	// Character pins the chat to one sprig (a per-sprig web thread). It
+	// still yields to a sprig addressed by name.
+	Character string
 }
 
 // ChatRef is a channel-qualified chat id, stored in the database.

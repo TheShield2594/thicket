@@ -139,6 +139,8 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		if rest != "" {
 			in.Text = rest
 		}
+	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" {
+		char = c
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
 		if c, ok := e.Chars.Get(id.(string)); ok {
 			char = c
@@ -233,6 +235,13 @@ func shortErr(err error) string {
 // resolveUser maps a channel user to a Thicket user, creating the owner on
 // first contact and politely turning away strangers.
 func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.User, error) {
+	if in.UserRef != 0 { // already authenticated by the adapter
+		u, err := e.DB.UserByID(ctx, in.UserRef)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return u, err
+	}
 	u, err := e.DB.UserByExternal(ctx, in.Channel, in.UserID)
 	if err == nil {
 		return u, nil
@@ -325,7 +334,7 @@ func (e *Engine) addressedCharacter(text string) (*character.Character, string) 
 
 // persona is how a character appears in chat.
 func (e *Engine) persona(c *character.Character) channel.Persona {
-	p := channel.Persona{Name: c.DisplayName(), Color: c.ColorInt()}
+	p := channel.Persona{ID: c.ID, Name: c.DisplayName(), Color: c.ColorInt()}
 	switch {
 	case strings.HasPrefix(c.Avatar, "https://") || strings.HasPrefix(c.Avatar, "http://"):
 		p.AvatarURL = c.Avatar

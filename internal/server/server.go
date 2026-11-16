@@ -1,5 +1,5 @@
-// Package server exposes Thicket's small HTTP surface: /health, and
-// character avatars for Discord webhooks.
+// Package server exposes Thicket's HTTP surface: /health, character
+// avatars, and (mounted at "/") the web app.
 package server
 
 import (
@@ -19,7 +19,7 @@ type Check struct {
 // HealthFunc returns named checks; any failing check makes /health 503.
 type HealthFunc func(ctx context.Context) map[string]Check
 
-func New(addr, version, charsDir string, health HealthFunc) *http.Server {
+func New(addr, version, charsDir string, health HealthFunc, app http.Handler) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -48,5 +48,8 @@ func New(addr, version, charsDir string, health HealthFunc) *http.Server {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		http.ServeFile(w, r, filepath.Join(charsDir, name))
 	})
+	if app != nil {
+		mux.Handle("/", app)
+	}
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 }
