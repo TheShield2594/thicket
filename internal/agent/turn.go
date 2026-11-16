@@ -41,8 +41,11 @@ type turn struct {
 	toolCalls       int
 	handoff         *handoffReq
 	nothingToReport bool
-	done            []string // tools that ran, for a stop acknowledgement
-	afterReply      []post   // canned posts after the reply (approval prompts)
+	done            []string             // tools that ran, for a stop acknowledgement
+	consult         *consult             // answering another sprig (ask_sprig)
+	consults        int                  // ask_sprig calls this turn
+	taskFrom        *character.Character // background task given by this sprig
+	afterReply      []post               // canned posts after the reply (approval prompts)
 	noTools         bool
 }
 
@@ -217,10 +220,16 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	if t.jobMode() {
 		task := fmt.Sprintf("[Scheduled job %q]\nTask: %s", t.job.Name, t.job.Prompt)
-		if t.job.Kind == store.JobWebhook || t.job.Payload != "" {
+		switch {
+		case t.taskFrom != nil:
+			task = fmt.Sprintf("[Background task from %s]\nDo this, then write the message the user should get with the result:\n%s", t.taskFrom.DisplayName(), t.job.Prompt)
+		case t.job.Kind == store.JobWebhook || t.job.Payload != "":
 			task = e.webhookTask(t.job)
 		}
 		msgs = append(msgs, llm.Message{Role: "user", Content: task})
+	}
+	if t.consult != nil {
+		msgs = append(msgs, llm.Message{Role: "user", Content: consultMessage(t.consult)})
 	}
 	if event != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + event})

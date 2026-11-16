@@ -74,9 +74,16 @@ type Engine struct {
 	waitingIn   sync.Map // chatRef -> *atomic.Int32
 	stopSeq     sync.Map // chatRef -> uint64
 	arrivals    atomic.Uint64
-	linkMu      sync.Mutex
-	links       map[string]linkCode    // code -> pending link
-	linkFails   map[string][]time.Time // channel:user -> failed attempts
+	// Background tasks sprigs hand each other (delegate_task). They end
+	// with lifetime (set by the app), not with the message that started
+	// them.
+	tasks     sync.WaitGroup
+	taskSeq   atomic.Int64
+	lifeMu    sync.Mutex
+	lifetime  context.Context
+	linkMu    sync.Mutex
+	links     map[string]linkCode    // code -> pending link
+	linkFails map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {

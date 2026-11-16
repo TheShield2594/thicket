@@ -86,7 +86,7 @@ Unknown fields are an error, so typos don't silently do nothing.
 ## Tool scopes
 
 Every sprig can always use its memory (remember, list, forget, follow-ups)
-and hand off to another sprig. Anything else must be granted:
+and work with other sprigs (hand off, ask one a question, or give one a background task). Anything else must be granted:
 
 | Scope | Gives |
 |---|---|

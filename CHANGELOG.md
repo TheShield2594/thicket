@@ -53,6 +53,11 @@ First version.
   meantime. Only the person who started it, or an admin, can stop it.
   With no reply running, it stops the user's running jobs. Also
   `POST /api/v1/stop` and `thicket stop`.
+- Sprigs working together: `ask_sprig` lets a sprig ask a fellow sprig a
+  question mid-reply and use the answer (the asked sprig sees only the
+  question and can't ask others in turn); `delegate_task` gives a fellow
+  sprig, or itself, a background task whose result arrives by DM (stop
+  cancels it; 3 per user at a time).
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

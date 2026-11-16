@@ -64,6 +64,11 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 		if tool.JobOnly && !t.jobMode() || tool.ChatOnly && t.jobMode() {
 			continue
 		}
+		// A sprig answering another sprig gets its own tools, minus the
+		// conversation-shaping ones and the ability to pull in others.
+		if t.consult != nil && (teamTools[tool.Name] || tool.ChatOnly || tool.JobOnly) {
+			continue
+		}
 		if tool.AdminOnly && !t.user.IsAdmin() {
 			continue
 		}
@@ -161,6 +166,19 @@ func (e *Engine) builtinTools() []*Tool {
 			Params:      `{"type":"object","properties":{"to":{"type":"string","description":"character id"},"message":{"type":"string","description":"what they should pick up"}},"required":["to","message"]}`,
 			ChatOnly:    true,
 			Run:         e.toolHandoff,
+		},
+		{
+			Name:        "ask_sprig",
+			Description: "Ask a fellow sprig something you need (what's on the calendar, what they know about a topic) and get their answer back, without handing the user over. Include the context they need: they don't see this conversation.",
+			Params:      `{"type":"object","properties":{"to":{"type":"string","description":"sprig id or name"},"question":{"type":"string"}},"required":["to","question"]}`,
+			Run:         e.toolAskSprig,
+		},
+		{
+			Name:        "delegate_task",
+			Description: "Give a fellow sprig (or yourself, with no 'to') a longer piece of work to do in the background, so the chat stays free. They message the user with the result when done. Write the task so it stands alone: they don't see this conversation.",
+			Params:      `{"type":"object","properties":{"to":{"type":"string","description":"sprig id or name (default: you)"},"task":{"type":"string","description":"what to do and what to report"}},"required":["task"]}`,
+			ChatOnly:    true,
+			Run:         e.toolDelegateTask,
 		},
 		{
 			Name:        "nothing_to_report",

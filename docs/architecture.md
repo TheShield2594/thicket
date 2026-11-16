@@ -154,6 +154,21 @@ no reply running, a stop cancels the user's running jobs (`jobsRunning`),
 whose runs are recorded as "stopped by the user" without a failure
 report. Tools that finished stay done: nothing is rolled back.
 
+## Sprigs working together
+
+Three ways, all tools: `handoff` (the next sprig replies to the user, at
+most 2 deep), `ask_sprig` and `delegate_task`. `ask_sprig` runs a nested
+turn for the other sprig with a `consult` marker: its own identity,
+memories and tools, no conversation history (the question must carry the
+context), and no `ask_sprig`, `handoff`, `delegate_task` or chat-only
+tools, so there are no chains. Its answer comes back wrapped as untrusted
+data and is recorded as an event in the conversation; approvals it raises
+go out with the asking sprig's reply; at most 2 per turn. `delegate_task`
+starts a background turn in job mode (kind `task`, not stored as a job),
+registered with the running jobs so "stop" cancels it, capped at 3 per
+user and 10 minutes, tied to the app's lifetime; the result goes to the
+user by DM from the sprig that did it.
+
 ## Reliability rules
 
 - Success is checked in code: exit status, API responses, run records. The

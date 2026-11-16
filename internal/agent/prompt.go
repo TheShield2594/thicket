@@ -86,7 +86,9 @@ func buildSystemPrompt(in promptInput) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("If a request is clearly another sprig's job, use the handoff tool rather than doing it badly yourself.\n")
+		b.WriteString("Working together: if you need something another sprig knows or can do, ask_sprig them and carry on with their answer. ")
+		b.WriteString("If the request is really another sprig's job and the user should talk to them, use handoff. ")
+		b.WriteString("For longer work that can happen while the user does other things, delegate_task.\n")
 	}
 
 	b.WriteString("\n## What you remember\n")

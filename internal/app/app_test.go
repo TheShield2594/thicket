@@ -215,7 +215,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		switch {
 		case strings.Contains(all, "slow tool task") && last.Role != "tool":
 			return toolCall("remember", map[string]any{"content": "Likes slow tasks.", "scope": "shared", "kind": "fact"}), nil
-		case strings.Contains(all, "slow tool task"), strings.Contains(lastUserText(req.Messages)+last.Content, "slow task"):
+		case strings.Contains(all, "slow tool task"),
+			// "have pip look into the slow task" delegates it: Juni herself
+			// answers at once, and Pip's background task hangs.
+			strings.Contains(lastUserText(req.Messages)+last.Content, "slow task") && !strings.HasPrefix(lastUserText(req.Messages), "have pip"):
 			return m.hang(ctx)
 		}
 	}
@@ -224,6 +227,13 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text(`{"in_character": true}`), nil
 	case strings.Contains(sys, "You maintain long-term memory"):
 		return text(`{"ops":[{"op":"add","scope":"shared","kind":"person","content":"Has a sister called Maya."}]}`), nil
+	case strings.HasPrefix(sys, "You are Pip") && strings.Contains(last.Content, "is asking you this"):
+		if strings.Contains(last.Content, "chain") {
+			return toolCall("ask_sprig", map[string]any{"to": "juniper", "question": "and you?"}), nil
+		}
+		return text("Tomorrow: dentist at 10, standup at 2."), nil
+	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
+		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
 		return text("Pip here! I'll sort your calendar."), nil
 	}
@@ -267,6 +277,14 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		var v int
 		fmt.Sscanf(u, "restore briefing to %d", &v)
 		return toolCall("manage_skill", map[string]any{"id": "briefing", "action": "restore", "version": v}), nil
+	case strings.Contains(u, "ask pip"):
+		q := "What's on the calendar tomorrow?"
+		if strings.Contains(u, "chain") {
+			q = "chain: ask someone else"
+		}
+		return toolCall("ask_sprig", map[string]any{"to": "pip", "question": q}), nil
+	case strings.Contains(u, "have pip look into"):
+		return toolCall("delegate_task", map[string]any{"to": "pip", "task": strings.TrimPrefix(u, "have pip look into ")}), nil
 	case strings.Contains(u, "link my other app"):
 		return toolCall("link_account", map[string]any{}), nil
 	case strings.Contains(u, "webhook for ci"):

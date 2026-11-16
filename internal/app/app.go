@@ -245,6 +245,7 @@ func (a *App) Run(parent context.Context) error {
 	// waits for them before returning (Close must not race live workers).
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	a.Engine.SetLifetime(ctx) // background tasks end with Thicket
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
 	mcpDone := make(chan struct{})
@@ -312,6 +313,7 @@ func (a *App) Run(parent context.Context) error {
 		scancel()
 	}
 	wg.Wait()
+	a.Engine.WaitTasks()
 	return err
 }
 

@@ -70,6 +70,10 @@ exactly what's missing, and `GET /health` reports each part.
 
 - In DMs, just talk. The sprig you spoke to last keeps the conversation.
 - Address someone by name to switch: `Pip, what's on tomorrow?`
+- Sprigs work together: one can ask another a question mid-reply ("let me
+  check with Pip"), hand you over, or give one a longer task to do in the
+  background while you keep chatting; that sprig messages you when it's
+  done.
 - In server channels, sprigs answer when you @-mention the bot or start
   with a sprig's name. List channel ids in `THICKET_DISCORD_CHANNELS` to have
   them answer everything there. Telegram groups work the same way, with
