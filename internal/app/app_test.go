@@ -297,6 +297,13 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("delegate_task", map[string]any{"to": "pip", "task": strings.TrimPrefix(u, "have pip look into ")}), nil
 	case strings.Contains(u, "link my other app"):
 		return toolCall("link_account", map[string]any{}), nil
+	case strings.Contains(u, "signed webhook for ci"):
+		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke.", "signature": "github"}), nil
+	case strings.HasPrefix(u, "sign job "):
+		var id int
+		var style string
+		fmt.Sscanf(u, "sign job %d with %s", &id, &style)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "set_signature", "signature": style}), nil
 	case strings.Contains(u, "webhook for ci"):
 		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke."}), nil
 	case strings.HasPrefix(u, "new url for job "):

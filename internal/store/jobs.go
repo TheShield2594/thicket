@@ -22,6 +22,9 @@ type Job struct {
 	// HookHash is the SHA-256 (hex) of a webhook job's URL token; only
 	// read when creating a job.
 	HookHash string
+	// HookAuth is how a webhook job's calls must be signed: "" (none),
+	// "github", "gitea" or "gitlab".
+	HookAuth string
 	// Payload is what a webhook call sent. Not stored: it lives only for
 	// the run it started.
 	Payload string
@@ -43,14 +46,14 @@ type JobRun struct {
 	CostUSD    float64
 }
 
-const jobCols = "id, user_id, character, name, schedule, prompt, enabled, last_run_at, created_at, kind"
+const jobCols = "id, user_id, character, name, schedule, prompt, enabled, last_run_at, created_at, kind, hook_auth"
 
 func scanJob(r interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
 	var en int
 	var last sql.NullInt64
 	var created int64
-	if err := r.Scan(&j.ID, &j.UserID, &j.Character, &j.Name, &j.Schedule, &j.Prompt, &en, &last, &created, &j.Kind); err != nil {
+	if err := r.Scan(&j.ID, &j.UserID, &j.Character, &j.Name, &j.Schedule, &j.Prompt, &en, &last, &created, &j.Kind, &j.HookAuth); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -89,6 +92,18 @@ func (s *Store) JobByHook(ctx context.Context, hash string) (*Job, error) {
 // SetJobHook replaces a webhook job's token hash (the old URL stops working).
 func (s *Store) SetJobHook(ctx context.Context, id int64, hash string) error {
 	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET hook_hash = ? WHERE id = ? AND kind = 'webhook'", hash, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetJobHookAuth sets how a webhook job's calls must be signed.
+func (s *Store) SetJobHookAuth(ctx context.Context, id int64, auth string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET hook_auth = ? WHERE id = ? AND kind = 'webhook'", auth, id)
 	if err != nil {
 		return err
 	}

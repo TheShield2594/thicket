@@ -69,6 +69,12 @@ First version.
   in with a one-time link from Juni (`dashboard_link`) or
   `thicket dashboard-link`; sessions last a week. No JavaScript, strict
   security headers. Schema v8 adds `web_sessions`.
+- Webhook signatures: a webhook can require calls signed the way GitHub,
+  Gitea/Forgejo or GitLab sign them (`signature` on `create_webhook`, or
+  `set_signature` on `update_job`). Thicket generates the secret, keeps
+  it encrypted and DMs it; bad signatures get 401 and a notice, repeated
+  deliveries aren't run twice, and the event name reaches the sprig. A
+  new URL also replaces the secret. Schema v9 adds `jobs.hook_auth`.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

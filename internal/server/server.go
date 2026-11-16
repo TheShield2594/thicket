@@ -23,7 +23,7 @@ type HealthFunc func(ctx context.Context) map[string]Check
 
 // HookFunc starts the webhook job for token with the request body. It
 // returns the HTTP status and a short message for the caller.
-type HookFunc func(ctx context.Context, token string, body []byte, contentType string) (int, string)
+type HookFunc func(ctx context.Context, token string, body []byte, header http.Header) (int, string)
 
 // New builds the HTTP server. api, if set, serves /api/; dash serves
 // /dashboard.
@@ -49,7 +49,7 @@ func New(addr, version, charsDir string, health HealthFunc, hooks HookFunc, maxB
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
-			code, msg := hooks(ctx, r.PathValue("token"), body, r.Header.Get("Content-Type"))
+			code, msg := hooks(ctx, r.PathValue("token"), body, r.Header)
 			writeJSON(w, code, msg)
 		})
 	}

@@ -99,7 +99,12 @@ and `thk_…` is a secret pattern, so a pasted URL is intercepted like any
 key. `Fire` refuses paused jobs, overlapping runs, a run within a minute
 of the last and more than 50 a day; the body (64 KB max, secrets
 redacted) is wrapped as untrusted data in the job prompt. Runs are
-recorded and reported exactly like scheduled ones.
+recorded and reported exactly like scheduled ones. A job can also require
+signatures (`jobs.hook_auth`: github, gitea, gitlab): `CheckWebhook`
+verifies the HMAC (or GitLab's token) in constant time against a secret
+in the encrypted secret store (`webhook_<id>_signing`, DMed by code),
+before the job is fired, and drops repeated delivery ids via
+`ClaimNotice`.
 
 ## Local API
 

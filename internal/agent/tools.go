@@ -224,7 +224,7 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "create_webhook",
 			Description: "Create a job that runs when something outside Thicket calls a private URL (Home Assistant, CI, a script, another service), instead of on a schedule. Whatever the caller POSTs is given to the owner sprig as input. Thicket DMs the URL to the user; you never see it.",
-			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"}},"required":["name","task"]}`,
+			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"require calls signed the way that service signs webhooks (recommended when the sender is GitHub, Gitea/Forgejo or GitLab)"}},"required":["name","task"]}`,
 			Scope:       "schedule",
 			ChatOnly:    true,
 			Run:         e.toolCreateWebhook,
@@ -245,8 +245,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "update_job",
-			Description: "Pause, resume or delete a scheduled or webhook job. new_url gives a webhook job a fresh URL (DMed to the user) and stops the old one, e.g. if it leaked.",
-			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete","new_url"]}},"required":["job_id","action"]}`,
+			Description: "Pause, resume or delete a scheduled or webhook job. new_url gives a webhook job a fresh URL (and signing secret), DMed to the user, and stops the old ones, e.g. if they leaked. set_signature makes a webhook job require calls signed the way GitHub, Gitea/Forgejo or GitLab sign them (or none).",
+			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete","new_url","set_signature"]},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"for set_signature"}},"required":["job_id","action"]}`,
 			Scope:       "schedule",
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
@@ -741,8 +741,9 @@ func (e *Engine) toolJobHistory(ctx context.Context, t *turn, args json.RawMessa
 
 func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		JobID  int64  `json:"job_id"`
-		Action string `json:"action"`
+		JobID     int64  `json:"job_id"`
+		Action    string `json:"action"`
+		Signature string `json:"signature"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -754,12 +755,17 @@ func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessag
 	switch a.Action {
 	case "new_url":
 		return e.regenerateHook(ctx, t, j)
+	case "set_signature":
+		return e.setHookSignature(ctx, t, j, a.Signature)
 	case "pause":
 		err = e.DB.SetJobEnabled(ctx, j.ID, false)
 	case "resume":
 		err = e.DB.SetJobEnabled(ctx, j.ID, true)
 	case "delete":
 		err = e.DB.DeleteJob(ctx, j.ID)
+		if err == nil && j.HookAuth != "" {
+			_ = e.Secrets.Delete(ctx, hookSecretName(j.ID))
+		}
 	default:
 		return "", fmt.Errorf("unknown action %q", a.Action)
 	}

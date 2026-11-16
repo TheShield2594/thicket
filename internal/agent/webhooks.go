@@ -76,9 +76,10 @@ func (e *Engine) sendHookURL(ctx context.Context, u *store.User, c *character.Ch
 
 func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		Name  string `json:"name"`
-		Task  string `json:"task"`
-		Owner string `json:"owner"`
+		Name      string `json:"name"`
+		Task      string `json:"task"`
+		Owner     string `json:"owner"`
+		Signature string `json:"signature"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -106,6 +107,13 @@ func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMe
 	if err := e.sendHookURL(ctx, t.user, owner, j, token); err != nil {
 		_ = e.DB.DeleteJob(ctx, j.ID) // a URL nobody received is useless
 		return "", fmt.Errorf("couldn't DM the user the webhook URL, so I didn't create it: %w", err)
+	}
+	if a.Signature != "" && a.Signature != "none" {
+		note, err := e.setHookSignature(ctx, t, j, a.Signature)
+		if err != nil {
+			return "", fmt.Errorf("created webhook job #%d, but couldn't turn on signatures: %w", j.ID, err)
+		}
+		return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL. %s", j.ID, owner.DisplayName(), note), nil
 	}
 	return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL; you can't see it, and never ask the user to paste it. "+
 		"Tell them it's in their DMs, that a POST with any body (JSON or text, up to %d KB) runs the task with that body as input, "+
@@ -137,7 +145,15 @@ func (e *Engine) regenerateHook(ctx context.Context, t *turn, j *store.Job) (str
 	if err := e.sendHookURL(ctx, user, owner, j, token); err != nil {
 		return "", fmt.Errorf("made a new URL (the old one no longer works) but couldn't DM it: %w; try again", err)
 	}
+	if j.HookAuth != "" {
+		if err := e.rotateHookSecret(ctx, t, j, j.HookAuth); err != nil {
+			return "", fmt.Errorf("made a new URL, but couldn't replace the signing secret: %w", err)
+		}
+	}
 	e.logActivity(ctx, "info", "job", j.Character, t.user.ID, fmt.Sprintf("webhook job #%d got a new URL", j.ID), "")
+	if j.HookAuth != "" {
+		return fmt.Sprintf("Job #%d has a new URL and a new signing secret, both DMed to its owner. The old ones no longer work.", j.ID), nil
+	}
 	return fmt.Sprintf("Job #%d has a new URL, DMed to its owner. The old URL no longer works.", j.ID), nil
 }
 
@@ -145,7 +161,7 @@ func (e *Engine) regenerateHook(ctx context.Context, t *turn, j *store.Job) (str
 // call, or the local API with a payload): the task, then what the caller
 // sent, as untrusted data.
 func (e *Engine) webhookTask(j *store.Job) string {
-	payload := strings.TrimSpace(e.Secrets.Redact(j.Payload))
+	payload := strings.TrimSpace(e.Secrets.Redact(j.Payload)) // signing secrets included
 	if payload == "" {
 		payload = "(empty body)"
 	}
@@ -161,7 +177,11 @@ func (e *Engine) webhookTask(j *store.Job) string {
 // calls are being turned away. Calls themselves aren't logged one by one,
 // so a leaked URL can't flood the activity log.
 func (e *Engine) WebhookRefused(ctx context.Context, j store.Job, cause error) {
-	if ok, err := e.DB.ClaimNotice(ctx, fmt.Sprintf("hooklimit:%d", j.ID), 6*time.Hour); err != nil || !ok {
+	key := fmt.Sprintf("hooklimit:%d", j.ID)
+	if errors.Is(cause, ErrBadSignature) {
+		key = fmt.Sprintf("hooksig:%d", j.ID)
+	}
+	if ok, err := e.DB.ClaimNotice(ctx, key, 6*time.Hour); err != nil || !ok {
 		return
 	}
 	user, err := e.DB.UserByID(ctx, j.UserID)
@@ -176,6 +196,9 @@ func (e *Engine) WebhookRefused(ctx context.Context, j store.Job, cause error) {
 	}
 	e.logActivity(ctx, "warn", "job", char.ID, user.ID, fmt.Sprintf("webhook job #%d calls refused", j.ID), cause.Error())
 	msg := fmt.Sprintf("Heads-up: my webhook job “%s” is being called faster than I'll run it (%s), so I'm turning some calls away. If that's unexpected, the URL may have leaked: ask me for a new one.", j.Name, cause)
+	if errors.Is(cause, ErrBadSignature) {
+		msg = fmt.Sprintf("Heads-up: my webhook job “%s” got calls without a valid signature, so I refused them. If you haven't just changed the sender's settings, someone else may have the URL: ask me for a new URL and secret.", j.Name)
+	}
 	if err := e.sendToUser(ctx, user, char, msg); err != nil {
 		e.Log.Error("report webhook refusal", "job", j.ID, "err", err)
 	}

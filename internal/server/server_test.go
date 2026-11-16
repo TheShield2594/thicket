@@ -11,8 +11,8 @@ import (
 
 func TestHookRoute(t *testing.T) {
 	var gotToken, gotBody, gotCT string
-	hooks := func(_ context.Context, token string, body []byte, ct string) (int, string) {
-		gotToken, gotBody, gotCT = token, string(body), ct
+	hooks := func(_ context.Context, token string, body []byte, h http.Header) (int, string) {
+		gotToken, gotBody, gotCT = token, string(body), h.Get("Content-Type")
 		return http.StatusAccepted, "started"
 	}
 	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return nil }, hooks, 16, nil, nil).Handler)

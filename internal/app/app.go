@@ -405,7 +405,7 @@ func (a *App) Close() {
 
 // Webhook starts the webhook job a token belongs to. Unknown tokens get
 // the same answer as a missing route, and nothing about the job leaks.
-func (a *App) Webhook(ctx context.Context, token string, body []byte, contentType string) (int, string) {
+func (a *App) Webhook(ctx context.Context, token string, body []byte, header http.Header) (int, string) {
 	if !strings.HasPrefix(token, "thk_") || len(token) > 100 {
 		return http.StatusNotFound, "not found"
 	}
@@ -417,12 +417,25 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, contentTyp
 		a.Log.Error("webhook lookup", "err", err)
 		return http.StatusInternalServerError, "internal error"
 	}
+	switch err := a.Engine.CheckWebhook(ctx, *j, body, header); {
+	case errors.Is(err, agent.ErrDuplicate):
+		return http.StatusOK, "already received"
+	case err != nil:
+		return http.StatusUnauthorized, err.Error()
+	}
 	payload := string(body)
 	if !utf8.ValidString(payload) {
 		payload = fmt.Sprintf("(%d bytes of binary data, not shown)", len(body))
 	}
-	if ct := strings.TrimSpace(contentType); ct != "" && payload != "" {
-		payload = "Content-Type: " + ct + "\n\n" + payload
+	var head []string
+	if ev := agent.WebhookEvent(header); ev != "" {
+		head = append(head, "Event: "+ev)
+	}
+	if ct := strings.TrimSpace(header.Get("Content-Type")); ct != "" && payload != "" {
+		head = append(head, "Content-Type: "+ct)
+	}
+	if len(head) > 0 {
+		payload = strings.Join(head, "\n") + "\n\n" + payload
 	}
 	j.Payload = payload
 	switch err := a.Scheduler.Fire(*j); {

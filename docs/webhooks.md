@@ -25,6 +25,31 @@ new URL"); the old URL stops working at once.
 Webhook jobs show up in "what jobs do I have?" and their runs in the job
 history, like scheduled jobs. Pause, resume and delete them the same way.
 
+## Signatures (GitHub, Gitea, Forgejo, GitLab)
+
+By default the URL is the webhook's only secret. When the sender is
+GitHub, Gitea, Forgejo or GitLab, have it sign every call too, so a
+leaked URL alone can't start the job: "make a webhook for CI failures,
+signed by GitHub", or for an existing one, "require GitHub signatures on
+job 3".
+
+Thicket DMs you a signing secret (`thk_whs_…`) and where to paste it:
+
+| Sender | Where | How it's checked |
+|---|---|---|
+| GitHub | Repository → Settings → Webhooks → Secret (content type `application/json`) | `X-Hub-Signature-256` HMAC-SHA256 of the body |
+| Gitea, Forgejo | Repository → Settings → Webhooks → Secret | `X-Gitea-Signature` / `X-Forgejo-Signature` HMAC-SHA256 |
+| GitLab | Project → Settings → Webhooks → Secret token | `X-Gitlab-Token` equals the secret |
+
+Calls without a matching signature get `401`, and the sprig tells you
+(at most every 6 hours). A delivery the sender retries (same
+`X-GitHub-Delivery`, `X-Gitea-Delivery` or `X-Gitlab-Event-UUID`) is
+answered `200` and not run twice. The event name (`X-GitHub-Event` and
+friends) is passed to the sprig with the body. Asking for a new URL also
+replaces the secret; "turn off signatures on job 3" goes back to the URL
+alone. The secret is kept encrypted, like API keys, and the sprig never
+sees it.
+
 ## Calling it
 
 Send a `POST` with any body, up to 64 KB:
@@ -40,6 +65,8 @@ Thicket answers straight away and runs the job in the background:
 | Status | Meaning |
 |---|---|
 | `202` | Started. The sprig messages you if there's something to say. |
+| `200` | A signed delivery that was already received (not run again). |
+| `401` | The job requires signatures and this call's was missing or wrong. |
 | `404` | No such webhook (wrong or replaced URL). |
 | `409` | The job is paused. |
 | `413` | Body over 64 KB. |
