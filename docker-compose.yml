@@ -1,0 +1,42 @@
+# Thicket: one service, one volume. Paste this into Portainer as a stack,
+# or run `docker compose up -d`. Only DISCORD_TOKEN is required; Juni asks
+# for everything else in a Discord DM.
+services:
+  thicket:
+    # Published by CI on every push to main. Without a checkout, Compose
+    # pulls this image; inside the repo, `docker compose build` builds it.
+    image: ghcr.io/theshield2594/thicket:latest
+    build: .
+    container_name: thicket
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN (see README)}
+      # Optional. Your Discord user id; otherwise the first person to DM the bot becomes the owner.
+      THICKET_OWNER_DISCORD_ID: ${THICKET_OWNER_DISCORD_ID:-}
+      # Optional. Public https URL of this server (behind your reverse proxy), used for avatar images.
+      THICKET_PUBLIC_URL: ${THICKET_PUBLIC_URL:-}
+      # Optional. Keeps the encryption key outside the volume. Any long random string.
+      THICKET_SECRET_KEY: ${THICKET_SECRET_KEY:-}
+      # Optional. You can also paste the key to Juni in a DM instead.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Optional overrides; each can also be changed later by asking Juni.
+      THICKET_MODEL: ${THICKET_MODEL:-}
+      THICKET_FALLBACK_MODEL: ${THICKET_FALLBACK_MODEL:-}
+      THICKET_CHEAP_MODEL: ${THICKET_CHEAP_MODEL:-}
+      THICKET_DAILY_BUDGET_USD: ${THICKET_DAILY_BUDGET_USD:-}
+      THICKET_MONTHLY_BUDGET_USD: ${THICKET_MONTHLY_BUDGET_USD:-}
+      THICKET_ALLOWED_USERS: ${THICKET_ALLOWED_USERS:-}
+      THICKET_DISCORD_CHANNELS: ${THICKET_DISCORD_CHANNELS:-}
+      THICKET_IDLE_AFTER: ${THICKET_IDLE_AFTER:-}
+      THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
+      THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - thicket-data:/data
+    # /health and /avatars. Put it behind your reverse proxy if you want avatars;
+    # otherwise you can drop this and nothing else changes.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  thicket-data:
