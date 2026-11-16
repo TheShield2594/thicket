@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -259,5 +260,48 @@ func TestWebLoginThrottle(t *testing.T) {
 	// The link wasn't spent by the refused attempt.
 	if uid, err := a.DB.RedeemWebLink(ctx, token); err != nil || uid != 0 {
 		t.Fatalf("link should still work: %d %v", uid, err)
+	}
+}
+
+// A concurrent burst can't slip past the limit before failures are counted.
+func TestWebLoginThrottleConcurrent(t *testing.T) {
+	a, _, _, _ := setup(t)
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+	const n = 120
+	codes := make(chan int, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			req, _ := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(fmt.Sprintf(`{"token":"bad%d"}`, i)))
+			req.Header.Set("X-Thicket", "1")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				codes <- 0
+				return
+			}
+			res.Body.Close()
+			codes <- res.StatusCode
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	reached := 0
+	for c := range codes {
+		switch c {
+		case http.StatusUnauthorized:
+			reached++ // got as far as the database
+		case http.StatusTooManyRequests:
+		default:
+			t.Fatalf("unexpected status %d", c)
+		}
+	}
+	if reached > 30 {
+		t.Fatalf("%d attempts reached the database; the limit is 30", reached)
 	}
 }
