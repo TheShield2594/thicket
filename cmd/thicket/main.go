@@ -42,6 +42,9 @@ Usage:
   thicket character list              list character files and any problems
   thicket character export ID [-o FILE]
   thicket character import FILE       add a shared character (integration access is stripped)
+  thicket web link [--user ID] [--ttl 24h]
+                                      print a one-time sign-in link for the web app
+                                      (default: the owner; on a fresh install it makes you the owner)
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket migrate                     apply database migrations and print the schema version
@@ -72,6 +75,8 @@ func main() {
 		err = characterCmd(args)
 	case "memory":
 		err = memoryCmd(args)
+	case "web":
+		err = webCmd(args)
 	case "migrate":
 		err = migrate()
 	case "version", "--version", "-v":
@@ -125,6 +130,9 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(ctx, cfg, version, app.Options{Channels: func(log *slog.Logger) []channel.Channel {
+		if cfg.DiscordToken == "" {
+			return nil // web app only
+		}
 		return []channel.Channel{discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log)}
 	}})
 	if err != nil {
@@ -386,5 +394,49 @@ func migrate() error {
 		return err
 	}
 	fmt.Println("schema version", v)
+	return nil
+}
+
+func webCmd(args []string) error {
+	if len(args) == 0 || args[0] != "link" {
+		return errors.New("usage: thicket web link [--user ID] [--ttl 24h]")
+	}
+	fs := flag.NewFlagSet("web link", flag.ContinueOnError)
+	userID := fs.Int64("user", 0, "Thicket user id to sign in as (default: the owner)")
+	ttl := fs.Duration("ttl", 24*time.Hour, "how long the link stays valid")
+	pos, err := parseFlags(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 || *ttl <= 0 || *ttl > 7*24*time.Hour {
+		return errors.New("usage: thicket web link [--user ID] [--ttl 24h] (ttl up to 168h)")
+	}
+	cfg := loadConfig()
+	db, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	who := "the owner"
+	if *userID != 0 {
+		u, err := db.UserByID(ctx, *userID)
+		if err != nil {
+			return fmt.Errorf("user %d: %w", *userID, err)
+		}
+		who = fmt.Sprintf("user %d (%s)", u.ID, u.Role)
+	} else if has, err := db.HasOwner(ctx); err != nil {
+		return err
+	} else if !has {
+		who = "a new owner (nobody owns this Thicket yet)"
+	}
+	token, err := db.CreateWebLink(ctx, *userID, *ttl)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Sign-in link for %s, valid once for %s:\n\n  %s/login#%s\n\n", who, *ttl, cfg.WebBaseURL(), token)
+	if cfg.PublicURL == "" {
+		fmt.Println("Set THICKET_PUBLIC_URL if you reach Thicket through another address.")
+	}
 	return nil
 }

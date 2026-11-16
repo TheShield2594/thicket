@@ -29,6 +29,7 @@ import (
 	"github.com/theshield2594/thicket/internal/server"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/web"
 )
 
 type Options struct {
@@ -57,6 +58,7 @@ type App struct {
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
 	HTTP      *http.Server
+	Web       *web.Adapter
 	channels  []channel.Channel
 
 	mu        sync.Mutex
@@ -162,6 +164,10 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
 	a.Engine.MCP = a.MCP
+	a.Web = web.New(db, a.Chars, log)
+	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
+	a.Web.Status = a.webStatus
+	a.channels = append(a.channels, a.Web)
 	for _, ch := range a.channels {
 		a.Engine.AddChannel(ch)
 	}
@@ -174,7 +180,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Scheduler = scheduler.New(db, a.Engine, log)
 
 	if !opts.NoHTTP {
-		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health)
+		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Web.Handler())
 	}
 	return a, nil
 }
@@ -198,6 +204,9 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		out["database"] = server.Check{OK: true}
 	}
 	for _, ch := range a.channels {
+		if ch == channel.Channel(a.Web) {
+			continue // the web app is up whenever /health answers
+		}
 		out["channel."+ch.Name()] = server.Check{OK: ch.Connected()}
 	}
 	if a.Secrets.Has(ctx, secrets.OpenRouterKey) {
@@ -214,6 +223,23 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 	}
 	out["characters"] = server.Check{OK: ok && host != nil, Detail: detail}
 	return out
+}
+
+func (a *App) webStatus(ctx context.Context, admin bool) web.Status {
+	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Secrets.Has(ctx, secrets.OpenRouterKey)}
+	for _, ch := range a.channels {
+		st.Channels[ch.Name()] = ch.Connected()
+	}
+	if admin {
+		now := time.Now()
+		day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		mon := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		st.SpendDay, _ = a.DB.SpendSince(ctx, day, "")
+		st.SpendMon, _ = a.DB.SpendSince(ctx, mon, "")
+		st.BudgetDay = a.Settings.Float(ctx, "budget.daily_usd")
+		st.BudgetMon = a.Settings.Float(ctx, "budget.monthly_usd")
+	}
+	return st
 }
 
 // Run starts everything and blocks until ctx is cancelled.
@@ -274,6 +300,7 @@ func (a *App) Run(parent context.Context) error {
 	})
 	goRun("maintenance", func() { a.maintenance(ctx) })
 	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone) })
+	goRun("first-run-link", func() { a.firstRunLink(ctx) })
 
 	a.Log.Info("thicket started", "version", a.Version, "characters", len(a.Chars.All()))
 	var err error
@@ -297,9 +324,9 @@ func (a *App) Run(parent context.Context) error {
 func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
-		ok := len(a.channels) == 0
+		ok := true
 		for _, ch := range a.channels {
-			ok = ok || ch.Connected()
+			ok = ok && ch.Connected()
 		}
 		if ok {
 			break
@@ -324,6 +351,21 @@ func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
 	}
 }
 
+// firstRunLink logs a sign-in link when nobody owns this Thicket yet, so a
+// web-only install can be set up from the container logs.
+func (a *App) firstRunLink(ctx context.Context) {
+	if has, err := a.DB.HasOwner(ctx); err != nil || has || a.HTTP == nil {
+		return
+	}
+	token, err := a.DB.CreateWebLink(ctx, 0, 24*time.Hour)
+	if err != nil {
+		a.Log.Error("first-run link", "err", err)
+		return
+	}
+	a.Log.Info("no owner yet: open this link to set up Thicket in your browser (works once, for 24 hours; `thicket web link` makes a new one)",
+		"url", a.Cfg.WebBaseURL()+"/login#"+token)
+}
+
 func (a *App) maintenance(ctx context.Context) {
 	run := func() {
 		if n, err := a.DB.SweepMemories(ctx, 30*24*time.Hour); err != nil {
@@ -333,6 +375,9 @@ func (a *App) maintenance(ctx context.Context) {
 		}
 		if _, err := a.DB.PruneMessages(ctx, a.Cfg.MessageRetention); err != nil {
 			a.Log.Error("prune messages", "err", err)
+		}
+		if err := a.DB.PruneWeb(ctx, a.Cfg.MessageRetention); err != nil {
+			a.Log.Error("prune web", "err", err)
 		}
 		if err := a.DB.PruneActivity(ctx, 90*24*time.Hour); err != nil {
 			a.Log.Error("prune activity", "err", err)

@@ -4,6 +4,9 @@ A small, self-hosted family of AI companions. Its characters are called
 **sprigs**. They live in your Discord, remember you, take a little
 initiative, and stay true to who they are.
 
+Talk to them in Discord, in the built-in web app, or both. The web app
+installs on your phone and desktop and shows every sprig at once.
+
 Thicket is one Go binary and one SQLite file. No vector database, no
 bundled browser, no plugin marketplace. You set it up by talking to Juni,
 the first sprig.
@@ -26,6 +29,11 @@ the first sprig.
   history tells "nothing found" apart from "broke".
 
 ## Quick start
+
+**Web app only?** Skip Discord: run `docker compose up -d`, then open the
+sign-in link from `docker compose logs thicket` (or run
+`docker compose exec thicket thicket web link`). Juni greets you in the
+browser and asks for an OpenRouter key there. With Discord:
 
 1. **Create a Discord bot.** At <https://discord.com/developers/applications>,
    make an application, add a bot, and switch on **Message Content Intent**.
@@ -58,6 +66,36 @@ The first person to DM the bot becomes the owner, unless you set
 Not sure something's right? `docker compose run --rm thicket check` says
 exactly what's missing, and `GET /health` reports each part.
 
+## The web app
+
+Thicket serves a web app on the same port as `/health` (8080). Each sprig
+has its own thread, there's an **Everyone** room where you address sprigs
+by name, and you can open up to three chats side by side (Shift-click a
+sprig, or use the split button on its row). The details panel shows what a
+sprig remembers, its routines and how each last run went. It installs as
+an app on phones and desktops (Add to Home Screen / Install), works in
+light and dark, and can notify you when a sprig writes while it's in the
+background.
+
+Sign-in is by one-time link; there are no passwords:
+
+- **From Discord:** DM Juni "send me a web app link". The link is posted by
+  Thicket itself and never passes through the model.
+- **From the server:** `docker compose exec thicket thicket web link`.
+- **Fresh install without Discord:** the link is printed in the container
+  logs on startup. Whoever opens it first becomes the owner.
+
+Your web account *is* your Discord account when you sign in through a
+link from Discord or as the owner, so sprigs remember the same things in
+both places. Proactive messages (follow-ups, routine results, alerts) go
+to where your account lives: Discord for Discord users, the sprig's thread
+for web-only users.
+
+To use it away from home, put it behind a reverse proxy with HTTPS and set
+`THICKET_PUBLIC_URL` so links point at the right address. Sessions last 30
+days from last use, are stored hashed, and use `HttpOnly`, `SameSite`
+cookies (`Secure` over HTTPS).
+
 ## Talking to sprigs
 
 - In DMs, just talk. The sprig you spoke to last keeps the conversation.
@@ -79,7 +117,7 @@ by asking Juni (as the owner), and the chat value wins.
 
 | Variable | Default | |
 |---|---|---|
-| `DISCORD_TOKEN` | required | Discord bot token |
+| `DISCORD_TOKEN` | | Discord bot token; without it Thicket runs as a web app only |
 | `THICKET_OWNER_DISCORD_ID` | first DM | your Discord user id |
 | `THICKET_ALLOWED_USERS` | | comma-separated Discord ids allowed in (or ask Juni to invite someone) |
 | `THICKET_DISCORD_CHANNELS` | | channel ids where sprigs answer every message |
@@ -90,11 +128,11 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DAILY_BUDGET_USD` *chat* | `2` | daily spend cap (0 = none) |
 | `THICKET_MONTHLY_BUDGET_USD` *chat* | `30` | monthly spend cap (0 = none) |
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
-| `THICKET_PUBLIC_URL` | | public https URL, so avatar images in the characters folder can be served |
+| `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links and for avatar images |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
-| `THICKET_HTTP_ADDR` | `:8080` | `/health` and `/avatars/` |
+| `THICKET_HTTP_ADDR` | `:8080` | the web app, `/health` and `/avatars/` |
 | `THICKET_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Backups and moving house
@@ -132,6 +170,9 @@ grant it.
 go test ./...
 go run ./cmd/thicket check
 ```
+
+The web app is plain HTML, CSS and JavaScript in `internal/web/static`,
+embedded in the binary. There is no build step: edit and rebuild.
 
 Dependencies are deliberately few: `discordgo`, `modernc.org/sqlite` (pure
 Go, no cgo), `yaml.v3` and `robfig/cron`. Adding one needs a reason.

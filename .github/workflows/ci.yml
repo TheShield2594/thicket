@@ -27,9 +27,12 @@ jobs:
       - name: binary smoke test
         run: |
           ./thicket version
-          # With no DISCORD_TOKEN the first-run check must fail loudly and name it.
-          if THICKET_DATA_DIR=$(mktemp -d) ./thicket check 2> check.txt; then exit 1; fi
-          grep -q "DISCORD_TOKEN is not set" check.txt
+          # Discord is optional (web app only): the check passes but says so.
+          THICKET_DATA_DIR=$(mktemp -d) ./thicket check 2> check.txt
+          grep -q "DISCORD_TOKEN is not set, so Discord is off" check.txt
+          # A real problem must still fail loudly and name it.
+          if THICKET_DATA_DIR=/proc/thicket-nope ./thicket check 2> check.txt; then exit 1; fi
+          grep -q "MISSING" check.txt
           THICKET_DATA_DIR=$(mktemp -d) ./thicket migrate
 
   docker:

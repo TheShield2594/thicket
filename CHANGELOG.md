@@ -30,3 +30,12 @@ First version.
 - `/health`, structured JSON logs, activity log, failures reported in chat.
 - Export / restore, daily snapshots, character import and export.
 - Schema migration 0001.
+- **Web app.** Every sprig in one place: a thread per sprig, an Everyone
+  room, up to three chats side by side, a details panel with memories and
+  routines, live typing and replies, light and dark themes. Installable
+  as an app (PWA) on phones and desktops.
+- One-time sign-in links from `thicket web link`, from Juni in a Discord
+  DM (`web_app_link`), or from the startup log on a fresh install.
+- Discord is now optional: without `DISCORD_TOKEN` Thicket runs as a web
+  app only.
+- Schema migration 0002 (web sign-in, sessions and transcripts).

@@ -1,6 +1,7 @@
 # Thicket: one service, one volume. Paste this into Portainer as a stack,
-# or run `docker compose up -d`. Only DISCORD_TOKEN is required; Juni asks
-# for everything else in a Discord DM.
+# or run `docker compose up -d`. Nothing is required: without DISCORD_TOKEN
+# Thicket runs as a web app only (the sign-in link is in the logs). Juni
+# asks for everything else in chat.
 services:
   thicket:
     # Published by CI on every push to main. Without a checkout, Compose
@@ -10,10 +11,12 @@ services:
     container_name: thicket
     restart: unless-stopped
     environment:
-      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN (see README)}
+      # Optional. Leave empty to use only the web app.
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       # Optional. Your Discord user id; otherwise the first person to DM the bot becomes the owner.
       THICKET_OWNER_DISCORD_ID: ${THICKET_OWNER_DISCORD_ID:-}
-      # Optional. Public https URL of this server (behind your reverse proxy), used for avatar images.
+      # Optional. Public https URL of this server (behind your reverse proxy), used for
+      # web app sign-in links and avatar images.
       THICKET_PUBLIC_URL: ${THICKET_PUBLIC_URL:-}
       # Optional. Keeps the encryption key outside the volume. Any long random string.
       THICKET_SECRET_KEY: ${THICKET_SECRET_KEY:-}
@@ -33,8 +36,8 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - thicket-data:/data
-    # /health and /avatars. Put it behind your reverse proxy if you want avatars;
-    # otherwise you can drop this and nothing else changes.
+    # The web app, /health and /avatars. Open http://localhost:8080 on this machine,
+    # or put it behind your reverse proxy (with HTTPS) to use it from elsewhere.
     ports:
       - "127.0.0.1:8080:8080"
 

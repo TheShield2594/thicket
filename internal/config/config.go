@@ -83,6 +83,18 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
+// WebBaseURL is where the web app is reached: THICKET_PUBLIC_URL, or the
+// local HTTP address.
+func (c *Config) WebBaseURL() string {
+	if c.PublicURL != "" {
+		return c.PublicURL
+	}
+	if strings.HasPrefix(c.HTTPAddr, ":") {
+		return "http://localhost" + c.HTTPAddr
+	}
+	return "http://" + c.HTTPAddr
+}
+
 // Problem is one item in the first-run check.
 type Problem struct {
 	Fatal bool
@@ -94,8 +106,8 @@ type Problem struct {
 func (c *Config) Check() []Problem {
 	var out []Problem
 	if c.DiscordToken == "" {
-		out = append(out, Problem{true, "DISCORD_TOKEN is not set",
-			"Create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN in your compose file."})
+		out = append(out, Problem{false, "DISCORD_TOKEN is not set, so Discord is off",
+			"That's fine if you only want the web app (run `thicket web link` for a sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -115,7 +127,7 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
 			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or set THICKET_SECRET_KEY to keep it outside the volume."})
 	}
-	if c.DiscordOwnerID == "" {
+	if c.DiscordToken != "" && c.DiscordOwnerID == "" {
 		out = append(out, Problem{false, "THICKET_OWNER_DISCORD_ID is not set",
 			"The first person to DM the bot becomes the owner."})
 	}
