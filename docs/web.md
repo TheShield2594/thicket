@@ -40,3 +40,21 @@ addresses, and redirects are held to the same rule. It reads web pages
 and text, not PDFs or other files (send those in chat instead). Anything
 that looks like a key or password on a page is blanked before a sprig
 sees it.
+
+### Behind a proxy
+
+If outbound web traffic on your network has to go through a proxy
+(`HTTPS_PROXY` / `HTTP_PROXY`), `fetch_page` can't reach anything by
+default: it connects directly so that it can check each connection's
+address. Set `THICKET_WEB_PROXY=1` to send page reads through the proxy
+named in `HTTPS_PROXY` / `HTTP_PROXY` (and honour `NO_PROXY`).
+
+The trade-off: with a proxy, the proxy makes the connection, so Thicket
+can't check the address it actually connects to. Instead it looks the
+name up first and refuses it unless every address is public, for the
+first request and every redirect. The proxy then looks the name up again,
+so a site that changes its DNS between the two lookups could still steer
+a fetch to a private address the proxy can reach. Turn it on only if your
+proxy can't reach anything you'd mind a sprig reading, or block private
+addresses on the proxy itself. Search (SearXNG, OpenRouter) isn't
+affected either way.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -226,5 +227,80 @@ func TestSendKeepsCodeBlocksAcrossChunks(t *testing.T) {
 	last := f.sent[len(f.sent)-1]["text"].(string)
 	if !strings.HasSuffix(last, "</pre>\nThat's all.") {
 		t.Errorf("text after the block came out as code: %q", last[max(0, len(last)-60):])
+	}
+}
+
+func TestAlbumIsOneMessage(t *testing.T) {
+	a, f := newTest(t)
+	a.albumWait, a.albumMaxWait = 150*time.Millisecond, time.Second
+	photo := func(id string) []any { return []any{map[string]any{"file_id": id, "file_size": 100}} }
+	f.updates = []map[string]any{
+		msg(11, 42, "private", "", map[string]any{"media_group_id": "g1", "photo": photo("a")}),
+		msg(10, 42, "private", "", map[string]any{"media_group_id": "g1", "caption": "which of these is ripe?", "photo": photo("b")}),
+		msg(12, 42, "private", "", map[string]any{"media_group_id": "g1", "photo": photo("c")}),
+		// Same group id in another chat: a separate album.
+		msg(13, 43, "private", "", map[string]any{"media_group_id": "g1", "photo": photo("d")}),
+		msg(14, 42, "private", "and a question on its own", nil),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan channel.Incoming, 10)
+	go a.Run(ctx, func(_ context.Context, in channel.Incoming) { got <- in })
+
+	seen := map[string]channel.Incoming{}
+	deadline := time.After(5 * time.Second)
+	for len(seen) < 3 {
+		select {
+		case in := <-got:
+			if _, dup := seen[in.MessageID]; dup {
+				t.Fatalf("message %s delivered twice", in.MessageID)
+			}
+			seen[in.MessageID] = in
+		case <-deadline:
+			t.Fatalf("got only %v", seen)
+		}
+	}
+	al, ok := seen["10"]
+	if !ok || al.Text != "which of these is ripe?" || len(al.Attachments) != 3 || al.ChatID != "42" {
+		t.Fatalf("album: %+v (all: %v)", al, seen)
+	}
+	if other := seen["13"]; len(other.Attachments) != 1 || other.ChatID != "43" {
+		t.Fatalf("album in another chat: %+v", other)
+	}
+	if plain := seen["14"]; plain.Text != "and a question on its own" {
+		t.Fatalf("plain message: %+v", plain)
+	}
+	select {
+	case in := <-got:
+		t.Fatalf("extra message: %+v", in)
+	case <-time.After(300 * time.Millisecond):
+	}
+	a.albumsMu.Lock()
+	defer a.albumsMu.Unlock()
+	if len(a.albums) != 0 {
+		t.Fatalf("albums left pending: %v", a.albums)
+	}
+}
+
+// Parts that keep trickling in are still sent by albumMaxWait.
+func TestAlbumMaxWait(t *testing.T) {
+	a, _ := newTest(t)
+	a.albumWait, a.albumMaxWait = 100*time.Millisecond, 250*time.Millisecond
+	got := make(chan time.Time, 10)
+	h := func(_ context.Context, in channel.Incoming) { got <- time.Now() }
+	ctx := context.Background()
+	start := time.Now()
+	for i := int64(1); i <= 8; i++ {
+		m := &message{MessageID: i, MediaGroupID: "g"}
+		a.deliver(ctx, h, m, channel.Incoming{ChatID: "1", MessageID: strconv.FormatInt(i, 10)})
+		time.Sleep(60 * time.Millisecond)
+	}
+	select {
+	case at := <-got:
+		if d := at.Sub(start); d > 400*time.Millisecond {
+			t.Fatalf("first flush after %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("album never sent")
 	}
 }

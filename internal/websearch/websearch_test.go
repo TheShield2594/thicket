@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -114,5 +116,84 @@ func TestSearXNG(t *testing.T) {
 	}
 	if got := Format(rs); !strings.Contains(got, "[1] A\nhttps://a.example\nabout tomatoes") {
 		t.Fatalf("format: %s", got)
+	}
+}
+
+// fakeProxy is a forward proxy for plain-http targets: it answers every
+// request itself, recording the absolute URLs it was asked for.
+func fakeProxy(t *testing.T) (*httptest.Server, func() []string) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.String())
+		mu.Unlock()
+		switch r.URL.Host {
+		case "public.example":
+			if r.URL.Path == "/hop" {
+				http.Redirect(w, r, "http://internal.example/secret", http.StatusFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("hello from the internet"))
+		default:
+			w.Write([]byte("internal"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), seen...) }
+}
+
+func TestFetchThroughProxy(t *testing.T) {
+	proxy, seen := fakeProxy(t)
+	pu, _ := url.Parse(proxy.URL)
+	f := &Fetcher{
+		Proxy: http.ProxyURL(pu),
+		resolve: func(_ context.Context, host string) ([]netip.Addr, error) {
+			switch host {
+			case "public.example":
+				return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+			case "mixed.example": // one public, one private: refused
+				return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("10.0.0.7")}, nil
+			default:
+				return []netip.Addr{netip.MustParseAddr("192.168.1.10")}, nil
+			}
+		},
+	}
+	p, err := f.Fetch(context.Background(), "http://public.example/page")
+	if err != nil || p.Text != "hello from the internet" {
+		t.Fatalf("public page through the proxy: %v %+v", err, p)
+	}
+	for _, target := range []string{"http://internal.example/", "http://mixed.example/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/latest/meta-data/"} {
+		if _, err := f.Fetch(context.Background(), target); !errors.Is(err, ErrBlocked) {
+			t.Errorf("%s: want ErrBlocked, got %v", target, err)
+		}
+	}
+	// Redirects are checked too.
+	if _, err := f.Fetch(context.Background(), "http://public.example/hop"); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("redirect to a private name: %v", err)
+	}
+	// The proxy was only ever asked for the public pages.
+	for _, u := range seen() {
+		if !strings.Contains(u, "public.example") {
+			t.Fatalf("proxy was asked for %s", u)
+		}
+	}
+	// A request the proxy setting sends direct still gets the
+	// connect-time check, and the proxy's own address isn't reachable
+	// that way either.
+	direct := &Fetcher{Proxy: func(*http.Request) (*url.URL, error) { return nil, nil }, AllowPrivate: false}
+	if _, err := direct.Fetch(context.Background(), proxy.URL+"/"); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("direct to a private address: %v", err)
+	}
+	f.Proxy = func(r *http.Request) (*url.URL, error) {
+		if r.URL.Host == pu.Host {
+			return nil, nil // as NO_PROXY=127.0.0.1 would
+		}
+		return pu, nil
+	}
+	f.allowAddr = func(a string) bool { return a == pu.Host } // pretend the proxy is public
+	if _, err := f.Fetch(context.Background(), proxy.URL+"/"); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("direct to the proxy's own address: %v", err)
 	}
 }
