@@ -132,7 +132,7 @@ cookies (`Secure` over HTTPS).
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
   logs. Images are seen for that reply only. A PDF's text (its first
-  20,000 characters) is kept for follow-up questions until the
+  20,000 characters, the `document_chars` setting) is kept for follow-up questions until the
   conversation goes quiet; text files stay in the conversation like any
   message. Other files (Word documents, for example) are passed on by
   name only.
@@ -214,6 +214,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
+| `document_chars` *chat only* | `20000` | how much of a PDF's text is kept for follow-up questions (0 = none); it's re-sent with every later reply |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
 | `THICKET_HTTP_ADDR` | `:8080` | the web app, `/dashboard`, `/health`, `/avatars/`, `/hooks/` and `/api/v1/` |

@@ -93,6 +93,10 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <h3>This month by sprig</h3><table><tr><th>Sprig</th><th>Heartbeat</th><th>Task</th><th>Total</th></tr>{{range $.Costs}}<tr><td>{{.Label}}</td><td>{{.Heartbeat}}</td><td>{{.Task}}</td><td><b>{{.Total}}</b></td></tr>{{else}}<tr><td class="muted" colspan="4">Nothing spent yet.</td></tr>{{end}}</table>
 <p class="muted small">Heartbeat: jobs, triggers, check-ins and memory review. Task: chats and work you asked for.</p>
 <h3>This month by model</h3><table><tr><th>Model</th><th>Calls</th><th>Cost</th></tr>{{range $.Models}}<tr><td>{{.Label}}</td><td>{{.Calls}}</td><td>{{.Total}}</td></tr>{{else}}<tr><td class="muted" colspan="3">None yet.</td></tr>{{end}}</table>
+{{if .Mix}}<h3>What chat replies re-send</h3><table>
+<tr><td>Earlier conversation</td><td class="barcell" style="width:55%">{{if .HistoryPct}}<div class="bar" style="width:{{.HistoryPct}}%"></div>{{end}}</td><td>{{.HistoryPct}}%</td></tr>
+<tr><td>Kept PDF text</td><td class="barcell" style="width:55%">{{if .DocPct}}<div class="bar" style="width:{{.DocPct}}%"></div>{{end}}</td><td>{{.DocPct}}%</td></tr></table>
+<p class="muted small">{{.Mix}} Now: history_tokens {{.HistorySet}}, document_chars {{.DocChars}}. Ask Juni to lower either to make each reply cheaper. Estimates: the provider reports one cost per call, split assuming output tokens cost 4× input.</p>{{end}}
 <h3>Last 14 days</h3><table>{{range .ByDay}}<tr><td>{{.Label}}</td><td class="barcell" style="width:55%">{{if .Pct}}<div class="bar" style="width:{{.Pct}}%"></div>{{end}}</td><td>{{.Value}}</td></tr>{{end}}</table>
 </section>{{end}}
 

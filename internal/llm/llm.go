@@ -181,6 +181,27 @@ type Request struct {
 	// WebResults > 0 has OpenRouter search the web first and give the
 	// model that many results (its "web" plugin). OpenRouter only.
 	WebResults int
+	// Mix says how much of the prompt was earlier conversation and kept
+	// documents, for spend reports. Not sent to the model.
+	Mix *PromptMix
+}
+
+// PromptMix is the make-up of a prompt, in characters of message text.
+type PromptMix struct {
+	// HistoryChars: the conversation before the message being answered
+	// (summary and pins included, kept documents not).
+	HistoryChars int
+	// DocumentChars: PDF text kept for follow-up questions.
+	DocumentChars int
+}
+
+// PromptChars is the characters of text in a prompt's messages.
+func PromptChars(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+	}
+	return n
 }
 
 type Usage struct {

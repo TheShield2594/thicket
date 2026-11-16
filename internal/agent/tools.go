@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -1022,6 +1023,12 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 			name = "(background: memory review)"
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
+	}
+	if mix, err := e.DB.PromptMixSince(ctx, month); err == nil {
+		if line := budget.MixLine(mix); line != "" {
+			fmt.Fprintf(&b, "%s Settings now: history_tokens=%d (0 = automatic), document_chars=%d.\n", line,
+				e.Settings.Int(ctx, "history_tokens"), e.Settings.Int(ctx, "document_chars"))
+		}
 	}
 	return b.String(), nil
 }

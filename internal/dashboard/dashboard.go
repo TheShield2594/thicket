@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/avatar"
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
@@ -284,6 +285,11 @@ type spendView struct {
 	DailyCap, MonthlyCap string
 	BySprig              []barView
 	ByDay                []barView
+	// Mix: how this month's chat spend split between earlier
+	// conversation and kept PDF text ("" if nothing was measured).
+	Mix                  string
+	HistoryPct, DocPct   int
+	HistorySet, DocChars string
 }
 
 type barView struct {
@@ -549,6 +555,18 @@ func (d *Dashboard) spend(ctx context.Context) (*spendView, error) {
 			label = "Background (memory review, summaries)"
 		}
 		s.BySprig = append(s.BySprig, barView{Label: label, Value: money(r.CostUSD), Pct: pct(r.CostUSD, top)})
+	}
+	mix, err := d.DB.PromptMixSince(ctx, month)
+	if err != nil {
+		return nil, err
+	}
+	if s.Mix = budget.MixLine(mix); s.Mix != "" {
+		s.HistoryPct, s.DocPct = int(100*mix.HistoryShare()+0.5), int(100*mix.DocShare()+0.5)
+		s.HistorySet = "automatic"
+		if n := d.Settings.Int(ctx, "history_tokens"); n > 0 {
+			s.HistorySet = fmt.Sprintf("%d tokens", n)
+		}
+		s.DocChars = fmt.Sprintf("%d characters", d.Settings.Int(ctx, "document_chars"))
 	}
 	days, err := d.DB.SpendByDay(ctx, day.AddDate(0, 0, -13))
 	if err != nil {

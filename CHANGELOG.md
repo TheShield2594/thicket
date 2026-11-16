@@ -15,6 +15,14 @@ stated.
   conversation as well. The web app gets pin and delete buttons. These
   commands are handled in code and never stored. New `message_refs` table
   maps chat-app message ids to stored messages; `messages.pinned`.
+- See what history costs. Each chat call records how much of its prompt
+  was earlier conversation and kept PDF text (`usage.prompt_chars`,
+  `history_chars`, `document_chars`). `thicket costs`, the dashboard and
+  the spend tool show the estimated share and dollars ("about 41% of chat
+  spend went on re-sending earlier conversation"), and the 80% budget
+  warning names `history_tokens` or `document_chars` when lowering it
+  would help. New `document_chars` setting (default 20,000, 0 = keep no
+  PDF text) replaces the fixed cap.
 
 ## Unreleased: sprigs that feel alive (schema v11)
 

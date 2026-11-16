@@ -63,7 +63,7 @@ func TestDashboard(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("dashboard: %d", resp.StatusCode)
 	}
-	for _, want := range []string{"Juni", "Has a dog named Biscuit.", "Morning digest", "30 7 * * 1-5", `id="costs"`, `id="trail"`, `id="inbox"`, "Health", `href="/"`, `class="sprig is-`} {
+	for _, want := range []string{"Juni", "Has a dog named Biscuit.", "Morning digest", "30 7 * * 1-5", `id="costs"`, "What chat replies re-send", "history_tokens automatic", `id="trail"`, `id="inbox"`, "Health", `href="/"`, `class="sprig is-`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}

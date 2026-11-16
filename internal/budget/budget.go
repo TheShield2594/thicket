@@ -171,6 +171,11 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose, Origin: llm.OriginOf(m),
 		Model: resp.Model, PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, CostUSD: resp.Usage.Cost,
 	}
+	if req.Mix != nil {
+		u.PromptChars = max(llm.PromptChars(req.Messages), 1)
+		u.HistoryChars = min(req.Mix.HistoryChars, u.PromptChars)
+		u.DocumentChars = min(req.Mix.DocumentChars, u.PromptChars-u.HistoryChars)
+	}
 	// The call is paid for even if the caller has gone away: record it
 	// regardless of cancellation, and keep it for retry if the write fails.
 	if rerr := g.DB.RecordUsage(context.WithoutCancel(ctx), u); rerr != nil {
@@ -189,7 +194,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 			g.alert(ctx, Alert{
 				Key:     "budget:" + c.name + ":" + c.period + ":80",
 				Level:   "warn",
-				Message: fmt.Sprintf("Heads up: we've used %.0f%% of the %s budget ($%.2f of $%.2f).", 100*after/c.limit, c.name, after, c.limit),
+				Message: fmt.Sprintf("Heads up: we've used %.0f%% of the %s budget ($%.2f of $%.2f).", 100*after/c.limit, c.name, after, c.limit) + g.savingTip(ctx),
 			})
 		}
 	}
@@ -200,4 +205,40 @@ func (g *Guard) alert(ctx context.Context, a Alert) {
 	if g.OnAlert != nil {
 		g.OnAlert(ctx, a)
 	}
+}
+
+// savingTip says how much of this month's chat spend went on re-sending
+// the conversation and kept documents, and which settings cut it. Empty
+// when that isn't known or isn't much.
+func (g *Guard) savingTip(ctx context.Context) string {
+	mix, err := g.DB.PromptMixSince(ctx, monthStart(g.now()))
+	if err != nil || mix.Calls == 0 {
+		return ""
+	}
+	tip := ""
+	if h := mix.HistoryShare(); h >= 0.2 {
+		cur := "automatic"
+		if n := g.Settings.Int(ctx, "history_tokens"); n > 0 {
+			cur = fmt.Sprintf("%d tokens", n)
+		}
+		tip += fmt.Sprintf(" About %.0f%% of chat spend this month went on re-sending earlier conversation with each reply; lowering history_tokens (now %s) makes every reply cheaper, at the cost of sprigs seeing less of it word for word.", 100*h, cur)
+	}
+	if d := mix.DocShare(); d >= 0.1 {
+		tip += fmt.Sprintf(" About %.0f%% went on PDF text kept for follow-up questions; lowering document_chars (now %d) keeps less of each PDF.", 100*d, g.Settings.Int(ctx, "document_chars"))
+	}
+	return tip
+}
+
+// MixLine describes how chat spend split between earlier conversation
+// and kept documents, or "" if no chat calls were measured.
+func MixLine(m store.PromptMix) string {
+	if m.Calls == 0 || m.CostUSD <= 0 {
+		return ""
+	}
+	calls := fmt.Sprintf("%d model calls", m.Calls)
+	if m.Calls == 1 {
+		calls = "1 model call"
+	}
+	return fmt.Sprintf("Of $%.2f chat spend (%s measured), about %.0f%% (≈$%.2f) went on re-sending earlier conversation (history_tokens) and %.0f%% (≈$%.2f) on PDF text kept for follow-ups (document_chars).",
+		m.CostUSD, calls, 100*m.HistoryShare(), m.HistoryUSD, 100*m.DocShare(), m.DocUSD)
 }

@@ -28,10 +28,10 @@ const (
 	// maxPDFPages bounds what one message can cost: a PDF is read as
 	// input tokens or billed per page by OCR.
 	maxPDFPages = 50
-	// maxDocumentChars is how much of a PDF's text is kept for follow-up
-	// questions. It is re-sent on every later turn of the conversation,
-	// so it trades cost against how much of a long document stays known.
-	maxDocumentChars = 20000
+	// How much of a PDF's text is kept for follow-up questions is the
+	// document_chars setting (default 20,000). It is re-sent on every later
+	// turn of the conversation, so it trades cost against how much of a
+	// long document stays known.
 )
 
 var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
@@ -251,6 +251,15 @@ func withoutMedia(msgs []llm.Message) []llm.Message {
 // call to the cheap model gets it. Best effort: failures are logged and a
 // note is stored instead, so the sprig knows to ask for the file again.
 func (e *Engine) keepDocuments(ctx context.Context, t *turn) {
+	keep := e.Settings.Int(ctx, "document_chars")
+	if keep <= 0 {
+		// Keeping is off: no parse call, just a note so a follow-up
+		// question gets an honest answer.
+		for _, f := range t.pdfs {
+			_ = e.DB.AddMessage(ctx, t.conv.ID, "document", "", f.Name+"\n[the text of this PDF wasn't kept (the document_chars setting is 0); ask the user to send it again for more questions about it]")
+		}
+		return
+	}
 	texts := matchTexts(t.pdfs, t.annotations)
 	var missing []llm.File
 	for _, f := range t.pdfs {
@@ -270,8 +279,8 @@ func (e *Engine) keepDocuments(ctx context.Context, t *turn) {
 	}
 	for _, f := range t.pdfs {
 		text := strings.TrimSpace(e.Secrets.Redact(texts[f.Name]))
-		if len(text) > maxDocumentChars {
-			cut := maxDocumentChars
+		if len(text) > keep {
+			cut := keep
 			for cut > 0 && !utf8.RuneStart(text[cut]) {
 				cut--
 			}

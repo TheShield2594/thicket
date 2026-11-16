@@ -81,12 +81,15 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	CostUSD          float64
+	// The prompt's make-up in characters (0 if not measured).
+	PromptChars, HistoryChars, DocumentChars int
 }
 
 func (s *Store) RecordUsage(ctx context.Context, u Usage) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO usage (at, user_id, character, job_id, purpose, origin, model, prompt_tokens, completion_tokens, cost_usd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.unix(), nullInt(u.UserID), u.Character, nullInt(u.JobID), u.Purpose, u.Origin, u.Model,
-		u.PromptTokens, u.CompletionTokens, u.CostUSD)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO usage (at, user_id, character, job_id, purpose, origin, model, prompt_tokens, completion_tokens, cost_usd,
+		prompt_chars, history_chars, document_chars)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.unix(), nullInt(u.UserID), u.Character, nullInt(u.JobID), u.Purpose, u.Origin, u.Model,
+		u.PromptTokens, u.CompletionTokens, u.CostUSD, u.PromptChars, u.HistoryChars, u.DocumentChars)
 	return err
 }
 

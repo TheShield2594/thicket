@@ -53,6 +53,27 @@ when the work starts, so a consistency check inside a scheduled job counts
 as heartbeat. Costs are what OpenRouter reported for each call; local model
 servers count as $0.
 
+Every chat reply re-sends part of the conversation: up to `history_tokens`
+of earlier messages (plus the summary and pins) and any PDF text kept for
+follow-ups (`document_chars`). The report says what share of chat spend
+that was, for example:
+
+```
+Of $4.10 chat spend (212 model calls measured), about 41% (≈$1.68) went on
+re-sending earlier conversation (history_tokens) and 9% (≈$0.37) on PDF
+text kept for follow-ups (document_chars).
+```
+
+The dashboard's Costs section shows the same for the month, and so does
+asking Juni "what have we spent?". These are estimates: Thicket measures
+each prompt's make-up in characters, and the provider reports one cost
+per call, which is split between prompt and reply assuming an output
+token costs 4 times an input token. Calls from before this was measured
+aren't counted. If history is most of it, ask Juni to lower
+`history_tokens` (say, to 6000); if documents are, lower `document_chars`
+or set it to 0 to keep none. The 80% budget warning names whichever
+setting is worth lowering.
+
 ### Spend caps
 
 `THICKET_DAILY_BUDGET_USD` (default 2) and `THICKET_MONTHLY_BUDGET_USD`

@@ -40,6 +40,8 @@ type turn struct {
 	budgetChars int
 	// userMsgID is the stored message this turn answers (0 if none).
 	userMsgID int64
+	// mix is what the last prompt built was made of (for spend reports).
+	mix llm.PromptMix
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -81,7 +83,8 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 
 	var reply string
 	for i := 0; ; i++ {
-		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine}
+		mix := t.mix
+		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine, Mix: &mix}
 		if i >= maxModelCallsPerTurn-1 || t.toolCalls >= maxToolCallsPerTurn {
 			// Out of budget for tools: force a final answer.
 			req.Tools = nil
@@ -104,6 +107,7 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 				return "", err
 			}
 			req.Messages = msgs
+			mix = t.mix
 			resp, err = e.LLM.Chat(ctx, req)
 		}
 		if err != nil && llm.HasMedia(req.Messages) && llm.MediaRejected(err) && ctx.Err() == nil {
@@ -200,11 +204,14 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
+	t.mix = llm.PromptMix{}
 	if summary != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
+		t.mix.HistoryChars += len(msgs[len(msgs)-1].Content)
 	}
 	if pinned != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: pinned})
+		t.mix.HistoryChars += len(pinned)
 	}
 	for i, h := range history {
 		// The message this turn answers, tracked by id: a notice added to
@@ -244,6 +251,16 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 			msgs = append(msgs, llm.Message{Role: "user", Content: documentMessage(h.Content)})
 		case h.Role == "event":
 			msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + content})
+		default:
+			continue
+		}
+		// What this turn answers isn't history; everything before it is
+		// re-sent with each reply.
+		switch n := len(msgs[len(msgs)-1].Content); {
+		case h.Role == "document":
+			t.mix.DocumentChars += n
+		case !origin:
+			t.mix.HistoryChars += n
 		}
 	}
 	if t.jobMode() {

@@ -51,7 +51,8 @@ internal/avatar      parametric SVG avatars with CSS-animated states
      to the message. After the reply, each PDF's text (from the parse
      annotations, or a parse-only call to the cheap model when the model
      read it natively) is stored as a `document` message, capped at
-     20,000 characters, so follow-up turns can use it. Memory review
+     `document_chars` (default 20,000; 0 keeps none and skips the parse
+     call), so follow-up turns can use it. Memory review
      skips documents. A model that refuses images or PDFs gets the turn
      again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
@@ -75,6 +76,18 @@ internal/avatar      parametric SVG avatars with CSS-animated states
    messages verbatim. Raw messages stay for memory review. A failed
    summary just lets old messages drop out, and isn't retried for 10
    minutes. A handoff then runs the next sprig's turn (at most 2 deep).
+
+## Spend on history
+
+`buildMessages` records the prompt's make-up on the turn
+(`llm.PromptMix`: characters of earlier conversation, including the
+summary and pins, and of kept documents), and `runTurn` attaches it to
+each chat request. The budget guard stores it with the call's usage
+(`usage.prompt_chars`, `history_chars`, `document_chars`).
+`Store.PromptMixSince` turns that into estimated tokens and dollars
+(splitting each call's cost between prompt and reply with
+`OutputPriceRatio` = 4), which `thicket costs`, the dashboard, the spend
+tool and the 80% budget warning report.
 
 ## Pins and deletes
 
