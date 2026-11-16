@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/backup"
@@ -174,7 +175,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Scheduler = scheduler.New(db, a.Engine, log)
 
 	if !opts.NoHTTP {
-		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health)
+		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Webhook, agent.MaxWebhookPayload)
 	}
 	return a, nil
 }
@@ -364,5 +365,41 @@ func (a *App) Close() {
 	}
 	if a.DB != nil {
 		a.DB.Close()
+	}
+}
+
+// Webhook starts the webhook job a token belongs to. Unknown tokens get
+// the same answer as a missing route, and nothing about the job leaks.
+func (a *App) Webhook(ctx context.Context, token string, body []byte, contentType string) (int, string) {
+	if !strings.HasPrefix(token, "thk_") || len(token) > 100 {
+		return http.StatusNotFound, "not found"
+	}
+	j, err := a.DB.JobByHook(ctx, agent.HookHash(token))
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound, "not found"
+	}
+	if err != nil {
+		a.Log.Error("webhook lookup", "err", err)
+		return http.StatusInternalServerError, "internal error"
+	}
+	payload := string(body)
+	if !utf8.ValidString(payload) {
+		payload = fmt.Sprintf("(%d bytes of binary data, not shown)", len(body))
+	}
+	if ct := strings.TrimSpace(contentType); ct != "" && payload != "" {
+		payload = "Content-Type: " + ct + "\n\n" + payload
+	}
+	j.Payload = payload
+	switch err := a.Scheduler.Fire(*j); {
+	case err == nil:
+		return http.StatusAccepted, "started"
+	case errors.Is(err, scheduler.ErrPaused):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, scheduler.ErrBusy), errors.Is(err, scheduler.ErrTooSoon), errors.Is(err, scheduler.ErrTooMany):
+		a.Engine.WebhookRefused(ctx, *j, err)
+		return http.StatusTooManyRequests, err.Error()
+	default:
+		a.Log.Error("webhook fire", "job", j.ID, "err", err)
+		return http.StatusInternalServerError, "internal error"
 	}
 }

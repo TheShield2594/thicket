@@ -204,8 +204,16 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolScheduleJob,
 		},
 		{
+			Name:        "create_webhook",
+			Description: "Create a job that runs when something outside Thicket calls a private URL (Home Assistant, CI, a script, another service), instead of on a schedule. Whatever the caller POSTs is given to the owner sprig as input. Thicket DMs the URL to the user; you never see it.",
+			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"}},"required":["name","task"]}`,
+			Scope:       "schedule",
+			ChatOnly:    true,
+			Run:         e.toolCreateWebhook,
+		},
+		{
 			Name:        "list_jobs",
-			Description: "List the user's scheduled jobs with their last run status.",
+			Description: "List the user's scheduled and webhook jobs with their last run status.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "schedule",
 			Run:         e.toolListJobs,
@@ -219,8 +227,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "update_job",
-			Description: "Pause, resume or delete a scheduled job.",
-			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete"]}},"required":["job_id","action"]}`,
+			Description: "Pause, resume or delete a scheduled or webhook job. new_url gives a webhook job a fresh URL (DMed to the user) and stops the old one, e.g. if it leaked.",
+			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete","new_url"]}},"required":["job_id","action"]}`,
 			Scope:       "schedule",
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
@@ -601,6 +609,10 @@ func (e *Engine) toolListJobs(ctx context.Context, t *turn, _ json.RawMessage) (
 		if runs, _ := e.DB.JobRuns(ctx, j.ID, 1); len(runs) > 0 {
 			last = fmt.Sprintf("last run %s: %s", runs[0].StartedAt.In(loc).Format("Mon 2 Jan 15:04"), runs[0].Status)
 		}
+		if j.Kind == store.JobWebhook {
+			fmt.Fprintf(&b, "#%d %q by %s, webhook (%s), %s\n", j.ID, j.Name, e.charName(j.Character), state, last)
+			continue
+		}
 		next := ""
 		if j.Enabled {
 			if n := scheduler.Next(j.Schedule, e.now(), loc); !n.IsZero() {
@@ -666,6 +678,8 @@ func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessag
 		return "", err
 	}
 	switch a.Action {
+	case "new_url":
+		return e.regenerateHook(ctx, t, j)
 	case "pause":
 		err = e.DB.SetJobEnabled(ctx, j.ID, false)
 	case "resume":

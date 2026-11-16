@@ -10,7 +10,7 @@ internal/app         wires everything together (also used by the smoke test)
 internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
 internal/character   character files: parse, validate, load, write without clobbering
 internal/memory      memory review (cheap model proposes, code validates) and relevance selection
-internal/scheduler   cron jobs with run history
+internal/scheduler   cron and webhook jobs with run history
 internal/llm         OpenRouter client, retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
@@ -19,7 +19,7 @@ internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
-internal/server      /health and /avatars
+internal/server      /health, /avatars and /hooks
 ```
 
 ## A message's journey
@@ -76,6 +76,19 @@ internal/server      /health and /avatars
   size budget, so only what matters goes in the prompt.
 - `context` memories expire after 14 days; expired memories are deleted 30
   days later.
+
+## Webhook jobs
+
+A job is either `cron` (the scheduler's 20-second tick runs it when due)
+or `webhook` (never ticked; `POST /hooks/{token}` starts it through
+`Scheduler.Fire`). The token is 24 random bytes; only its SHA-256 is
+stored, looked up on each call. The URL is DMed by code straight to the
+channel, outside the conversation history, so the model never sees it,
+and `thk_…` is a secret pattern, so a pasted URL is intercepted like any
+key. `Fire` refuses paused jobs, overlapping runs, a run within a minute
+of the last and more than 50 a day; the body (64 KB max, secrets
+redacted) is wrapped as untrusted data in the job prompt. Runs are
+recorded and reported exactly like scheduled ones.
 
 ## Reliability rules
 

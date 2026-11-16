@@ -224,7 +224,7 @@ func (r *Redactor) Add(v string) {
 }
 
 // Patterns that look like credentials even if we've never seen the value.
-var secretShapes = regexp.MustCompile(`(?i)\b(sk-or-v1-[a-z0-9]{20,}|sk-(?:ant-|proj-)?[a-z0-9_\-]{20,}|xox[abprs]-[a-z0-9\-]{10,}|gh[pousr]_[a-z0-9]{30,}|eyJ[a-z0-9_\-]{20,}\.[a-z0-9_\-]{20,}\.[a-z0-9_\-]{10,}|ntn_[a-z0-9]{30,}|secret_[a-z0-9]{30,})\b`)
+var secretShapes = regexp.MustCompile(`(?i)\b(sk-or-v1-[a-z0-9]{20,}|sk-(?:ant-|proj-)?[a-z0-9_\-]{20,}|xox[abprs]-[a-z0-9\-]{10,}|gh[pousr]_[a-z0-9]{30,}|eyJ[a-z0-9_\-]{20,}\.[a-z0-9_\-]{20,}\.[a-z0-9_\-]{10,}|ntn_[a-z0-9]{30,}|secret_[a-z0-9]{30,}|thk_[a-z0-9_\-]{30,})\b`)
 
 // LooksLikeSecret reports whether s contains a credential-shaped token.
 func LooksLikeSecret(s string) bool { return secretShapes.MatchString(s) }

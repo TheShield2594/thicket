@@ -41,6 +41,11 @@ First version.
 - MCP integrations over Streamable HTTP and stdio, granted per sprig.
 - Approvals for risky actions, configurable per tool.
 - Scheduled jobs with run history (ok / nothing found / error / missed).
+- Webhook jobs: "make a webhook that…" creates a job started by
+  `POST /hooks/<token>`, with the body as untrusted input. The URL is DMed
+  privately (only its hash is stored, the model never sees it) and can be
+  replaced. Capped at one run a minute and 50 a day per webhook. Schema
+  v3 adds `jobs.kind` and `jobs.hook_hash`.
 - Spend tracking per sprig and job, daily and monthly caps with alerts.
 - Retries and fallback model.
 - Encrypted secret store; secrets never reach the model or logs.

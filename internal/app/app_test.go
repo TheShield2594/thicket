@@ -177,6 +177,16 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	switch {
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
+	case strings.Contains(u, "webhook for ci"):
+		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke."}), nil
+	case strings.HasPrefix(u, "new url for job "):
+		var id int
+		fmt.Sscanf(u, "new url for job %d", &id)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "new_url"}), nil
+	case strings.HasPrefix(u, "pause job "):
+		var id int
+		fmt.Sscanf(u, "pause job %d", &id)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "pause"}), nil
 	case strings.Contains(u, "calendar"):
 		return toolCall("handoff", map[string]any{"to": "pip", "message": "help with the calendar"}), nil
 	}

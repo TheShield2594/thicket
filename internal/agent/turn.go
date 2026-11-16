@@ -169,7 +169,11 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		}
 	}
 	if t.jobMode() {
-		msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("[Scheduled job %q]\nTask: %s", t.job.Name, t.job.Prompt)})
+		task := fmt.Sprintf("[Scheduled job %q]\nTask: %s", t.job.Name, t.job.Prompt)
+		if t.job.Kind == store.JobWebhook {
+			task = e.webhookTask(t.job)
+		}
+		msgs = append(msgs, llm.Message{Role: "user", Content: task})
 	}
 	if event != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + event})

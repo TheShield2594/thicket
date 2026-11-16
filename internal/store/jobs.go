@@ -13,12 +13,24 @@ type Job struct {
 	UserID    int64
 	Character string
 	Name      string
-	Schedule  string
+	Schedule  string // cron spec; empty for webhook jobs
 	Prompt    string
+	Kind      string // cron | webhook
 	Enabled   bool
 	LastRunAt time.Time
 	CreatedAt time.Time
+	// HookHash is the SHA-256 (hex) of a webhook job's URL token; only
+	// read when creating a job.
+	HookHash string
+	// Payload is what a webhook call sent. Not stored: it lives only for
+	// the run it started.
+	Payload string
 }
+
+const (
+	JobCron    = "cron"
+	JobWebhook = "webhook"
+)
 
 type JobRun struct {
 	ID         int64
@@ -31,14 +43,14 @@ type JobRun struct {
 	CostUSD    float64
 }
 
-const jobCols = "id, user_id, character, name, schedule, prompt, enabled, last_run_at, created_at"
+const jobCols = "id, user_id, character, name, schedule, prompt, enabled, last_run_at, created_at, kind"
 
 func scanJob(r interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
 	var en int
 	var last sql.NullInt64
 	var created int64
-	if err := r.Scan(&j.ID, &j.UserID, &j.Character, &j.Name, &j.Schedule, &j.Prompt, &en, &last, &created); err != nil {
+	if err := r.Scan(&j.ID, &j.UserID, &j.Character, &j.Name, &j.Schedule, &j.Prompt, &en, &last, &created, &j.Kind); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -49,8 +61,15 @@ func scanJob(r interface{ Scan(...any) error }) (*Job, error) {
 }
 
 func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO jobs (user_id, character, name, schedule, prompt, enabled, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-		j.UserID, j.Character, j.Name, j.Schedule, j.Prompt, s.unix())
+	if j.Kind == "" {
+		j.Kind = JobCron
+	}
+	var hook any
+	if j.HookHash != "" {
+		hook = j.HookHash
+	}
+	res, err := s.db.ExecContext(ctx, "INSERT INTO jobs (user_id, character, name, schedule, prompt, enabled, created_at, kind, hook_hash) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+		j.UserID, j.Character, j.Name, j.Schedule, j.Prompt, s.unix(), j.Kind, hook)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +79,30 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
 
 func (s *Store) JobByID(ctx context.Context, id int64) (*Job, error) {
 	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobCols+" FROM jobs WHERE id = ?", id))
+}
+
+// JobByHook finds a webhook job by the hash of its token.
+func (s *Store) JobByHook(ctx context.Context, hash string) (*Job, error) {
+	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobCols+" FROM jobs WHERE kind = 'webhook' AND hook_hash = ?", hash))
+}
+
+// SetJobHook replaces a webhook job's token hash (the old URL stops working).
+func (s *Store) SetJobHook(ctx context.Context, id int64, hash string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET hook_hash = ? WHERE id = ? AND kind = 'webhook'", hash, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// JobRunsSince counts a job's runs started at or after since.
+func (s *Store) JobRunsSince(ctx context.Context, jobID int64, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM job_runs WHERE job_id = ? AND started_at >= ? AND status != 'missed'", jobID, since.Unix()).Scan(&n)
+	return n, err
 }
 
 func (s *Store) listJobs(ctx context.Context, q string, args ...any) ([]Job, error) {

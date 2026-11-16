@@ -81,6 +81,9 @@ exactly what's missing, and `GET /health` reports each part.
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
   `native`; the default is `auto`.
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
+- Let other things wake a sprig: "Make a webhook that tells me when a CI
+  build fails." Thicket DMs you a private URL; anything that POSTs to it
+  starts the job with what it sent. See [Webhooks](docs/webhooks.md).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**.
 
@@ -102,11 +105,11 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DAILY_BUDGET_USD` *chat* | `2` | daily spend cap (0 = none) |
 | `THICKET_MONTHLY_BUDGET_USD` *chat* | `30` | monthly spend cap (0 = none) |
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
-| `THICKET_PUBLIC_URL` | | public https URL, so avatar images in the characters folder can be served |
+| `THICKET_PUBLIC_URL` | | public https URL, so avatar images in the characters folder can be served and webhook URLs are complete |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
-| `THICKET_HTTP_ADDR` | `:8080` | `/health` and `/avatars/` |
+| `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/` and `/hooks/` |
 | `THICKET_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Backups and moving house
@@ -135,6 +138,7 @@ grant it.
 
 - [Character file reference](docs/characters.md)
 - [Integrations (MCP) setup](docs/mcp.md)
+- [Webhooks](docs/webhooks.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 
