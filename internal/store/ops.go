@@ -397,6 +397,17 @@ func (s *Store) ClearPendingSecret(ctx context.Context, userID int64) error {
 
 // --- notices (de-duplication) ---
 
+// ClaimOnce returns true the first time key is claimed, and false forever
+// after.
+func (s *Store) ClaimOnce(ctx context.Context, key string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO notices (key, sent_at) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", key, s.unix())
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
 // ClaimNotice returns true if key hasn't been claimed within window, and
 // claims it. Used so alerts and check-ins never spam.
 func (s *Store) ClaimNotice(ctx context.Context, key string, window time.Duration) (bool, error) {

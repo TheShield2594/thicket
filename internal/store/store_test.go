@@ -267,3 +267,42 @@ func TestMarkReviewedSkipsNewActivity(t *testing.T) {
 		t.Fatal("unchanged conversation should close")
 	}
 }
+
+func TestClaimOnceNeverExpires(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	now := time.Unix(1_800_000_000, 0)
+	s.SetClock(func() time.Time { return now })
+	if ok, _ := s.ClaimOnce(ctx, "checkin:1:123"); !ok {
+		t.Fatal("first claim")
+	}
+	now = now.Add(20 * 365 * 24 * time.Hour) // a very long quiet spell
+	if ok, _ := s.ClaimOnce(ctx, "checkin:1:123"); ok {
+		t.Fatal("same quiet spell claimed twice")
+	}
+	if ok, _ := s.ClaimOnce(ctx, "checkin:1:456"); !ok {
+		t.Fatal("a new quiet spell should be claimable")
+	}
+}
+
+func TestRollbackOfAddLeavesNoContent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	u, _ := s.CreateUser(ctx, "discord", "1", "", "owner")
+	run, _ := s.CreateExtractionRun(ctx, 0, u.ID, "m")
+	ids, _ := s.ApplyMemoryChanges(ctx, run, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Private detail.", Source: "auto"}}})
+	// A later user-initiated edit (run_id NULL) of the same memory.
+	s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "update", Memory: Memory{ID: ids[0], Content: "Private detail, edited."}}})
+	if _, err := s.RollbackRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE memory_id = ? AND (before LIKE '%Private%' OR after LIKE '%Private%')", ids[0]).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d history rows still hold the rolled-back memory's content", n)
+	}
+	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE run_id IS NULL AND memory_id = ?", ids[0]).Scan(&n)
+	if n != 0 {
+		t.Fatal("user-initiated history of a rolled-back memory was kept")
+	}
+}

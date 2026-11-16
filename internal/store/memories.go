@@ -329,7 +329,13 @@ func (s *Store) RollbackRun(ctx context.Context, runID int64) (int, error) {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM memories WHERE id = ?", e.id); err != nil {
 				return 0, err
 			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM memory_events WHERE memory_id = ? AND run_id != ?", e.id, runID); err != nil {
+			// The memory is gone: drop its other history (NULL-safe, so
+			// user-initiated events go too) and keep this run's events only
+			// as a record, without the content snapshots.
+			if _, err := tx.ExecContext(ctx, "DELETE FROM memory_events WHERE memory_id = ? AND (run_id IS NULL OR run_id != ?)", e.id, runID); err != nil {
+				return 0, err
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE memory_events SET before = NULL, after = NULL WHERE memory_id = ? AND run_id = ?", e.id, runID); err != nil {
 				return 0, err
 			}
 		case "update", "expire":
