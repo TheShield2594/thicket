@@ -127,7 +127,7 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 				locked = 1
 			}
 			res, err := tx.ExecContext(ctx, `INSERT INTO memories (user_id, character, kind, content, source, locked, due_at, expires_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.UserID, m.Character, m.Kind, m.Content, m.Source, locked,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.UserID, m.Character, m.Kind, s.clean(m.Content), m.Source, locked,
 				unixOrNil(m.DueAt), unixOrNil(m.ExpiresAt), now, now)
 			if err != nil {
 				return nil, err
@@ -152,7 +152,7 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 				exp = unixOrNil(m.ExpiresAt)
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE memories SET content = ?, kind = ?, due_at = ?, expires_at = ?, updated_at = ? WHERE id = ?",
-				m.Content, kind, due, exp, now, m.ID); err != nil {
+				s.clean(m.Content), kind, due, exp, now, m.ID); err != nil {
 				return nil, err
 			}
 		case "expire":
@@ -257,7 +257,7 @@ func (s *Store) CreateExtractionRun(ctx context.Context, convID, userID int64, m
 }
 
 func (s *Store) FinishExtractionRun(ctx context.Context, id int64, status, errText string, applied, skipped int) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE extraction_runs SET status = ?, error = ?, applied = ?, skipped = ? WHERE id = ?", status, errText, applied, skipped, id)
+	_, err := s.db.ExecContext(ctx, "UPDATE extraction_runs SET status = ?, error = ?, applied = ?, skipped = ? WHERE id = ?", status, s.clean(errText), applied, skipped, id)
 	return err
 }
 

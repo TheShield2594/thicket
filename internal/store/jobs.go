@@ -177,7 +177,7 @@ func (s *Store) StartJobRun(ctx context.Context, jobID int64, at time.Time) (int
 
 func (s *Store) FinishJobRun(ctx context.Context, runID int64, status, output, errText string, cost float64) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE job_runs SET finished_at = ?, status = ?, output = ?, error = ?, cost_usd = ? WHERE id = ?",
-		s.unix(), status, output, errText, cost, runID)
+		s.unix(), status, s.clean(output), s.clean(errText), cost, runID)
 	return err
 }
 
@@ -188,7 +188,7 @@ func (s *Store) RecordSkippedRun(ctx context.Context, jobID int64, at time.Time,
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, "INSERT INTO job_runs (job_id, started_at, finished_at, status, error) VALUES (?, ?, ?, 'missed', ?)",
-		jobID, at.Unix(), at.Unix(), "skipped: "+why)
+		jobID, at.Unix(), at.Unix(), s.clean("skipped: "+why))
 	return err
 }
 

@@ -119,6 +119,7 @@ type WebMessage struct {
 
 func (s *Store) AddWebMessage(ctx context.Context, userID int64, m WebMessage) (WebMessage, error) {
 	now := s.now()
+	m.Content = s.clean(m.Content) // the returned copy is what the browser gets
 	res, err := s.db.ExecContext(ctx, "INSERT INTO web_messages (user_id, chat_id, role, character, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 		userID, m.ChatID, m.Role, m.Character, m.Content, now.Unix())
 	if err != nil {

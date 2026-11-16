@@ -518,7 +518,7 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 	if ch == nil {
 		return fmt.Errorf("no channel %q", name)
 	}
-	return ch.Send(ctx, id, e.persona(c), text)
+	return ch.Send(ctx, id, e.persona(c), e.Secrets.Redact(text))
 }
 
 // sendIDs is send, also returning the chat app's ids for what was posted
@@ -529,6 +529,7 @@ func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Chara
 	if ch == nil {
 		return nil, fmt.Errorf("no channel %q", name)
 	}
+	text = e.Secrets.Redact(text)
 	if p, ok := ch.(channel.Poster); ok {
 		return p.SendIDs(ctx, id, e.persona(c), text)
 	}
@@ -552,6 +553,7 @@ func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
 	}
+	text = e.Secrets.Redact(text)
 	chatID, err := ch.SendDirect(ctx, u.ExternalID, e.persona(c), text)
 	if err != nil {
 		return err

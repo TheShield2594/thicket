@@ -125,6 +125,9 @@ type fakeModel struct {
 	// voice judge fail the tone item.
 	voice      string
 	judgeDrift bool
+	// say makes Juni reply with exactly this; failMsg is the error text
+	// for failOn.
+	say, failMsg string
 }
 
 func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
@@ -228,12 +231,15 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		hook()
 	}
 	m.mu.Lock()
-	failOn, voice, drift := m.failOn, m.voice, m.judgeDrift
+	failOn, voice, drift, say, failMsg := m.failOn, m.voice, m.judgeDrift, m.say, m.failMsg
 	m.mu.Unlock()
 	if failOn != "" {
 		for _, msg := range req.Messages {
 			if strings.Contains(msg.Content, failOn) {
-				return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
+				if failMsg == "" {
+					failMsg = "upstream overloaded"
+				}
+				return nil, &llm.APIError{Status: 503, Message: failMsg}
 			}
 		}
 	}
@@ -281,6 +287,9 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
 		return text("Pip here! I'll sort your calendar."), nil
+	}
+	if say != "" && strings.HasPrefix(sys, "You are Juni") {
+		return text(say), nil
 	}
 	// Juniper. "spin" keeps calling tools for as long as they're offered,
 	// to prove the loop cap (not the fake) ends the turn.
@@ -422,6 +431,12 @@ func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 
 func setupWith(t *testing.T, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
 	t.Helper()
+	return setupLogged(t, io.Discard, chans...)
+}
+
+// setupLogged is setupWith, writing Thicket's log to logOut.
+func setupLogged(t *testing.T, logOut io.Writer, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
+	t.Helper()
 	dir := t.TempDir()
 	os.Setenv("THICKET_DATA_DIR", dir)
 	t.Cleanup(func() { os.Unsetenv("THICKET_DATA_DIR") })
@@ -444,7 +459,7 @@ func setupWith(t *testing.T, chans ...*fakeChannel) (*App, *fakeModel, context.C
 			}
 			return out
 		},
-		LogOut: io.Discard,
+		LogOut: logOut,
 		NoHTTP: true,
 	})
 	if err != nil {

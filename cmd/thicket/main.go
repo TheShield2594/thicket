@@ -57,6 +57,11 @@ Usage:
   thicket skill starter [ID...|all]   list the example skills, or add them
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
+  thicket secrets list                names of stored secrets (never values) and where each comes from
+  thicket secrets set NAME            store a secret encrypted, reading the value from stdin
+  thicket secrets delete NAME         remove a stored secret
+  thicket secrets rotate-key [--out FILE]
+                                      re-encrypt every stored secret under a new master key
   thicket migrate                     apply pending database migrations (startup does this too) and list them
   thicket doctor                      check everything: database, secrets, model server, chat tokens,
                                       each MCP server, and the running server's live connections
@@ -106,6 +111,8 @@ func main() {
 		err = skillCmd(args)
 	case "web":
 		err = webCmd(args)
+	case "secrets", "secret":
+		err = secretsCmd(args, os.Stdin, os.Stdout)
 	case "migrate":
 		err = migrateCmd(os.Stdout)
 	case "costs", "cost":

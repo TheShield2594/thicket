@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -23,7 +24,7 @@ type Activity struct {
 
 func (s *Store) LogActivity(ctx context.Context, a Activity) error {
 	_, err := s.db.ExecContext(ctx, "INSERT INTO activity (at, level, kind, character, user_id, summary, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		s.unix(), a.Level, a.Kind, a.Character, nullInt(a.UserID), a.Summary, a.Detail)
+		s.unix(), a.Level, a.Kind, a.Character, nullInt(a.UserID), s.clean(a.Summary), s.clean(a.Detail))
 	return err
 }
 
@@ -193,6 +194,34 @@ func (s *Store) SecretNames(ctx context.Context) ([]string, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// ReplaceSecretBlobs rewrites stored secrets in one transaction (key
+// rotation): every name given gets its new nonce and ciphertext.
+func (s *Store) ReplaceSecretBlobs(ctx context.Context, blobs map[string][2][]byte) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.unix()
+	for name, b := range blobs {
+		res, err := tx.ExecContext(ctx, "UPDATE secrets SET nonce = ?, ciphertext = ?, updated_at = ? WHERE name = ?", b[0], b[1], now, name)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("secret %q changed during key rotation; nothing was changed, try again", name)
+		}
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secrets").Scan(&n); err != nil {
+		return err
+	}
+	if n != len(blobs) {
+		return errors.New("a secret was added during key rotation; nothing was changed, try again")
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteSecret(ctx context.Context, name string) error {

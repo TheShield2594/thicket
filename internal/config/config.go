@@ -54,6 +54,8 @@ type Config struct {
 	CheapModel    string
 
 	SecretKey string
+	// SecretKeyFile names a file holding the master key (Docker secrets).
+	SecretKeyFile string
 
 	DailyBudgetUSD   float64
 	MonthlyBudgetUSD float64
@@ -79,6 +81,7 @@ func Load() (*Config, error) {
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),
 		SecretKey:             env("THICKET_SECRET_KEY", ""),
+		SecretKeyFile:         env("THICKET_SECRET_KEY_FILE", ""),
 		DiscordListenChannels: list(env("THICKET_DISCORD_CHANNELS", "")),
 		AllowedUsers:          list(env("THICKET_ALLOWED_USERS", "")),
 		TelegramToken:         env("TELEGRAM_TOKEN", ""),
@@ -136,12 +139,12 @@ func (c *Config) Check() []Problem {
 	var out []Problem
 	// The web app always runs; Discord and Telegram are optional.
 	if c.DiscordToken == "" {
-		out = append(out, Problem{false, "DISCORD_TOKEN is not set, so Discord is off",
-			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN."})
+		out = append(out, Problem{false, "DISCORD_TOKEN is not in the environment, so Discord is off unless its token is stored (`thicket secrets list`)",
+			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and store the token with `thicket secrets set discord_token` (or set DISCORD_TOKEN)."})
 	}
 	if c.TelegramToken == "" {
-		out = append(out, Problem{false, "TELEGRAM_TOKEN is not set, so Telegram is off",
-			"For Telegram, message @BotFather, send /newbot, and set TELEGRAM_TOKEN (see docs/telegram.md)."})
+		out = append(out, Problem{false, "TELEGRAM_TOKEN is not in the environment, so Telegram is off unless its token is stored (`thicket secrets list`)",
+			"For Telegram, message @BotFather, send /newbot, and store the token with `thicket secrets set telegram_token` (or set TELEGRAM_TOKEN; see docs/telegram.md)."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -161,9 +164,22 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "OPENROUTER_API_KEY is not set",
 			"That's fine: Juni will ask for it in a DM and store it encrypted, or for the address of a local model server (Ollama, LM Studio) instead."})
 	}
-	if c.SecretKey == "" {
+	switch {
+	case c.SecretKey != "" && c.SecretKeyFile != "":
+		out = append(out, Problem{true, "both THICKET_SECRET_KEY and THICKET_SECRET_KEY_FILE are set",
+			"Set only one: THICKET_SECRET_KEY_FILE for a Docker secret, or THICKET_SECRET_KEY."})
+	case c.SecretKeyFile != "":
+		if b, err := os.ReadFile(c.SecretKeyFile); err != nil || strings.TrimSpace(string(b)) == "" {
+			msg := "it's empty"
+			if err != nil {
+				msg = err.Error()
+			}
+			out = append(out, Problem{true, "THICKET_SECRET_KEY_FILE can't be read: " + msg,
+				"Point it at the mounted secret, e.g. /run/secrets/thicket_secret_key."})
+		}
+	case c.SecretKey == "":
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
-			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or set THICKET_SECRET_KEY to keep it outside the volume."})
+			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or keep it outside the volume with THICKET_SECRET_KEY_FILE (a Docker secret) or THICKET_SECRET_KEY."})
 	}
 	if (c.DiscordToken != "" || c.TelegramToken != "") && c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
 		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID)",
@@ -171,6 +187,20 @@ func (c *Config) Check() []Problem {
 	}
 	return out
 }
+
+// EnvSecrets lists the secrets this configuration got from the
+// environment (values may be empty).
+func (c *Config) EnvSecrets() []EnvSecret {
+	return []EnvSecret{
+		{"discord_token", "DISCORD_TOKEN", c.DiscordToken},
+		{"telegram_token", "TELEGRAM_TOKEN", c.TelegramToken},
+		{"openrouter_api_key", "OPENROUTER_API_KEY", c.OpenRouterKey},
+		{"model_api_key", "THICKET_MODEL_API_KEY", c.ModelAPIKey},
+	}
+}
+
+// EnvSecret is a secret named in the environment.
+type EnvSecret struct{ Name, Env, Value string }
 
 // OwnerID is the configured owner's account id on a chat app, if any.
 func (c *Config) OwnerID(channel string) string {

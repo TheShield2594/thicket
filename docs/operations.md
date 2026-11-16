@@ -170,6 +170,45 @@ Juni ships with five. For your own sprigs, write prompts only and run
 sounds: replies are saved as the references for tests that have none.
 Voice tests are included in `thicket export` and restored with it.
 
+## Secrets
+
+Keys and tokens live in the database, encrypted with AES-256-GCM under a
+master key: `THICKET_SECRET_KEY`, else the file `THICKET_SECRET_KEY_FILE`
+names (for Docker secrets), else `/data/secret.key`, created on first run.
+Keep the master key off the volume if you can: then a copy of the
+volume alone doesn't reveal the secrets.
+
+`DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `OPENROUTER_API_KEY` and
+`THICKET_MODEL_API_KEY` given in the environment are stored on start, and
+the log says each can now be removed from your compose file. Thicket
+reads them from the store from then on. If one is still in the
+environment at startup, its value wins and replaces the stored one (so
+an orchestrator that rotates it keeps working).
+
+```
+thicket secrets list                 # names and where each comes from; never values
+thicket secrets set discord_token    # reads the value from stdin
+thicket secrets delete github_token
+thicket secrets rotate-key           # new master key, every secret re-encrypted
+```
+
+In Docker, `set` reads from a pipe or prompts:
+`docker compose exec -T thicket thicket secrets set telegram_token < token.txt`.
+New chat tokens take effect at the next restart.
+
+`rotate-key` writes the new key first, re-encrypts every secret in one
+transaction, then swaps the key files (`secret.key.old` keeps the old one
+until you delete it). Restart Thicket straight after: until then the
+running server holds the old key and can't read secrets. When the key
+comes from `THICKET_SECRET_KEY` or `THICKET_SECRET_KEY_FILE`, Thicket can't
+change it, so pass `--out FILE`, put the new key where the old one was,
+and restart.
+
+Values never reach logs, the trail, the inbox, conversations, prompts, API
+responses, the web app or the dashboard: every one of those passes
+through the redactor, which knows each stored value and credential-shaped
+strings, and a test plants each known secret and checks every sink.
+
 ## `thicket migrate`
 
 Every schema change is a numbered SQL file in

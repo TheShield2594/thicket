@@ -68,7 +68,7 @@ func (s *Store) AddMessage(ctx context.Context, convID int64, role, character, c
 func (s *Store) AddMessageID(ctx context.Context, convID int64, role, character, content string) (int64, error) {
 	now := s.unix()
 	res, err := s.db.ExecContext(ctx, "INSERT INTO messages (conversation_id, role, character, content, created_at) VALUES (?, ?, ?, ?, ?)",
-		convID, role, character, content, now)
+		convID, role, character, s.clean(content), now)
 	if err != nil {
 		return 0, err
 	}
@@ -120,7 +120,7 @@ func (s *Store) MessagesAfter(ctx context.Context, convID, afterID int64, limit 
 // SetSummary stores a conversation's new summary, only if nobody else
 // moved it since prevUpto (false otherwise).
 func (s *Store) SetSummary(ctx context.Context, convID int64, summary string, upto, prevUpto int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ? AND summary_upto = ?", summary, upto, convID, prevUpto)
+	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ? AND summary_upto = ?", s.clean(summary), upto, convID, prevUpto)
 	if err != nil {
 		return false, err
 	}

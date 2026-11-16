@@ -83,7 +83,7 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	red.Add(d.Cfg.DiscordToken)
 	red.Add(d.Cfg.TelegramToken)
 	var sec *secrets.Store
-	if key, err := secrets.LoadKey(d.Cfg.SecretKey, d.Cfg.DataDir); err != nil {
+	if key, _, err := secrets.ResolveKey(d.Cfg.SecretKey, d.Cfg.SecretKeyFile, d.Cfg.DataDir); err != nil {
 		add(Check{Name: "secrets", Detail: err.Error()})
 	} else if sec, err = secrets.New(db, key, red); err != nil {
 		add(Check{Name: "secrets", Detail: err.Error()})
@@ -95,6 +95,15 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	if sec != nil {
 		sec.SetEnvFallback(secrets.OpenRouterKey, d.Cfg.OpenRouterKey)
 		sec.SetEnvFallback(secrets.ModelAPIKey, d.Cfg.ModelAPIKey)
+		// Chat tokens may be stored rather than in the environment.
+		cfg := *d.Cfg
+		if v, err := sec.Get(ctx, secrets.DiscordToken); err == nil && cfg.DiscordToken == "" {
+			cfg.DiscordToken = v
+		}
+		if v, err := sec.Get(ctx, secrets.TelegramToken); err == nil && cfg.TelegramToken == "" {
+			cfg.TelegramToken = v
+		}
+		d.Cfg = &cfg
 	}
 
 	add(d.model(ctx, settings.New(db, d.Cfg), sec, red))

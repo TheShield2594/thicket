@@ -344,6 +344,8 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 		t.done = append(t.done, tool.Label())
 	}
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, e.Secrets.Redact(truncate(string(args), 500)+" → "+truncate(out, 500)))
+	// Tool output goes back to the model: no secret values in it.
+	out = e.Secrets.Redact(out)
 	if tool.Untrusted {
 		return wrapUntrusted(name, out)
 	}

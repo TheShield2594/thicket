@@ -192,8 +192,8 @@ by asking Juni (as the owner), and the chat value wins.
 
 | Variable | Default | |
 |---|---|---|
-| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only |
-| `TELEGRAM_TOKEN` | | Telegram bot token ([details](docs/telegram.md)) |
+| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only. Stored encrypted on first start, so you can then remove it ([details](docs/operations.md#secrets)) |
+| `TELEGRAM_TOKEN` | | Telegram bot token ([details](docs/telegram.md)); stored like `DISCORD_TOKEN` |
 | `THICKET_OWNER_DISCORD_ID` | first DM | your Discord user id |
 | `THICKET_OWNER_TELEGRAM_ID` | first DM | your numeric Telegram user id |
 | `THICKET_ALLOWED_USERS` | | comma-separated user ids allowed in, plain or as `telegram:ID` / `discord:ID` (or ask Juni to invite someone) |
@@ -211,6 +211,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DAILY_BUDGET_USD` *chat* | `2` | daily spend cap (0 = none) |
 | `THICKET_MONTHLY_BUDGET_USD` *chat* | `30` | monthly spend cap (0 = none) |
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
+| `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |

@@ -23,6 +23,16 @@ stated.
   warning names `history_tokens` or `document_chars` when lowering it
   would help. New `document_chars` setting (default 20,000, 0 = keep no
   PDF text) replaces the fixed cap.
+- Secrets in the encrypted store. `DISCORD_TOKEN`, `TELEGRAM_TOKEN`,
+  `OPENROUTER_API_KEY` and `THICKET_MODEL_API_KEY` from the environment are
+  stored on start (the environment still wins at startup) and the chat
+  apps run on the stored tokens, so a compose file needs no tokens.
+  `THICKET_SECRET_KEY_FILE` reads the master key from a file (Docker
+  secrets). New `thicket secrets list|set|delete|rotate-key`. Every text
+  sink (trail, conversations, inbox, run history, memories, web
+  transcripts, prompts, replies, chat sends, `/health`) now passes through
+  the redactor, and a pasted known secret is intercepted like a
+  credential-shaped one. A test plants each secret and checks every sink.
 
 ## Unreleased: sprigs that feel alive (schema v11)
 

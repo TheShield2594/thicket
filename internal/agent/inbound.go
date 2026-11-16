@@ -49,7 +49,10 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 			fmt.Sprintf("The user sent the secret for %s. Thicket stored it encrypted as {{secret:%s}} (you can't see the value). Carry on with the setup.", pending.Purpose, pending.Name))
 	}
 
-	if !secrets.LooksLikeSecret(in.Text) && !openRouterKeyRe.MatchString(in.Text) {
+	// Credential-shaped, or a value Thicket already holds as a secret
+	// (a pasted bot token, say).
+	known := e.Secrets.Redact(in.Text) != in.Text
+	if !known && !secrets.LooksLikeSecret(in.Text) && !openRouterKeyRe.MatchString(in.Text) {
 		return false, nil
 	}
 	if !in.IsDM {

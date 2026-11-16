@@ -26,7 +26,17 @@ const (
 	OpenRouterKey = "openrouter_api_key"
 	// ModelAPIKey is the optional key for a self-hosted model server.
 	ModelAPIKey = "model_api_key"
+	// Chat app bot tokens.
+	DiscordToken  = "discord_token"
+	TelegramToken = "telegram_token"
 )
+
+// EnvSecret is a secret that may be supplied through the environment.
+type EnvSecret struct {
+	Name  string // stored name
+	Env   string // environment variable
+	Value string // its value ("" if unset)
+}
 
 var ErrNotFound = errors.New("secret not found")
 
@@ -35,38 +45,94 @@ var nameRe = regexp.MustCompile(`^[a-z0-9_]{2,48}$`)
 // ValidName reports whether name is a usable secret name.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
+// KeySource says where the master key came from.
+type KeySource int
+
+const (
+	KeyFromDataDir KeySource = iota // <data dir>/secret.key, created on first run
+	KeyFromEnv                      // THICKET_SECRET_KEY
+	KeyFromFile                     // THICKET_SECRET_KEY_FILE (Docker secrets)
+)
+
+// KeyPath is the key file Thicket creates in the data directory.
+func KeyPath(dataDir string) string { return filepath.Join(dataDir, "secret.key") }
+
 // LoadKey returns the master key. It uses THICKET_SECRET_KEY if given
 // (any string; hashed to 32 bytes), else a key file in dataDir, creating it
 // on first run.
 func LoadKey(fromEnv, dataDir string) ([]byte, error) {
+	k, _, err := ResolveKey(fromEnv, "", dataDir)
+	return k, err
+}
+
+// ResolveKey returns the master key and where it came from: the
+// THICKET_SECRET_KEY value, else the file THICKET_SECRET_KEY_FILE names,
+// else secret.key in dataDir, created on first run. A value that isn't
+// base64 for 32 bytes is hashed to a key.
+func ResolveKey(fromEnv, fromFile, dataDir string) ([]byte, KeySource, error) {
 	if fromEnv != "" {
-		if raw, err := base64.StdEncoding.DecodeString(fromEnv); err == nil && len(raw) == 32 {
-			return raw, nil
-		}
-		sum := sha256.Sum256([]byte(fromEnv))
-		return sum[:], nil
+		return keyFrom(fromEnv), KeyFromEnv, nil
 	}
-	path := filepath.Join(dataDir, "secret.key")
+	if fromFile != "" {
+		b, err := os.ReadFile(fromFile)
+		if err != nil {
+			return nil, KeyFromFile, fmt.Errorf("THICKET_SECRET_KEY_FILE: %w", err)
+		}
+		v := strings.TrimSpace(string(b))
+		if v == "" {
+			return nil, KeyFromFile, fmt.Errorf("THICKET_SECRET_KEY_FILE %s is empty", fromFile)
+		}
+		return keyFrom(v), KeyFromFile, nil
+	}
+	path := KeyPath(dataDir)
 	if b, err := os.ReadFile(path); err == nil {
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
 		if err != nil || len(raw) != 32 {
-			return nil, fmt.Errorf("%s is corrupt; restore it from backup or delete it (stored secrets will then need to be re-entered)", path)
+			return nil, KeyFromDataDir, fmt.Errorf("%s is corrupt; restore it from backup or delete it (stored secrets will then need to be re-entered)", path)
 		}
-		return raw, nil
+		return raw, KeyFromDataDir, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, KeyFromDataDir, err
 	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
+	key, err := NewKey()
+	if err != nil {
+		return nil, KeyFromDataDir, err
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, err
+		return nil, KeyFromDataDir, err
 	}
-	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
-		return nil, err
+	if err := WriteKeyFile(path, key); err != nil {
+		return nil, KeyFromDataDir, err
 	}
-	return key, nil
+	return key, KeyFromDataDir, nil
+}
+
+func keyFrom(v string) []byte {
+	if raw, err := base64.StdEncoding.DecodeString(v); err == nil && len(raw) == 32 {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(v))
+	return sum[:]
+}
+
+// NewKey returns a fresh random master key.
+func NewKey() ([]byte, error) {
+	key := make([]byte, 32)
+	_, err := rand.Read(key)
+	return key, err
+}
+
+// EncodeKey is a key as it's written to a key file or an env variable.
+func EncodeKey(key []byte) string { return base64.StdEncoding.EncodeToString(key) }
+
+// WriteKeyFile writes a key file readable only by its owner, replacing
+// any file there in one step.
+func WriteKeyFile(path string, key []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(EncodeKey(key)+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Store is an encrypted key/value store on top of the database.
@@ -178,6 +244,84 @@ func (s *Store) Remember(v string) {
 }
 
 func (s *Store) Delete(ctx context.Context, name string) error { return s.db.DeleteSecret(ctx, name) }
+
+// Stored reports whether name is in the encrypted store (not just the
+// environment).
+func (s *Store) Stored(ctx context.Context, name string) (bool, error) {
+	_, _, err := s.db.SecretBlob(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ImportEnv stores each secret given through the environment, so it can
+// be removed from there. The environment wins at startup: a stored copy
+// that differs is replaced. It returns the names that were added or
+// changed. The values are also kept as a fallback for this run.
+func (s *Store) ImportEnv(ctx context.Context, items []EnvSecret) ([]string, error) {
+	var changed []string
+	var errs []error
+	for _, it := range items {
+		if strings.TrimSpace(it.Value) == "" {
+			continue
+		}
+		s.SetEnvFallback(it.Name, strings.TrimSpace(it.Value))
+		cur, err := s.getStored(ctx, it.Name)
+		if err == nil && cur == strings.TrimSpace(it.Value) {
+			continue
+		}
+		if err := s.Put(ctx, it.Name, it.Value); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", it.Env, err))
+			continue
+		}
+		changed = append(changed, it.Name)
+	}
+	return changed, errors.Join(errs...)
+}
+
+// getStored reads only the encrypted store, ignoring the environment.
+func (s *Store) getStored(ctx context.Context, name string) (string, error) {
+	nonce, ct, err := s.db.SecretBlob(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	pt, err := s.aead.Open(nil, nonce, ct, []byte(name))
+	if err != nil {
+		return "", fmt.Errorf("secret %q can't be decrypted", name)
+	}
+	return string(pt), nil
+}
+
+// RotateKey re-encrypts every stored secret under newKey, all or nothing.
+// It returns how many secrets were re-encrypted. The Store keeps using
+// the old key: reopen it with the new one afterwards.
+func (s *Store) RotateKey(ctx context.Context, newKey []byte) (int, error) {
+	next, err := New(s.db, newKey, NewRedactor())
+	if err != nil {
+		return 0, err
+	}
+	names, err := s.db.SecretNames(ctx)
+	if err != nil {
+		return 0, err
+	}
+	blobs := map[string][2][]byte{}
+	for _, n := range names {
+		v, err := s.getStored(ctx, n)
+		if err != nil {
+			return 0, fmt.Errorf("%w; nothing was changed (fix or delete it first: thicket secrets delete %s)", err, n)
+		}
+		nonce := make([]byte, next.aead.NonceSize())
+		if _, err := rand.Read(nonce); err != nil {
+			return 0, err
+		}
+		blobs[n] = [2][]byte{nonce, next.aead.Seal(nil, nonce, []byte(v), []byte(n))}
+	}
+	if err := s.db.ReplaceSecretBlobs(ctx, blobs); err != nil {
+		return 0, err
+	}
+	return len(blobs), nil
+}
 
 // WarmRedactor decrypts every stored secret once so the redactor knows them.
 func (s *Store) WarmRedactor(ctx context.Context) error {

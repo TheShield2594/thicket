@@ -77,6 +77,21 @@ internal/avatar      parametric SVG avatars with CSS-animated states
    summary just lets old messages drop out, and isn't retried for 10
    minutes. A handoff then runs the next sprig's turn (at most 2 deep).
 
+## Secrets
+
+`internal/secrets` encrypts values under the master key (`ResolveKey`:
+`THICKET_SECRET_KEY`, `THICKET_SECRET_KEY_FILE`, or `secret.key`). At
+start, `App.importEnvSecrets` stores the environment's chat tokens and
+model keys (`ImportEnv`: the environment wins at startup), and the chat
+adapters are built from the stored tokens. The redactor learns every
+stored value (`WarmRedactor`) and is applied at each sink: the log
+handler, `Store.SetScrubber` (the trail, conversations and summaries, the
+inbox, run and task history, memories, web transcripts), tool output
+going back to the model, `redactingModel` (every prompt, and reply text),
+every chat send, and `/health`. A message holding a known secret value is
+intercepted like a credential-shaped one. `TestPlantedSecretsReachNoSink`
+plants each kind and greps all of them, plus every database column.
+
 ## Spend on history
 
 `buildMessages` records the prompt's make-up on the turn

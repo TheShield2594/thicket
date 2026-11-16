@@ -46,7 +46,7 @@ func (s *Store) AddInbox(ctx context.Context, it InboxItem) (int64, error) {
 			// Still open? It may have been resolved since it was found;
 			// then this is a new item.
 			res, err := s.db.ExecContext(ctx, "UPDATE inbox SET count = count + 1, title = ?, detail = ?, updated_at = ? WHERE id = ? AND status = 'open'",
-				it.Title, it.Detail, now, id)
+				s.clean(it.Title), s.clean(it.Detail), now, id)
 			if err != nil {
 				return 0, err
 			}
@@ -58,7 +58,7 @@ func (s *Store) AddInbox(ctx context.Context, it InboxItem) (int64, error) {
 		}
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO inbox (user_id, character, kind, ref, title, detail, action, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, it.Title, it.Detail, it.Action, now, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, s.clean(it.Title), s.clean(it.Detail), it.Action, now, now)
 	if err != nil {
 		return 0, err
 	}
