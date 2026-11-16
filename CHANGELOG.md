@@ -21,6 +21,12 @@ First version.
   that message only. A new `pdf_engine` setting (auto, native,
   cloudflare-ai, mistral-ocr) picks how OpenRouter reads them; within a
   turn, parsed PDFs are reused instead of parsed again.
+- PDF follow-ups: a PDF's text (first 20,000 characters, secrets redacted)
+  is kept in the conversation, so later questions about it work without
+  sending it again. When the model read the PDF itself, a cheap parse-only
+  call (free `cloudflare-ai` parser, or `mistral-ocr` if chosen) gets the
+  text. Memory review skips document text. Schema v2: messages gain a
+  `document` role (the table is rebuilt; a backup is taken first).
 - Character system: one Markdown file per sprig with YAML frontmatter;
   validation, hot reload, never overwrites hand edits. Juniper ("Juni")
   ships as the host.

@@ -37,7 +37,8 @@ func lastChatReq(fm *fakeModel) llm.Request {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	for i := len(fm.reqs) - 1; i >= 0; i-- {
-		if !strings.Contains(fm.reqs[i].Messages[0].Content, "You check whether a chat reply") {
+		sys := fm.reqs[i].Messages[0].Content
+		if !strings.Contains(sys, "You check whether a chat reply") && sys != "Reply with OK." {
 			return fm.reqs[i]
 		}
 	}
@@ -160,5 +161,97 @@ func TestAttachmentOnlyMessageInGroupNeedsAddressing(t *testing.T) {
 	a.Engine.HandleIncoming(ctx, in)
 	if fm.calls != before || len(fc.take()) != 0 {
 		t.Fatal("answered an unaddressed group message")
+	}
+}
+
+func pdfMessage(text string) channel.Incoming {
+	in := dm(text)
+	in.Attachments = []channel.Attachment{{Name: "report.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100}}
+	return in
+}
+
+// lastUserContent joins every user-role message the model saw last turn.
+func allUserContent(req llm.Request) string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		if m.Role == "user" {
+			b.WriteString(m.Content + "\n")
+		}
+	}
+	return b.String()
+}
+
+func TestPDFTextKeptForFollowUps(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	a.Engine.FetchAttachment = fakeFetch
+	onboard(t, a, fc, ctx)
+	fm.mu.Lock()
+	fm.pdfText = "Quarterly revenue rose 12%. Contact key sk-or-v1-" + strings.Repeat("7q", 20)
+	fm.mu.Unlock()
+
+	a.Engine.HandleIncoming(ctx, pdfMessage("summarise this"))
+	fc.take()
+	if fm.parseCalls != 1 {
+		t.Fatalf("native read should trigger one parse-only call, got %d", fm.parseCalls)
+	}
+	// The parse-only call forces a parser: native reading returns no text.
+	for _, r := range fm.reqs {
+		if r.Messages[0].Content == "Reply with OK." && (r.PDFEngine != "cloudflare-ai" || r.MaxTokens > 16) {
+			t.Fatalf("parse call: engine %q, max tokens %d", r.PDFEngine, r.MaxTokens)
+		}
+	}
+
+	a.Engine.HandleIncoming(ctx, dm("what was the revenue growth again?"))
+	fc.take()
+	req := lastChatReq(fm)
+	if llm.HasMedia(req.Messages) {
+		t.Fatal("the PDF itself was re-sent")
+	}
+	got := allUserContent(req)
+	for _, want := range []string{"The user sent report.pdf earlier", `<untrusted source="pdf report.pdf">`, "Quarterly revenue rose 12%."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("follow-up turn missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "sk-or-v1-7q") {
+		t.Fatal("secret from the PDF reached the model")
+	}
+	assertNoLeak(t, a, "sk-or-v1-7q")
+}
+
+func TestPDFTextFromTurnAnnotationsSkipsParseCall(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	a.Engine.FetchAttachment = fakeFetch
+	onboard(t, a, fc, ctx)
+	fm.mu.Lock()
+	fm.annotateTurn = true
+	fm.mu.Unlock()
+	a.Engine.HandleIncoming(ctx, pdfMessage("summarise this"))
+	fc.take()
+	if fm.parseCalls != 0 {
+		t.Fatalf("annotations from the turn should be reused, got %d parse calls", fm.parseCalls)
+	}
+	a.Engine.HandleIncoming(ctx, dm("and the margins?"))
+	fc.take()
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "(from the turn)") {
+		t.Fatalf("turn annotations not kept:\n%s", got)
+	}
+}
+
+func TestPDFParseFailureLeavesANote(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	a.Engine.FetchAttachment = fakeFetch
+	onboard(t, a, fc, ctx)
+	fm.mu.Lock()
+	fm.parseFail = true
+	fm.mu.Unlock()
+	a.Engine.HandleIncoming(ctx, pdfMessage("summarise this"))
+	if out := fc.take(); len(out) == 0 || strings.Contains(out[0].text, "went wrong") {
+		t.Fatalf("reply should not depend on keeping the text: %+v", out)
+	}
+	a.Engine.HandleIncoming(ctx, dm("and page 2?"))
+	fc.take()
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "ask the user to send it again") {
+		t.Fatalf("missing the resend note:\n%s", got)
 	}
 }

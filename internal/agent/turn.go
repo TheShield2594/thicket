@@ -31,6 +31,8 @@ type turn struct {
 	// the model with it, this turn only.
 	images []llm.Image
 	pdfs   []llm.File
+	// annotations are OpenRouter's parsed copies of pdfs from this turn.
+	annotations []json.RawMessage
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -85,6 +87,9 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 			return "", err
 		}
 		m := resp.Message
+		if len(m.Annotations) > 0 {
+			t.annotations = append(t.annotations, m.Annotations)
+		}
 		if len(m.ToolCalls) == 0 || req.Tools == nil {
 			reply = m.Content
 			break
@@ -143,7 +148,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		if newest && h.Role == "user" {
 			limit = maxTextFileChars*maxFilesPerMessage/2 + 4000
 		}
-		if len(content) > limit {
+		if len(content) > limit && h.Role != "document" { // documents are capped when stored
 			content = content[:limit] + " […]"
 		}
 		switch {
@@ -157,6 +162,8 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: content})
 		case h.Role == "assistant":
 			msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("[%s said to the user]: %s", e.charName(h.Character), content)})
+		case h.Role == "document":
+			msgs = append(msgs, llm.Message{Role: "user", Content: documentMessage(h.Content)})
 		case h.Role == "event":
 			msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + content})
 		}

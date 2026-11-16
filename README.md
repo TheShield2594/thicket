@@ -71,8 +71,9 @@ exactly what's missing, and `GET /health` reports each part.
 - Send pictures, PDFs and text files. Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
-  logs. Images and PDFs are read for that reply only, so send them again
-  to ask more later; text files stay in the conversation like any
+  logs. Images are seen for that reply only. A PDF's text (its first
+  20,000 characters) is kept for follow-up questions until the
+  conversation goes quiet; text files stay in the conversation like any
   message. Other files (Word documents, for example) are passed on by
   name only.
 - PDFs are read by the model itself when it can, otherwise by OpenRouter's

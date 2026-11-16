@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"path"
@@ -27,6 +28,10 @@ const (
 	// maxPDFPages bounds what one message can cost: a PDF is read as
 	// input tokens or billed per page by OCR.
 	maxPDFPages = 50
+	// maxDocumentChars is how much of a PDF's text is kept for follow-up
+	// questions. It is re-sent on every later turn of the conversation,
+	// so it trades cost against how much of a long document stays known.
+	maxDocumentChars = 20000
 )
 
 var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
@@ -230,4 +235,141 @@ func withoutMedia(msgs []llm.Message) []llm.Message {
 		out[i] = m
 	}
 	return out
+}
+
+// keepDocuments saves the text of the PDFs sent this turn as document
+// messages, so later turns can answer follow-up questions without the
+// file. The text comes from OpenRouter's parse annotations when the turn
+// produced them; otherwise (the model read the PDF natively) a parse-only
+// call to the cheap model gets it. Best effort: failures are logged and a
+// note is stored instead, so the sprig knows to ask for the file again.
+func (e *Engine) keepDocuments(ctx context.Context, t *turn) {
+	texts := matchTexts(t.pdfs, t.annotations)
+	var missing []llm.File
+	for _, f := range t.pdfs {
+		if _, ok := texts[f.Name]; !ok {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) > 0 {
+		got, err := e.parsePDFs(ctx, missing)
+		if err != nil {
+			e.Log.Warn("couldn't extract PDF text for follow-ups", "err", err)
+			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "couldn't keep PDF text for follow-up questions", shortErr(err))
+		}
+		for name, text := range got {
+			texts[name] = text
+		}
+	}
+	for _, f := range t.pdfs {
+		text := strings.TrimSpace(e.Secrets.Redact(texts[f.Name]))
+		if len(text) > maxDocumentChars {
+			cut := maxDocumentChars
+			for cut > 0 && !utf8.RuneStart(text[cut]) {
+				cut--
+			}
+			text = text[:cut] + "\n[rest of the document not kept]"
+		}
+		if text == "" {
+			text = "[no text could be kept from this PDF; ask the user to send it again if they have more questions about it]"
+		}
+		if err := e.DB.AddMessage(ctx, t.conv.ID, "document", "", f.Name+"\n"+text); err != nil {
+			e.Log.Error("store document text", "err", err)
+		}
+	}
+}
+
+// parsePDFs asks OpenRouter to parse PDFs without a real answer: the
+// cheap model, a few output tokens, and an explicit parser so annotations
+// come back even for models that read PDFs natively.
+func (e *Engine) parsePDFs(ctx context.Context, files []llm.File) (map[string]string, error) {
+	engine := e.Settings.String(ctx, "pdf_engine")
+	if engine != "mistral-ocr" {
+		engine = "cloudflare-ai" // free; native reading gives no text back
+	}
+	resp, err := e.LLM.Chat(llm.WithPurpose(ctx, "document"), llm.Request{
+		Model:     e.Settings.String(ctx, "cheap_model"),
+		PDFEngine: engine,
+		Messages: []llm.Message{
+			{Role: "system", Content: "Reply with OK."},
+			{Role: "user", Content: "[Thicket event] Attached for parsing.", Files: files},
+		},
+		MaxTokens: 16, NoFallback: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	texts := matchTexts(files, []json.RawMessage{resp.Message.Annotations})
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("the PDF parser returned no text")
+	}
+	return texts, nil
+}
+
+// matchTexts maps each file's name to the text OpenRouter parsed from it.
+// Annotations name their file when they can; unnamed ones (the name is
+// optional) are matched to the remaining files in order.
+func matchTexts(files []llm.File, raws []json.RawMessage) map[string]string {
+	named, unnamed := annotationTexts(raws)
+	out := map[string]string{}
+	for _, f := range files {
+		if t, ok := named[f.Name]; ok {
+			out[f.Name] = t
+		} else if len(unnamed) > 0 {
+			out[f.Name], unnamed = unnamed[0], unnamed[1:]
+		}
+	}
+	return out
+}
+
+// annotationTexts collects the text OpenRouter parsed from files, by file
+// name where the annotation gives one.
+func annotationTexts(raws []json.RawMessage) (named map[string]string, unnamed []string) {
+	named = map[string]string{}
+	for _, raw := range raws {
+		if len(raw) == 0 {
+			continue
+		}
+		var anns []struct {
+			Type string `json:"type"`
+			File struct {
+				Name    string `json:"name"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"file"`
+		}
+		if json.Unmarshal(raw, &anns) != nil {
+			continue
+		}
+		for _, a := range anns {
+			if a.Type != "file" {
+				continue
+			}
+			var b strings.Builder
+			for _, c := range a.File.Content {
+				if c.Type == "text" && c.Text != "" {
+					if b.Len() > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString(c.Text)
+				}
+			}
+			switch {
+			case b.Len() == 0:
+			case a.File.Name != "":
+				named[a.File.Name] = b.String()
+			default:
+				unnamed = append(unnamed, b.String())
+			}
+		}
+	}
+	return named, unnamed
+}
+
+// documentMessage renders a kept PDF for the model.
+func documentMessage(content string) string {
+	name, text, _ := strings.Cut(content, "\n")
+	return fmt.Sprintf("[Thicket event] The user sent %s earlier in this conversation. Its text, kept for follow-up questions:\n%s", name, wrapUntrusted("pdf "+name, text))
 }

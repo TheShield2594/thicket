@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,5 +305,52 @@ func TestRollbackOfAddLeavesNoContent(t *testing.T) {
 	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE run_id IS NULL AND memory_id = ?", ids[0]).Scan(&n)
 	if n != 0 {
 		t.Fatal("user-initiated history of a rolled-back memory was kept")
+	}
+}
+
+// A v1 database with history upgrades in place: messages survive the
+// table rebuild, cascades still work, and the new role is accepted.
+func TestMigrateV1MessagesToDocumentRole(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "thicket.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	init, _ := migrationFS.ReadFile("migrations/0001_init.sql")
+	for _, q := range []string{
+		"CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+		string(init),
+		"INSERT INTO schema_migrations VALUES (1, '0001_init.sql', 0)",
+		"INSERT INTO users (id, channel, external_id, created_at) VALUES (1, 'discord', 'u', 0)",
+		"INSERT INTO conversations (id, user_id, chat_ref, started_at, last_activity_at) VALUES (7, 1, 'discord:c', 0, 0)",
+		"INSERT INTO messages (conversation_id, role, content, created_at) VALUES (7, 'user', 'hello', 0)",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddMessage(ctx, 7, "document", "", "report.pdf\ntext"); err != nil {
+		t.Fatalf("document role refused after migration: %v", err)
+	}
+	msgs, err := s.RecentMessages(ctx, 7, 10)
+	if err != nil || len(msgs) != 2 || msgs[0].Content != "hello" || msgs[1].Role != "document" {
+		t.Fatalf("messages after migration: %+v %v", msgs, err)
+	}
+	if err := s.AddMessage(ctx, 7, "robot", "", "x"); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	if _, err := s.DB().Exec("DELETE FROM conversations WHERE id = 7"); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := s.RecentMessages(ctx, 7, 10); len(msgs) != 0 {
+		t.Fatal("messages didn't cascade with their conversation")
 	}
 }

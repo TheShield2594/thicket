@@ -42,7 +42,11 @@ internal/server      /health and /avatars
      by OpenRouter per the `pdf_engine` setting; its parse annotations
      ride along on later calls in the turn so the PDF isn't parsed
      twice); text files are redacted, wrapped as untrusted data and added
-     to the message. A model that refuses images or PDFs gets the turn
+     to the message. After the reply, each PDF's text (from the parse
+     annotations, or a parse-only call to the cheap model when the model
+     read it natively) is stored as a `document` message, capped at
+     20,000 characters, so follow-up turns can use it. Memory review
+     skips documents. A model that refuses images or PDFs gets the turn
      again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
    rules) plus recent history from this conversation only. A conversation

@@ -77,6 +77,30 @@ type fakeModel struct {
 	// rejectImages answers requests with images the way OpenRouter does
 	// for a model without vision.
 	rejectImages bool
+	// pdfText is what the fake PDF parser "finds"; parseFail makes the
+	// parse-only call fail; annotateTurn returns annotations on chat
+	// replies, as non-native PDF engines do.
+	pdfText      string
+	parseFail    bool
+	annotateTurn bool
+	parseCalls   int
+}
+
+// annotations builds OpenRouter-style parse annotations for the files in
+// the newest user message.
+func annotations(msgs []llm.Message, text string) json.RawMessage {
+	var anns []any
+	for _, m := range msgs {
+		for _, f := range m.Files {
+			anns = append(anns, map[string]any{"type": "file", "file": map[string]any{"hash": "h-" + f.Name, "name": f.Name,
+				"content": []any{map[string]any{"type": "text", "text": text}}}})
+		}
+	}
+	if anns == nil {
+		return nil
+	}
+	b, _ := json.Marshal(anns)
+	return b
 }
 
 func toolCall(name string, args any) *llm.Response {
@@ -95,7 +119,27 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	hook := m.onChat
 	m.reqs = append(m.reqs, req)
 	reject := m.rejectImages
+	pdfText, parseFail, annotate := m.pdfText, m.parseFail, m.annotateTurn
+	if req.Messages[0].Content == "Reply with OK." {
+		m.parseCalls++
+	}
 	m.mu.Unlock()
+	if pdfText == "" {
+		pdfText = "Quarterly revenue rose 12%."
+	}
+	if req.Messages[0].Content == "Reply with OK." {
+		if parseFail {
+			return nil, &llm.APIError{Status: 502, Message: "parser down"}
+		}
+		r := text("O")
+		r.Message.Annotations = annotations(req.Messages, pdfText)
+		return r, nil
+	}
+	if annotate && llm.HasFiles(req.Messages) {
+		r := text("Read it.")
+		r.Message.Annotations = annotations(req.Messages, pdfText+" (from the turn)")
+		return r, nil
+	}
 	if reject && llm.HasMedia(req.Messages) {
 		return nil, &llm.APIError{Status: 404, Message: "No endpoints found that support image input"}
 	}

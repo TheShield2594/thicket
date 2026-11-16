@@ -205,6 +205,12 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 			e.Log.Error("post after reply", "err", err)
 		}
 	}
+	// Keep the text of PDFs sent this turn for follow-up questions (and
+	// for a sprig this is handed to). Even if the reply failed: "try
+	// again" should still know the document.
+	if len(t.pdfs) > 0 && t.conv != nil {
+		e.keepDocuments(ctx, t)
+	}
 	if sendErr != nil {
 		return sendErr
 	}

@@ -20,7 +20,7 @@ type Conversation struct {
 type Message struct {
 	ID             int64
 	ConversationID int64
-	Role           string // user | assistant | event
+	Role           string // user | assistant | event | document
 	Character      string
 	Content        string
 	CreatedAt      time.Time

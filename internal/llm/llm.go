@@ -202,7 +202,7 @@ type Meta struct {
 	UserID    int64
 	Character string
 	JobID     int64
-	Purpose   string // chat | job | memory | consistency | preview | proactive
+	Purpose   string // chat | job | memory | consistency | preview | proactive | document
 }
 
 type metaKey struct{}
