@@ -31,6 +31,10 @@ type Config struct {
 	DiscordOwnerID        string
 	DiscordListenChannels []string
 
+	TelegramToken       string
+	TelegramOwnerID     string
+	TelegramListenChats []string
+
 	OpenRouterKey string
 	OpenRouterURL string
 
@@ -64,6 +68,9 @@ func Load() (*Config, error) {
 		SecretKey:             env("THICKET_SECRET_KEY", ""),
 		DiscordListenChannels: list(env("THICKET_DISCORD_CHANNELS", "")),
 		AllowedUsers:          list(env("THICKET_ALLOWED_USERS", "")),
+		TelegramToken:         env("TELEGRAM_TOKEN", ""),
+		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
+		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
 	}
 	c.CharactersDir = env("THICKET_CHARACTERS_DIR", filepath.Join(c.DataDir, "characters"))
 
@@ -93,9 +100,10 @@ type Problem struct {
 // Check reports exactly what is missing. Fatal problems stop `serve`.
 func (c *Config) Check() []Problem {
 	var out []Problem
-	if c.DiscordToken == "" {
-		out = append(out, Problem{true, "DISCORD_TOKEN is not set",
-			"Create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN in your compose file."})
+	if c.DiscordToken == "" && c.TelegramToken == "" {
+		out = append(out, Problem{true, "no chat app is set up (DISCORD_TOKEN or TELEGRAM_TOKEN)",
+			"For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN. " +
+				"For Telegram, message @BotFather, send /newbot, and set TELEGRAM_TOKEN. You can use both."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -109,17 +117,28 @@ func (c *Config) Check() []Problem {
 	}
 	if c.OpenRouterKey == "" {
 		out = append(out, Problem{false, "OPENROUTER_API_KEY is not set",
-			"That's fine: Juni will ask for it in a Discord DM and store it encrypted."})
+			"That's fine: Juni will ask for it in a DM and store it encrypted."})
 	}
 	if c.SecretKey == "" {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
 			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or set THICKET_SECRET_KEY to keep it outside the volume."})
 	}
-	if c.DiscordOwnerID == "" {
-		out = append(out, Problem{false, "THICKET_OWNER_DISCORD_ID is not set",
+	if c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
+		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID)",
 			"The first person to DM the bot becomes the owner."})
 	}
 	return out
+}
+
+// OwnerID is the configured owner's account id on a chat app, if any.
+func (c *Config) OwnerID(channel string) string {
+	switch channel {
+	case "discord":
+		return c.DiscordOwnerID
+	case "telegram":
+		return c.TelegramOwnerID
+	}
+	return ""
 }
 
 func env(k, def string) string {

@@ -14,7 +14,7 @@ internal/scheduler   cron and webhook jobs with run history
 internal/llm         OpenRouter client, retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
-internal/channel     channel interface; channel/discord is the only adapter in v1
+internal/channel     channel interface; adapters in channel/discord and channel/telegram
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
@@ -106,6 +106,17 @@ recorded and reported exactly like scheduled ones.
 ## Adding a channel
 
 Implement `channel.Channel` (Run, Send, SendDirect, Delete, Typing,
-Connected), then register it in `cmd/thicket` alongside Discord. Chat
-references are stored as `<channel>:<chat id>`, and users are keyed by
-`(channel, external id)`, so nothing else needs to change.
+Connected), then register it in `cmd/thicket` alongside Discord and
+Telegram, with its token added to the log redactor in `app.New`. Chat
+references are stored as `<channel>:<chat id>`. Attachments that need an
+authenticated download set `Attachment.Open`, whose errors must not
+contain the token (Telegram's file URLs do).
+
+A user can have several identities, one per app account
+(`identities` table). `UserByExternal` resolves any of them;
+`users.channel/external_id` hold the one the user last wrote from, which
+is where proactive messages go. Linking uses a one-time code issued by
+`link_account` (DMed by code, held in memory for 15 minutes) and redeemed
+by DMing it from the new account. `LinkIdentity` never merges two
+histories and never changes a role: an account with its own memories,
+jobs or owner role is refused.

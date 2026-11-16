@@ -1,6 +1,6 @@
 # Thicket: one service, one volume. Paste this into Portainer as a stack,
-# or run `docker compose up -d`. Only DISCORD_TOKEN is required; Juni asks
-# for everything else in a Discord DM.
+# or run `docker compose up -d`. Set DISCORD_TOKEN, TELEGRAM_TOKEN or both;
+# Juni asks for everything else in a DM.
 services:
   thicket:
     # Published by CI on every push to main. Without a checkout, Compose
@@ -10,9 +10,12 @@ services:
     container_name: thicket
     restart: unless-stopped
     environment:
-      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN (see README)}
-      # Optional. Your Discord user id; otherwise the first person to DM the bot becomes the owner.
+      # At least one chat app. `thicket check` (and startup) says if neither is set.
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      # Optional. Your user id on either app; otherwise the first person to DM the bot becomes the owner.
       THICKET_OWNER_DISCORD_ID: ${THICKET_OWNER_DISCORD_ID:-}
+      THICKET_OWNER_TELEGRAM_ID: ${THICKET_OWNER_TELEGRAM_ID:-}
       # Optional. Public https URL of this server (behind your reverse proxy), used for avatar images.
       THICKET_PUBLIC_URL: ${THICKET_PUBLIC_URL:-}
       # Optional. Keeps the encryption key outside the volume. Any long random string.
@@ -27,14 +30,15 @@ services:
       THICKET_MONTHLY_BUDGET_USD: ${THICKET_MONTHLY_BUDGET_USD:-}
       THICKET_ALLOWED_USERS: ${THICKET_ALLOWED_USERS:-}
       THICKET_DISCORD_CHANNELS: ${THICKET_DISCORD_CHANNELS:-}
+      THICKET_TELEGRAM_CHATS: ${THICKET_TELEGRAM_CHATS:-}
       THICKET_IDLE_AFTER: ${THICKET_IDLE_AFTER:-}
       THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
       THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}
       TZ: ${TZ:-UTC}
     volumes:
       - thicket-data:/data
-    # /health and /avatars. Put it behind your reverse proxy if you want avatars;
-    # otherwise you can drop this and nothing else changes.
+    # /health, /avatars and /hooks. Put it behind your reverse proxy for avatars
+    # or webhooks (see docs/webhooks.md). Telegram needs no open port.
     ports:
       - "127.0.0.1:8080:8080"
 

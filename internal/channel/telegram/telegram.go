@@ -1,0 +1,415 @@
+// Package telegram is the Telegram channel adapter, over the Bot API with
+// long polling (no public URL needed). A bot posts under one name, so
+// each reply starts with the sprig's name in bold.
+package telegram
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/theshield2594/thicket/internal/channel"
+)
+
+const (
+	pollTimeout = 50 // seconds a getUpdates call waits for messages
+	maxText     = 3500
+)
+
+type Adapter struct {
+	token  string
+	listen map[string]bool
+	log    *slog.Logger
+	// BaseURL is the Bot API root; tests point it at a fake.
+	BaseURL string
+	http    *http.Client
+	poll    *http.Client
+
+	connected   atomic.Bool
+	botID       int64
+	botUsername string
+}
+
+func New(token string, listenChats []string, log *slog.Logger) *Adapter {
+	l := map[string]bool{}
+	for _, c := range listenChats {
+		l[c] = true
+	}
+	return &Adapter{token: token, listen: l, log: log, BaseURL: "https://api.telegram.org",
+		http: &http.Client{Timeout: 30 * time.Second},
+		poll: &http.Client{Timeout: (pollTimeout + 20) * time.Second}}
+}
+
+func (a *Adapter) Name() string    { return "telegram" }
+func (a *Adapter) Connected() bool { return a.connected.Load() }
+
+// --- Bot API ---
+
+type apiError struct {
+	Code       int
+	Desc       string
+	RetryAfter int
+}
+
+func (e *apiError) Error() string { return fmt.Sprintf("telegram API error %d: %s", e.Code, e.Desc) }
+
+// clean removes the bot token from anything that might be shown or
+// logged: URLs with the token end up inside net/http errors.
+func (a *Adapter) clean(err error) error {
+	if err == nil || a.token == "" || !strings.Contains(err.Error(), a.token) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), a.token, "[token]"))
+}
+
+func (a *Adapter) call(ctx context.Context, client *http.Client, method string, params, out any) error {
+	body, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL+"/bot"+a.token+"/"+method, bytes.NewReader(body))
+	if err != nil {
+		return a.clean(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return a.clean(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return a.clean(err)
+	}
+	var r struct {
+		OK          bool            `json:"ok"`
+		Result      json.RawMessage `json:"result"`
+		ErrorCode   int             `json:"error_code"`
+		Description string          `json:"description"`
+		Parameters  struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return fmt.Errorf("telegram %s: unreadable response (HTTP %d)", method, resp.StatusCode)
+	}
+	if !r.OK {
+		code := r.ErrorCode
+		if code == 0 {
+			code = resp.StatusCode
+		}
+		return &apiError{Code: code, Desc: r.Description, RetryAfter: r.Parameters.RetryAfter}
+	}
+	if out != nil {
+		return json.Unmarshal(r.Result, out)
+	}
+	return nil
+}
+
+// callRetry retries once when Telegram asks us to slow down.
+func (a *Adapter) callRetry(ctx context.Context, method string, params, out any) error {
+	err := a.call(ctx, a.http, method, params, out)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Code == 429 && ae.RetryAfter > 0 && ae.RetryAfter <= 30 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(ae.RetryAfter) * time.Second):
+		}
+		err = a.call(ctx, a.http, method, params, out)
+	}
+	return err
+}
+
+type user struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+}
+
+type entity struct {
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+	User   *user  `json:"user"`
+}
+
+type file struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
+}
+
+type message struct {
+	MessageID int64 `json:"message_id"`
+	From      *user `json:"from"`
+	Chat      struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"` // private | group | supergroup | channel
+	} `json:"chat"`
+	Text            string   `json:"text"`
+	Caption         string   `json:"caption"`
+	Entities        []entity `json:"entities"`
+	CaptionEntities []entity `json:"caption_entities"`
+	ReplyTo         *struct {
+		From *user `json:"from"`
+	} `json:"reply_to_message"`
+	Photo    []file `json:"photo"`
+	Document *file  `json:"document"`
+	Voice    *file  `json:"voice"`
+	Audio    *file  `json:"audio"`
+	Video    *file  `json:"video"`
+}
+
+type update struct {
+	UpdateID int64    `json:"update_id"`
+	Message  *message `json:"message"`
+}
+
+// --- receiving ---
+
+func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
+	var me user
+	if err := a.call(ctx, a.http, "getMe", struct{}{}, &me); err != nil {
+		return fmt.Errorf("%w (check TELEGRAM_TOKEN)", err)
+	}
+	a.botID, a.botUsername = me.ID, me.Username
+	// Updates can't be polled while a webhook is set for this bot.
+	if err := a.call(ctx, a.http, "deleteWebhook", map[string]any{"drop_pending_updates": false}, nil); err != nil {
+		a.log.Warn("telegram deleteWebhook failed", "err", err)
+	}
+	a.log.Info("telegram connected", "as", me.Username)
+	a.connected.Store(true)
+	defer a.connected.Store(false)
+
+	var offset int64
+	backoff := time.Second
+	for ctx.Err() == nil {
+		var ups []update
+		err := a.call(ctx, a.poll, "getUpdates", map[string]any{"offset": offset, "timeout": pollTimeout, "allowed_updates": []string{"message"}}, &ups)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			a.connected.Store(false)
+			var ae *apiError
+			switch {
+			case errors.As(err, &ae) && ae.Code == 401:
+				return fmt.Errorf("telegram rejected the bot token: %w", err)
+			case errors.As(err, &ae) && ae.Code == 409:
+				a.log.Error("telegram: another program is polling this bot (is a second Thicket running?)", "err", err)
+			default:
+				a.log.Warn("telegram poll failed", "err", err)
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		}
+		a.connected.Store(true)
+		backoff = time.Second
+		for _, u := range ups {
+			offset = max(offset, u.UpdateID+1)
+			if u.Message == nil {
+				continue
+			}
+			if in, ok := a.incoming(u.Message); ok {
+				go h(ctx, in)
+			}
+		}
+	}
+	return nil
+}
+
+// incoming normalises a message. ok is false for messages to ignore.
+func (a *Adapter) incoming(m *message) (channel.Incoming, bool) {
+	// Never react to bots (including ourselves): no bot-to-bot loops.
+	if m.From == nil || m.From.IsBot || m.Chat.Type == "channel" {
+		return channel.Incoming{}, false
+	}
+	text, ents := m.Text, m.Entities
+	if text == "" {
+		text, ents = m.Caption, m.CaptionEntities
+	}
+	mentioned := m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.ID == a.botID
+	text, mentioned = a.stripMentions(text, ents, mentioned)
+	// /start opens every new chat with a bot: treat it as a hello.
+	if cmd, _, _ := strings.Cut(strings.TrimSpace(text), " "); strings.EqualFold(cmd, "/start") {
+		text = "Hello!"
+		mentioned = true
+	}
+	atts := a.attachments(m)
+	text = strings.TrimSpace(text)
+	if text == "" && len(atts) == 0 {
+		return channel.Incoming{}, false
+	}
+	name := strings.TrimSpace(m.From.FirstName + " " + m.From.LastName)
+	if name == "" {
+		name = m.From.Username
+	}
+	chatID := strconv.FormatInt(m.Chat.ID, 10)
+	return channel.Incoming{
+		Channel: "telegram", ChatID: chatID, MessageID: strconv.FormatInt(m.MessageID, 10),
+		UserID: strconv.FormatInt(m.From.ID, 10), UserName: name, Text: text,
+		IsDM: m.Chat.Type == "private", Mentioned: mentioned, Listening: a.listen[chatID],
+		Attachments: atts,
+	}, true
+}
+
+// stripMentions removes @-mentions of this bot (and /cmd@bot suffixes)
+// from text, reporting whether the bot was mentioned. Offsets are in
+// UTF-16 code units, as Telegram counts them.
+func (a *Adapter) stripMentions(text string, ents []entity, mentioned bool) (string, bool) {
+	u16 := utf16Units(text)
+	var cut [][2]int
+	for _, e := range ents {
+		if e.Offset < 0 || e.Length <= 0 || e.Offset+e.Length > len(u16) {
+			continue
+		}
+		part := fromUTF16(u16[e.Offset : e.Offset+e.Length])
+		switch {
+		case e.Type == "mention" && a.botUsername != "" && strings.EqualFold(part, "@"+a.botUsername):
+			mentioned = true
+			cut = append(cut, [2]int{e.Offset, e.Offset + e.Length})
+		case e.Type == "text_mention" && e.User != nil && e.User.ID == a.botID:
+			mentioned = true
+		case e.Type == "bot_command" && a.botUsername != "" && strings.HasSuffix(strings.ToLower(part), "@"+strings.ToLower(a.botUsername)):
+			mentioned = true
+			n := len(utf16Units("@" + a.botUsername))
+			cut = append(cut, [2]int{e.Offset + e.Length - n, e.Offset + e.Length})
+		}
+	}
+	for i := len(cut) - 1; i >= 0; i-- { // entities come in order
+		u16 = append(u16[:cut[i][0]], u16[cut[i][1]:]...)
+	}
+	return strings.TrimSpace(fromUTF16(u16)), mentioned
+}
+
+func (a *Adapter) attachments(m *message) []channel.Attachment {
+	var out []channel.Attachment
+	add := func(f *file, name, ct string) {
+		if f.FileName != "" {
+			name = f.FileName
+		}
+		if f.MimeType != "" {
+			ct = f.MimeType
+		}
+		id := f.FileID
+		out = append(out, channel.Attachment{Name: name, ContentType: ct, Size: f.FileSize,
+			Open: func(ctx context.Context, max int) ([]byte, string, error) { return a.download(ctx, id, max) }})
+	}
+	if n := len(m.Photo); n > 0 {
+		add(&m.Photo[n-1], "photo.jpg", "image/jpeg") // sizes come smallest first
+	}
+	if m.Document != nil {
+		add(m.Document, "document", "")
+	}
+	if m.Voice != nil {
+		add(m.Voice, "voice message.ogg", "audio/ogg")
+	}
+	if m.Audio != nil {
+		add(m.Audio, "audio", "")
+	}
+	if m.Video != nil {
+		add(m.Video, "video.mp4", "video/mp4")
+	}
+	return out
+}
+
+// download fetches a file through getFile. The file URL contains the
+// token, so every error is cleaned.
+func (a *Adapter) download(ctx context.Context, fileID string, max int) ([]byte, string, error) {
+	var f struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := a.callRetry(ctx, "getFile", map[string]any{"file_id": fileID}, &f); err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) && strings.Contains(strings.ToLower(ae.Desc), "too big") {
+			return nil, "", fmt.Errorf("too large for a Telegram bot to download (limit 20 MB)")
+		}
+		return nil, "", a.clean(err)
+	}
+	if f.FilePath == "" {
+		return nil, "", errors.New("Telegram didn't give a download path")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BaseURL+"/file/bot"+a.token+"/"+f.FilePath, nil)
+	if err != nil {
+		return nil, "", a.clean(err)
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return nil, "", a.clean(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, "", fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
+	if err != nil {
+		return nil, "", a.clean(err)
+	}
+	if len(body) > max {
+		return nil, "", fmt.Errorf("too large (limit %s)", channel.HumanSize(max))
+	}
+	return body, resp.Header.Get("Content-Type"), nil
+}
+
+// --- sending ---
+
+func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, text string) error {
+	for i, part := range split(text, maxText) {
+		html := toHTML(part)
+		if i == 0 && p.Name != "" {
+			html = "<b>" + escape(p.Name) + "</b>\n" + html
+		}
+		params := map[string]any{"chat_id": chatID, "text": html, "parse_mode": "HTML",
+			"link_preview_options": map[string]any{"is_disabled": true}}
+		err := a.callRetry(ctx, "sendMessage", params, nil)
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Code == 400 && strings.Contains(ae.Desc, "parse entities") {
+			// Formatting Telegram won't accept: send it plain.
+			plain := part
+			if i == 0 && p.Name != "" {
+				plain = p.Name + ":\n" + part
+			}
+			err = a.callRetry(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": plain}, nil)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SendDirect posts in the user's private chat, whose id is the user's id.
+// Telegram only allows it once the user has started the bot.
+func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Persona, text string) (string, error) {
+	err := a.Send(ctx, userID, p, text)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Code == 403 {
+		err = fmt.Errorf("Telegram won't let me message them until they open a chat with the bot and press Start: %w", err)
+	}
+	return userID, err
+}
+
+func (a *Adapter) Delete(ctx context.Context, chatID, messageID string) error {
+	return a.callRetry(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": messageID}, nil)
+}
+
+func (a *Adapter) Typing(ctx context.Context, chatID string) {
+	_ = a.call(ctx, a.http, "sendChatAction", map[string]any{"chat_id": chatID, "action": "typing"}, nil)
+}

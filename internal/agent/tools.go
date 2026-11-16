@@ -330,12 +330,20 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_user",
-			Description: "Let another Discord user talk to this Thicket. Pass their Discord user id or @mention. Their memories are kept separate.",
-			Params:      `{"type":"object","properties":{"user":{"type":"string"},"admin":{"type":"boolean"}},"required":["user"]}`,
+			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. To use Thicket from a second app themselves, people use link_account instead.",
+			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolInvite,
+		},
+		{
+			Name:        "link_account",
+			Description: "When the user wants to talk to Thicket from another chat app too (Discord or Telegram) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
+			Params:      `{"type":"object","properties":{}}`,
+			Scope:       "host",
+			ChatOnly:    true,
+			Run:         e.toolLinkAccount,
 		},
 		{
 			Name:        "memory_reviews",
@@ -1067,14 +1075,31 @@ func (e *Engine) toolSetApproval(ctx context.Context, t *turn, args json.RawMess
 func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
 		User  string `json:"user"`
+		App   string `json:"app"`
 		Admin bool   `json:"admin"`
 	}](args)
 	if err != nil {
 		return "", err
 	}
+	app := strings.ToLower(a.App)
+	if app == "" {
+		app, _ = splitRef(t.chatRef)
+		if app == "" {
+			app = t.user.Channel
+		}
+	}
+	if e.channels[app] == nil {
+		return "", fmt.Errorf("this Thicket isn't connected to %q", app)
+	}
 	id := strings.Trim(a.User, "<@!> ")
+	if id == "" {
+		return "", errors.New("pass their numeric user id")
+	}
 	for _, r := range id {
 		if r < '0' || r > '9' {
+			if app == "telegram" {
+				return "", errors.New("Telegram bots can't look people up by @username: pass their numeric user id (they can get it from @userinfobot)")
+			}
 			return "", errors.New("pass a Discord user id or @mention")
 		}
 	}
@@ -1082,16 +1107,16 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 	if a.Admin {
 		role = "admin"
 	}
-	if u, err := e.DB.UserByExternal(ctx, "discord", id); err == nil {
+	if u, err := e.DB.UserByExternal(ctx, app, id); err == nil {
 		if u.Role != "owner" {
 			_ = e.DB.SetUserRole(ctx, u.ID, role)
 		}
 		return "They already have access; role is now " + role + ".", nil
 	}
-	if _, err := e.DB.CreateUser(ctx, "discord", id, "", role); err != nil {
+	if _, err := e.DB.CreateUser(ctx, app, id, "", role); err != nil {
 		return "", err
 	}
-	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited discord user "+id+" as "+role, "")
+	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited "+app+" user "+id+" as "+role, "")
 	return "Invited. When they DM me I'll welcome them; their memories stay separate from yours.", nil
 }
 

@@ -61,6 +61,9 @@ type Engine struct {
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
+	linkMu    sync.Mutex
+	links     map[string]linkCode    // code -> pending link
+	linkFails map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -106,11 +109,18 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if !in.IsDM && !in.Mentioned && !in.Listening && addressed == nil {
 		return nil
 	}
+	if in.IsDM && linkCodeRe.MatchString(in.Text) {
+		return e.redeemLinkCode(ctx, in)
+	}
 	user, err := e.resolveUser(ctx, in)
 	if err != nil || user == nil {
 		return err
 	}
 	_ = e.DB.TouchUser(ctx, user.ID)
+	// Proactive messages go to the app the user last wrote from.
+	if user.Channel != in.Channel || user.ExternalID != in.UserID {
+		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
+	}
 	if !e.allow(user.ID) {
 		e.Log.Warn("rate limited", "user", user.ID)
 		return nil
@@ -277,18 +287,24 @@ func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.U
 		return nil, err
 	}
 	role := ""
+	ownerID := e.Cfg.OwnerID(in.Channel)
+	noOwnerConfigured := e.Cfg.DiscordOwnerID == "" && e.Cfg.TelegramOwnerID == ""
 	switch {
-	case in.Channel == "discord" && e.Cfg.DiscordOwnerID != "" && in.UserID == e.Cfg.DiscordOwnerID:
+	// A configured owner id makes that account the owner, unless an owner
+	// already exists (from another app): then it links like anyone else,
+	// so one person never ends up as two owners with split memories.
+	case ownerID != "" && in.UserID == ownerID && !hasOwner:
 		role = "owner"
-	case !hasOwner && e.Cfg.DiscordOwnerID == "" && in.IsDM:
+	case !hasOwner && noOwnerConfigured && in.IsDM:
 		role = "owner"
-	case contains(e.Cfg.AllowedUsers, in.UserID):
+	case contains(e.Cfg.AllowedUsers, in.UserID) || contains(e.Cfg.AllowedUsers, in.Channel+":"+in.UserID):
 		role = "member"
 	}
 	if role == "" {
 		if ok, _ := e.DB.ClaimNotice(ctx, "stranger:"+in.Channel+":"+in.UserID, 24*time.Hour); ok {
 			if host, ok := e.Chars.Host(); ok {
-				_ = e.send(ctx, in.ChatRef(), host, "Hi! I don't think we've met. This Thicket is private, so ask its owner to invite you and I'll happily say hello properly.")
+				_ = e.send(ctx, in.ChatRef(), host, "Hi! I don't think we've met. This Thicket is private, so ask its owner to invite you and I'll happily say hello properly. "+
+					"Already using it on another app? Ask me there for a link code and send it here.")
 			}
 		}
 		return nil, nil

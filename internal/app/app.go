@@ -79,6 +79,9 @@ func NewLogger(level string, out io.Writer, red *secrets.Redactor) *slog.Logger 
 
 func New(ctx context.Context, cfg *config.Config, version string, opts Options) (*App, error) {
 	red := secrets.NewRedactor()
+	// Chat tokens aren't stored secrets, but must never be logged either.
+	red.Add(cfg.DiscordToken)
+	red.Add(cfg.TelegramToken)
 	out := opts.LogOut
 	if out == nil {
 		out = os.Stdout

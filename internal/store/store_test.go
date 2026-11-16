@@ -354,3 +354,55 @@ func TestMigrateV1MessagesToDocumentRole(t *testing.T) {
 		t.Fatal("messages didn't cascade with their conversation")
 	}
 }
+
+func TestIdentities(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	owner, _ := s.CreateUser(ctx, "discord", "d1", "Sam", "owner")
+	if u, err := s.UserByExternal(ctx, "discord", "d1"); err != nil || u.ID != owner.ID {
+		t.Fatalf("lookup by first identity: %+v %v", u, err)
+	}
+
+	// A brand-new account links and then resolves to the same person.
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UserByExternal(ctx, "telegram", "t1"); err != nil || u.ID != owner.ID {
+		t.Fatalf("lookup by linked identity: %+v %v", u, err)
+	}
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatalf("relinking the same account: %v", err)
+	}
+
+	// Writing from Telegram makes it where proactive messages go.
+	if err := s.UseIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserByID(ctx, owner.ID); u.Channel != "telegram" || u.ExternalID != "t1" {
+		t.Fatalf("primary identity: %+v", u)
+	}
+
+	// An empty profile on the other platform is folded in...
+	empty, _ := s.CreateUser(ctx, "telegram", "t2", "", "member")
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UserByID(ctx, empty.ID); err != ErrNotFound {
+		t.Fatal("the empty profile should be gone")
+	}
+	// ...but one with a history, or an owner, is never taken over.
+	busy, _ := s.CreateUser(ctx, "telegram", "t3", "", "member")
+	if _, err := s.DB().Exec("INSERT INTO memories (user_id, kind, content, source, created_at, updated_at) VALUES (?, 'fact', 'x', 'auto', 0, 0)", busy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t3"); err != ErrIdentityTaken {
+		t.Fatalf("linking an account with memories: %v", err)
+	}
+	member, _ := s.CreateUser(ctx, "discord", "d9", "", "member")
+	if err := s.LinkIdentity(ctx, member.ID, "discord", "d1"); err != ErrIdentityTaken {
+		t.Fatalf("taking the owner's account: %v", err)
+	}
+	if ids, _ := s.Identities(ctx, owner.ID); len(ids) != 3 {
+		t.Fatalf("identities: %+v", ids)
+	}
+}

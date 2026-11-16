@@ -10,6 +10,16 @@ First version.
 
 - Discord channel: DMs and server channels, per-sprig name and avatar
   through webhooks, embeds in DMs.
+- Telegram channel: Bot API over long polling (no open port), DMs and
+  groups, replies labelled with the sprig's name, Markdown converted to
+  Telegram HTML with a plain-text fallback, photos and files as
+  attachments. Run Telegram, Discord or both; `DISCORD_TOKEN` is no longer
+  required on its own.
+- Linked accounts: one person can use several apps with one profile.
+  `link_account` DMs a one-time code to send from the other app.
+  Proactive messages go to the app last written from. Schema v4 adds an
+  `identities` table (existing users carry over).
+- Chat bot tokens are now redacted from logs.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

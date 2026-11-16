@@ -1,8 +1,8 @@
 # Thicket
 
 A small, self-hosted family of AI companions. Its characters are called
-**sprigs**. They live in your Discord, remember you, take a little
-initiative, and stay true to who they are.
+**sprigs**. They live in your Discord or Telegram, remember you, take a
+little initiative, and stay true to who they are.
 
 Thicket is one Go binary and one SQLite file. No vector database, no
 bundled browser, no plugin marketplace. You set it up by talking to Juni,
@@ -27,19 +27,23 @@ the first sprig.
 
 ## Quick start
 
-1. **Create a Discord bot.** At <https://discord.com/developers/applications>,
-   make an application, add a bot, and switch on **Message Content Intent**.
-   Copy the bot token. Invite it to your server with the `bot` scope and
-   these permissions: Send Messages, Read Message History, **Manage Webhooks**
-   (so each sprig posts with its own name and avatar).
+1. **Create a bot** on Discord, Telegram, or both.
+   - **Discord:** at <https://discord.com/developers/applications>, make an
+     application, add a bot, and switch on **Message Content Intent**. Copy
+     the bot token. Invite it to your server with the `bot` scope and these
+     permissions: Send Messages, Read Message History, **Manage Webhooks**
+     (so each sprig posts with its own name and avatar).
+   - **Telegram:** message [@BotFather](https://t.me/BotFather), send
+     `/newbot`, and copy the token. See [Telegram](docs/telegram.md).
 2. **Run it.**
 
    ```bash
    DISCORD_TOKEN=your-bot-token docker compose up -d
    ```
 
-   In Portainer: Stacks → Add stack → paste `docker-compose.yml` → add
-   `DISCORD_TOKEN` as an environment variable → Deploy. This pulls
+   (or `TELEGRAM_TOKEN=…`, or both). In Portainer: Stacks → Add stack →
+   paste `docker-compose.yml` → add `DISCORD_TOKEN` and/or `TELEGRAM_TOKEN`
+   as environment variables → Deploy. This pulls
    `ghcr.io/theshield2594/thicket:latest`, which CI publishes on every push
    to `main`. (If the package is private, make it public in the repo's
    Packages settings or log Portainer in to ghcr.io.) The optional
@@ -47,13 +51,15 @@ the first sprig.
    `THICKET_DATA_DIR` and `THICKET_HTTP_ADDR` are fixed inside the image
    (`/data` and `:8080`): change the volume or port mapping in the compose
    file instead.
-3. **DM the bot.** Juni says hello and asks for an
+3. **DM the bot** (on Telegram, open the bot and press Start). Juni says hello and asks for an
    [OpenRouter](https://openrouter.ai/keys) key. Paste it in the DM: she
    checks it works and stores it encrypted. Then she'll learn your name,
    your timezone, and what you'd like help with.
 
 The first person to DM the bot becomes the owner, unless you set
-`THICKET_OWNER_DISCORD_ID`.
+`THICKET_OWNER_DISCORD_ID` or `THICKET_OWNER_TELEGRAM_ID`. Using both apps?
+Ask Juni to link the other one: she DMs you a one-time code to send from
+there, and you keep one profile and one set of memories.
 
 Not sure something's right? `docker compose run --rm thicket check` says
 exactly what's missing, and `GET /health` reports each part.
@@ -64,7 +70,8 @@ exactly what's missing, and `GET /health` reports each part.
 - Address someone by name to switch: `Pip, what's on tomorrow?`
 - In server channels, sprigs answer when you @-mention the bot or start
   with a sprig's name. List channel ids in `THICKET_DISCORD_CHANNELS` to have
-  them answer everything there.
+  them answer everything there. Telegram groups work the same way, with
+  [one setting to change](docs/telegram.md#groups) for addressing by name.
 - Ask Juni to bring someone on: "I need help keeping on top of my
   calendar". She interviews you, the new sprig introduces itself as a
   preview, you tweak it, and the character file is written for you.
@@ -94,10 +101,13 @@ by asking Juni (as the owner), and the chat value wins.
 
 | Variable | Default | |
 |---|---|---|
-| `DISCORD_TOKEN` | required | Discord bot token |
+| `DISCORD_TOKEN` | one of these | Discord bot token |
+| `TELEGRAM_TOKEN` | is required | Telegram bot token ([details](docs/telegram.md)) |
 | `THICKET_OWNER_DISCORD_ID` | first DM | your Discord user id |
-| `THICKET_ALLOWED_USERS` | | comma-separated Discord ids allowed in (or ask Juni to invite someone) |
-| `THICKET_DISCORD_CHANNELS` | | channel ids where sprigs answer every message |
+| `THICKET_OWNER_TELEGRAM_ID` | first DM | your numeric Telegram user id |
+| `THICKET_ALLOWED_USERS` | | comma-separated user ids allowed in, plain or as `telegram:ID` / `discord:ID` (or ask Juni to invite someone) |
+| `THICKET_DISCORD_CHANNELS` | | Discord channel ids where sprigs answer every message |
+| `THICKET_TELEGRAM_CHATS` | | Telegram group ids where sprigs answer every message |
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |
@@ -139,6 +149,7 @@ grant it.
 - [Character file reference](docs/characters.md)
 - [Integrations (MCP) setup](docs/mcp.md)
 - [Webhooks](docs/webhooks.md)
+- [Telegram](docs/telegram.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

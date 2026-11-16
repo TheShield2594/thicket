@@ -21,6 +21,7 @@ import (
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/channel/discord"
+	"github.com/theshield2594/thicket/internal/channel/telegram"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/secrets"
@@ -125,7 +126,14 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(ctx, cfg, version, app.Options{Channels: func(log *slog.Logger) []channel.Channel {
-		return []channel.Channel{discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log)}
+		var chs []channel.Channel
+		if cfg.DiscordToken != "" {
+			chs = append(chs, discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log))
+		}
+		if cfg.TelegramToken != "" {
+			chs = append(chs, telegram.New(cfg.TelegramToken, cfg.TelegramListenChats, log))
+		}
+		return chs
 	}})
 	if err != nil {
 		return err

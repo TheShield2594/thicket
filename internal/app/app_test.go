@@ -27,6 +27,7 @@ type sent struct {
 }
 
 type fakeChannel struct {
+	name    string // "" means discord
 	mu      sync.Mutex
 	sent    []sent
 	deleted []string
@@ -34,7 +35,12 @@ type fakeChannel struct {
 	failIf func(text string) bool
 }
 
-func (f *fakeChannel) Name() string { return "discord" }
+func (f *fakeChannel) Name() string {
+	if f.name == "" {
+		return "discord"
+	}
+	return f.name
+}
 func (f *fakeChannel) Run(ctx context.Context, h channel.Handler) error {
 	<-ctx.Done()
 	return nil
@@ -177,6 +183,8 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	switch {
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
+	case strings.Contains(u, "link my other app"):
+		return toolCall("link_account", map[string]any{}), nil
 	case strings.Contains(u, "webhook for ci"):
 		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke."}), nil
 	case strings.HasPrefix(u, "new url for job "):
@@ -218,6 +226,13 @@ Pip is small and tidy.
 
 func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 	t.Helper()
+	fc := &fakeChannel{}
+	a, fm, ctx := setupWith(t, fc)
+	return a, fc, fm, ctx
+}
+
+func setupWith(t *testing.T, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
+	t.Helper()
 	dir := t.TempDir()
 	os.Setenv("THICKET_DATA_DIR", dir)
 	t.Cleanup(func() { os.Unsetenv("THICKET_DATA_DIR") })
@@ -227,22 +242,27 @@ func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 	}
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.CharactersDir = filepath.Join(dir, "characters") // never touch a developer's real files
-	fc := &fakeChannel{}
 	fm := &fakeModel{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	a, err := New(ctx, cfg, "test", Options{
 		Model:    fm,
 		KeyCheck: func(context.Context, string) error { return nil },
-		Channels: func(*slog.Logger) []channel.Channel { return []channel.Channel{fc} },
-		LogOut:   io.Discard,
-		NoHTTP:   true,
+		Channels: func(*slog.Logger) []channel.Channel {
+			var out []channel.Channel
+			for _, c := range chans {
+				out = append(out, c)
+			}
+			return out
+		},
+		LogOut: io.Discard,
+		NoHTTP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
-	return a, fc, fm, ctx
+	return a, fm, ctx
 }
 
 func dm(text string) channel.Incoming {

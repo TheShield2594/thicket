@@ -1,5 +1,5 @@
 // Package channel defines the interface every chat adapter implements.
-// Discord is the first; Telegram slots in behind the same interface.
+// Discord and Telegram implement it.
 package channel
 
 import "context"
@@ -36,6 +36,9 @@ type Attachment struct {
 	URL         string
 	ContentType string // as reported by the platform; may be empty
 	Size        int    // bytes, as reported by the platform; 0 if unknown
+	// Open downloads the file when a plain URL won't do (the platform
+	// needs an authenticated call). Its errors must not contain secrets.
+	Open func(ctx context.Context, max int) ([]byte, string, error)
 }
 
 // ChatRef is a channel-qualified chat id, stored in the database.

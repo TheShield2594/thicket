@@ -97,3 +97,19 @@ func TestEnvFallbackWhenStoredCopyUnreadable(t *testing.T) {
 		t.Fatal("secrets after a broken one were not warmed")
 	}
 }
+
+func TestChatTokenShapes(t *testing.T) {
+	for _, s := range []string{
+		"my bot is 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw4 ok",
+		"https://example.com/hooks/thk_abcdefghijklmnopqrstuvwxyzABCDEF",
+	} {
+		if !LooksLikeSecret(s) {
+			t.Errorf("not caught: %s", s)
+		}
+	}
+	for _, s := range []string{"meet at 12:30", "order 1234567:aa"} {
+		if LooksLikeSecret(s) {
+			t.Errorf("false positive: %s", s)
+		}
+	}
+}

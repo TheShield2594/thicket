@@ -33,6 +33,19 @@ func Fetch(ctx context.Context, a Attachment, max int) ([]byte, string, error) {
 	if a.Size > max {
 		return nil, "", fmt.Errorf("too large (%s, limit %s)", humanSize(a.Size), humanSize(max))
 	}
+	if a.Open != nil {
+		body, ct, err := a.Open(ctx, max)
+		if err != nil {
+			return nil, "", err
+		}
+		if ct == "" || strings.HasPrefix(ct, "application/octet-stream") {
+			ct = a.ContentType
+		}
+		if ct == "" {
+			ct = mime.TypeByExtension(strings.ToLower(path.Ext(a.Name)))
+		}
+		return body, ct, nil
+	}
 	u, err := url.Parse(a.URL)
 	if err != nil || u.Scheme != "https" {
 		return nil, "", fmt.Errorf("unsupported attachment URL")
@@ -65,6 +78,9 @@ func Fetch(ctx context.Context, a Attachment, max int) ([]byte, string, error) {
 	}
 	return body, ct, nil
 }
+
+// HumanSize formats a byte count for messages.
+func HumanSize(n int) string { return humanSize(n) }
 
 func humanSize(n int) string {
 	switch {

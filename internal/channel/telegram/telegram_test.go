@@ -1,0 +1,206 @@
+package telegram
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/theshield2594/thicket/internal/channel"
+)
+
+const token = "123456:SECRET-token-value-abcdefghijklmnop"
+
+// fakeAPI is a tiny Bot API: it serves queued updates once and records
+// what was sent.
+type fakeAPI struct {
+	mu      sync.Mutex
+	updates []map[string]any
+	sent    []map[string]any
+	// rejectHTML makes sendMessage refuse parse_mode HTML once.
+	rejectHTML bool
+}
+
+func (f *fakeAPI) handler(t *testing.T) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/file/bot"+token+"/") {
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Write([]byte("jpegbytes"))
+			return
+		}
+		method := strings.TrimPrefix(r.URL.Path, "/bot"+token+"/")
+		if method == r.URL.Path {
+			w.WriteHeader(404)
+			w.Write([]byte(`{"ok":false,"error_code":404,"description":"Not Found"}`))
+			return
+		}
+		var p map[string]any
+		json.NewDecoder(r.Body).Decode(&p)
+		ok := func(v any) { b, _ := json.Marshal(map[string]any{"ok": true, "result": v}); w.Write(b) }
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch method {
+		case "getMe":
+			ok(map[string]any{"id": 999, "is_bot": true, "first_name": "Thicket", "username": "thicket_bot"})
+		case "deleteWebhook", "sendChatAction", "deleteMessage":
+			ok(true)
+		case "getUpdates":
+			ups := f.updates
+			f.updates = nil
+			if ups == nil {
+				ups = []map[string]any{}
+			}
+			ok(ups)
+		case "sendMessage":
+			if f.rejectHTML && p["parse_mode"] == "HTML" {
+				f.rejectHTML = false
+				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: can't parse entities"}`))
+				return
+			}
+			f.sent = append(f.sent, p)
+			ok(map[string]any{"message_id": 1})
+		case "getFile":
+			if p["file_id"] == "big" {
+				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: file is too big"}`))
+				return
+			}
+			ok(map[string]any{"file_path": "photos/p.jpg"})
+		default:
+			t.Errorf("unexpected method %s", method)
+		}
+	})
+}
+
+func newTest(t *testing.T, listen ...string) (*Adapter, *fakeAPI) {
+	f := &fakeAPI{}
+	srv := httptest.NewServer(f.handler(t))
+	t.Cleanup(srv.Close)
+	a := New(token, listen, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.BaseURL = srv.URL
+	return a, f
+}
+
+func msg(id int, chat int64, chatType, text string, extra map[string]any) map[string]any {
+	m := map[string]any{"message_id": id, "from": map[string]any{"id": 42, "first_name": "Sam"},
+		"chat": map[string]any{"id": chat, "type": chatType}, "text": text}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return map[string]any{"update_id": id, "message": m}
+}
+
+func TestReceive(t *testing.T) {
+	a, f := newTest(t, "-100")
+	f.updates = []map[string]any{
+		msg(1, 42, "private", "/start", nil),
+		msg(2, -5, "group", "@thicket_bot what's up?", map[string]any{"entities": []any{map[string]any{"type": "mention", "offset": 0, "length": 12}}}),
+		msg(3, -5, "group", "just chatting", nil),
+		msg(4, -100, "supergroup", "everyone hears this", nil),
+		msg(5, 42, "private", "", map[string]any{"caption": "look 🌱", "photo": []any{
+			map[string]any{"file_id": "small", "file_size": 10}, map[string]any{"file_id": "large", "file_size": 900}}}),
+		{"update_id": 6, "message": map[string]any{"message_id": 6, "from": map[string]any{"id": 7, "is_bot": true}, "chat": map[string]any{"id": 42, "type": "private"}, "text": "bot"}},
+		msg(7, -5, "group", "/help@thicket_bot", map[string]any{"entities": []any{map[string]any{"type": "bot_command", "offset": 0, "length": 17}}}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan channel.Incoming, 10)
+	go a.Run(ctx, func(_ context.Context, in channel.Incoming) { got <- in })
+
+	want := map[string]func(channel.Incoming) bool{
+		"1": func(in channel.Incoming) bool {
+			return in.IsDM && in.Text == "Hello!" && in.UserID == "42" && in.UserName == "Sam"
+		},
+		"2": func(in channel.Incoming) bool { return !in.IsDM && in.Mentioned && in.Text == "what's up?" },
+		"3": func(in channel.Incoming) bool { return !in.Mentioned && !in.Listening },
+		"4": func(in channel.Incoming) bool { return in.Listening && in.ChatID == "-100" },
+		"5": func(in channel.Incoming) bool {
+			return in.Text == "look 🌱" && len(in.Attachments) == 1 && in.Attachments[0].Size == 900 && in.Attachments[0].ContentType == "image/jpeg"
+		},
+		"7": func(in channel.Incoming) bool { return in.Mentioned && in.Text == "/help" },
+	}
+	deadline := time.After(5 * time.Second)
+	for len(want) > 0 {
+		select {
+		case in := <-got:
+			check, ok := want[in.MessageID]
+			if !ok {
+				t.Fatalf("unexpected message %s: %+v", in.MessageID, in)
+			}
+			if !check(in) {
+				t.Errorf("message %s: %+v", in.MessageID, in)
+			}
+			if in.MessageID == "5" {
+				body, ct, err := channel.Fetch(ctx, in.Attachments[0], 1000)
+				if err != nil || string(body) != "jpegbytes" || ct != "image/jpeg" {
+					t.Errorf("download: %q %q %v", body, ct, err)
+				}
+			}
+			delete(want, in.MessageID)
+		case <-deadline:
+			t.Fatalf("messages never arrived: %v", want)
+		}
+	}
+	if !a.Connected() {
+		t.Error("not connected")
+	}
+}
+
+func TestSendFormatsAndFallsBack(t *testing.T) {
+	a, f := newTest(t)
+	ctx := context.Background()
+	if err := a.Send(ctx, "42", channel.Persona{Name: "Pip"}, "**Done** <3 see `x<y`"); err != nil {
+		t.Fatal(err)
+	}
+	f.rejectHTML = true
+	if err := a.Send(ctx, "42", channel.Persona{Name: "Pip"}, "odd **text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(ctx, "42", channel.Persona{Name: "Pip"}, strings.Repeat("word ", 2000)); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.sent[0]["text"]; got != "<b>Pip</b>\n<b>Done</b> &lt;3 see <code>x&lt;y</code>" {
+		t.Fatalf("html: %q", got)
+	}
+	if f.sent[1]["parse_mode"] != nil || f.sent[1]["text"] != "Pip:\nodd **text" {
+		t.Fatalf("plain fallback: %+v", f.sent[1])
+	}
+	if len(f.sent) != 2+3 || strings.HasPrefix(f.sent[3]["text"].(string), "<b>Pip</b>") {
+		t.Fatalf("long text should be split with the name once: %d parts", len(f.sent)-2)
+	}
+}
+
+func TestErrorsNeverContainToken(t *testing.T) {
+	a := New(token, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.BaseURL = "http://127.0.0.1:1" // nothing listens
+	err := a.Send(context.Background(), "42", channel.Persona{}, "hi")
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("error leaks the token or is nil: %v", err)
+	}
+	_, _, err = a.download(context.Background(), "x", 100)
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("download error leaks the token: %v", err)
+	}
+	b, f := newTest(t)
+	_ = f
+	if _, _, err := b.download(context.Background(), "big", 100); err == nil || !strings.Contains(err.Error(), "20 MB") {
+		t.Fatalf("too-big file: %v", err)
+	}
+}
+
+func TestToHTML(t *testing.T) {
+	for in, want := range map[string]string{
+		"# Plan\n**a** & [docs](https://x.y/?a=1&b=2)": "<b>Plan</b>\n<b>a</b> &amp; <a href=\"https://x.y/?a=1&amp;b=2\">docs</a>",
+		"```go\nif a < b {}\n```":                      "<pre>if a &lt; b {}</pre>",
+		"[bad](javascript:alert(1))":                   "[bad](javascript:alert(1))",
+	} {
+		if got := toHTML(in); got != want {
+			t.Errorf("toHTML(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+}
