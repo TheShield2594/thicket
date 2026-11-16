@@ -120,8 +120,14 @@ cookies (`Secure` over HTTPS).
   them answer everything there. Telegram groups work the same way, with
   [one setting to change](docs/telegram.md#groups) for addressing by name.
 - Ask Juni to bring someone on: "I need help keeping on top of my
-  calendar". She interviews you, the new sprig introduces itself as a
-  preview, you tweak it, and the character file is written for you.
+  calendar". She interviews you (job, personality, voice, tools,
+  schedule), the new sprig introduces itself as a preview, you tweak it,
+  then she shows you every file it will get as a diff and nothing goes
+  live until you approve. New sprigs start at `draft` and earn trust:
+  they can ask for more, with their track record attached
+  ([details](docs/characters.md#bringing-on-a-new-sprig)).
+- Every sprig has a drawn, animated avatar that shows what it's doing
+  (idle, thinking, working, sleeping, stuck).
 - Send pictures, PDFs and text files. Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
@@ -135,11 +141,15 @@ cookies (`Secure` over HTTPS).
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
   `native`; the default is `auto`.
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
+- Routines can fire on events, not just the clock: "When I get an email
+  from Maya, summarise it" watches an integration for new items
+  ([details](docs/triggers.md)).
 - Let other things wake a sprig: "Make a webhook that tells me when a CI
   build fails." Thicket DMs you a private URL; anything that POSTs to it
   starts the job with what it sent. See [Webhooks](docs/webhooks.md).
-- See it all on one page: signed in to the web app, open `/dashboard` to see
-  your sprigs, memories, jobs and skills (and spending, for admins). See
+- See it all on one page: signed in to the web app, open `/dashboard` for
+  your sprigs with live avatars, the "needs you" inbox (approve or deny
+  there), the trail of what they did, and costs. See
   [Dashboard](docs/dashboard.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
@@ -174,6 +184,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OWNER_TELEGRAM_ID` | first DM | your numeric Telegram user id |
 | `THICKET_ALLOWED_USERS` | | comma-separated user ids allowed in, plain or as `telegram:ID` / `discord:ID` (or ask Juni to invite someone) |
 | `THICKET_DISCORD_CHANNELS` | | Discord channel ids where sprigs answer every message |
+| `THICKET_COMMONS_CHANNEL` | | a channel where sprigs hand work to each other by @mention ([details](docs/triggers.md#the-commons)); a Discord id, or `telegram:ID` |
 | `THICKET_TELEGRAM_CHATS` | | Telegram group ids where sprigs answer every message |
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
@@ -220,6 +231,7 @@ grant it.
 - [Character file reference](docs/characters.md)
 - [Integrations (MCP) setup](docs/mcp.md)
 - [Webhooks](docs/webhooks.md)
+- [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
 - [Skills](docs/skills.md)

@@ -62,6 +62,8 @@ type Engine struct {
 	// channel.Fetch. Tests replace it.
 	FetchAttachment func(ctx context.Context, a channel.Attachment, max int) ([]byte, string, error)
 	Now             func() time.Time
+	// Fire starts an event-driven job now (the scheduler's Fire).
+	Fire func(store.Job) error
 
 	channels  map[string]channel.Channel
 	chatLocks sync.Map   // chatRef -> *sync.Mutex
@@ -89,6 +91,7 @@ type Engine struct {
 	taskSeq   atomic.Int64
 	lifeMu    sync.Mutex
 	lifetime  context.Context
+	activity  sync.Map // sprig id -> *busy (for live avatar state)
 	linkMu    sync.Mutex
 	links     map[string]linkCode    // code -> pending link
 	linkFails map[string][]time.Time // channel:user -> failed attempts
@@ -292,10 +295,14 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	// registered only after its prompt was delivered (deliverApproval).
 	for _, p := range t.afterReply {
 		var err error
+		who := t.char
+		if p.as != nil {
+			who = p.as
+		}
 		if p.approval != nil {
-			err = e.deliverApproval(ctx, t.char, p.approval, p.text)
+			err = e.deliverApproval(ctx, who, p.approval, p.text)
 		} else {
-			err = e.send(ctx, t.chatRef, t.char, p.text)
+			err = e.send(ctx, t.chatRef, who, p.text)
 		}
 		if err != nil {
 			e.Log.Error("post after reply", "err", err)
@@ -318,11 +325,18 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
 		return nil // stopped after the reply went out: no handoff
 	}
+	// In the commons, @mentioning another sprig hands over to it.
+	if t.handoff == nil && reply != "" && e.isCommons(t.chatRef) {
+		if c := e.mentionedSprig(reply, t.char); c != nil {
+			t.handoff = &handoffReq{to: c.ID, message: truncate(reply, 500)}
+		}
+	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
 		if !ok {
 			return nil
 		}
+		e.logActivity(ctx, "info", "handoff", t.char.ID, t.user.ID, fmt.Sprintf("%s handed off to %s", t.char.DisplayName(), target.DisplayName()), h.message)
 		e.active.Store(t.chatRef, target.ID)
 		note := fmt.Sprintf("%s handed this over to %s: %s", t.char.DisplayName(), target.DisplayName(), h.message)
 		if t.conv != nil {

@@ -54,7 +54,8 @@ type turn struct {
 
 type post struct {
 	text     string
-	approval *store.Approval // registered only once the prompt is delivered
+	approval *store.Approval      // registered only once the prompt is delivered
+	as       *character.Character // who posts it (default: the turn's sprig)
 }
 
 func (t *turn) jobMode() bool { return t.job != nil }
@@ -62,6 +63,7 @@ func (t *turn) jobMode() bool { return t.job != nil }
 // runTurn builds the prompt, runs the model/tool loop and returns the
 // final reply text (already checked for character consistency).
 func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, error) {
+	defer e.mark(t.char.ID, false)()
 	msgs, err := e.buildMessages(ctx, t, event)
 	if err != nil {
 		return "", err
@@ -186,7 +188,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		skills: skills,
 		char:   t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
-		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
+		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
 	if summary != "" {
@@ -302,7 +304,9 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if msg, ok := e.gate(ctx, t, tool, args); !ok {
 		return msg
 	}
+	done := e.mark(t.char.ID, true)
 	out, err := tool.Run(ctx, t, args)
+	done()
 	level, summary := "info", "called "+name
 	if err != nil {
 		level, summary = "warn", "tool "+name+" failed"

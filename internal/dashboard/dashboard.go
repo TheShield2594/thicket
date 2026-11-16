@@ -1,18 +1,29 @@
-// Package dashboard serves a small read-only web page: your sprigs,
-// memories, jobs and skills, and for admins spending, health and the
-// activity log. It has no sign-in of its own: it uses the web app's
+// Package dashboard serves a small, read-mostly web page: the sprig roster
+// with live avatars, the "needs you" inbox (approve or deny from here),
+// the trail of what sprigs did, memories, jobs and skills, and for admins
+// costs and health. It has no sign-in of its own: it uses the web app's
 // session (sign in there, then open /dashboard).
 package dashboard
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
@@ -30,6 +41,12 @@ type Check struct {
 }
 
 type Dashboard struct {
+	// States reports each sprig's live state (idle, thinking, ...) by id.
+	States func(ctx context.Context) map[string]string
+	// Decide answers a pending approval; RunDraft has a draft done.
+	Decide   func(ctx context.Context, u *store.User, id int64, approve bool) error
+	RunDraft func(ctx context.Context, u *store.User, id int64) error
+
 	DB       *store.Store
 	Chars    *character.Registry
 	Settings *settings.Settings
@@ -52,20 +69,37 @@ func (d *Dashboard) now() time.Time {
 func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /dashboard", d.page)
+	mux.HandleFunc("GET /dashboard/state.json", d.state)
+	mux.HandleFunc("POST /dashboard/act", d.act)
 	mux.HandleFunc("GET /dashboard/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/dashboard", http.StatusSeeOther) })
 	return secureHeaders(mux)
 }
 
+type nonceKey struct{}
+
+// secureHeaders sets a strict policy: no scripts but the page's own small
+// one (by nonce), which only fetches live sprig states.
 func secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nb := make([]byte, 16)
+		_, _ = rand.Read(nb)
+		nonce := base64.RawStdEncoding.EncodeToString(nb)
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; connect-src 'self'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), nonceKey{}, nonce)))
 	})
+}
+
+// csrfToken ties a form to the session it was rendered for: forms can't
+// send custom headers, so writes carry this instead.
+func csrfToken(session string) string {
+	m := hmac.New(sha256.New, []byte(session))
+	m.Write([]byte("thicket-dashboard-act"))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 func (d *Dashboard) user(r *http.Request) (*store.User, error) {
@@ -77,6 +111,24 @@ func (d *Dashboard) user(r *http.Request) (*store.User, error) {
 }
 
 func (d *Dashboard) page(w http.ResponseWriter, r *http.Request) {
+	d.render(w, r, http.StatusOK, flashFor(r.URL.Query().Get("ok")), "")
+}
+
+func flashFor(code string) string {
+	switch code {
+	case "approved":
+		return "Approved. The sprig is on it and will report back in chat."
+	case "denied":
+		return "Denied. The sprig has been told."
+	case "done":
+		return "Done. The sprig will tell you how it went in chat."
+	case "resolved":
+		return "Cleared from your inbox."
+	}
+	return ""
+}
+
+func (d *Dashboard) render(w http.ResponseWriter, r *http.Request, code int, flash, problem string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	u, err := d.user(r)
 	if err != nil {
@@ -90,34 +142,118 @@ func (d *Dashboard) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "couldn't load the dashboard", http.StatusInternalServerError)
 		return
 	}
+	c, _ := r.Cookie(SessionCookie)
+	data.CSRF = csrfToken(c.Value)
+	data.Nonce, _ = r.Context().Value(nonceKey{}).(string)
+	data.Flash, data.Problem = flash, problem
+	w.WriteHeader(code)
 	if err := pageTmpl.Execute(w, data); err != nil {
 		d.Log.Error("dashboard render", "err", err)
 	}
 }
 
+// state is the roster's live states, polled by the page.
+func (d *Dashboard) state(w http.ResponseWriter, r *http.Request) {
+	if _, err := d.user(r); err != nil {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+	st := map[string]string{}
+	if d.States != nil {
+		st = d.States(r.Context())
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(st)
+}
+
+// act answers the inbox: approve or deny a request, have a draft done, or
+// clear an item. Only the person it's for can.
+func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
+	u, err := d.user(r)
+	if err != nil {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+	c, _ := r.Cookie(SessionCookie)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := r.ParseForm(); err != nil || !hmac.Equal([]byte(r.PostFormValue("csrf")), []byte(csrfToken(c.Value))) {
+		http.Error(w, "this form has expired; reload the dashboard", http.StatusForbidden)
+		return
+	}
+	id, _ := strconv.ParseInt(r.PostFormValue("id"), 10, 64)
+	ctx := r.Context()
+	var ok string
+	switch kind, action := r.PostFormValue("kind"), r.PostFormValue("action"); {
+	case kind == "approval" && (action == "approve" || action == "deny") && d.Decide != nil:
+		err = d.Decide(ctx, u, id, action == "approve")
+		ok = map[bool]string{true: "approved", false: "denied"}[action == "approve"]
+	case kind == "inbox" && action == "run" && d.RunDraft != nil:
+		err, ok = d.RunDraft(ctx, u, id), "done"
+	case kind == "inbox" && action == "resolve":
+		err, ok = d.DB.ResolveInbox(ctx, id, u.ID), "resolved"
+		if errors.Is(err, store.ErrNotFound) {
+			err = errors.New("that item was already cleared")
+		}
+	default:
+		err = errors.New("unknown action")
+	}
+	if err != nil {
+		d.render(w, r, http.StatusBadRequest, "", "Couldn't do that: "+err.Error())
+		return
+	}
+	http.Redirect(w, r, "/dashboard?ok="+ok+"#inbox", http.StatusSeeOther)
+}
+
 // --- what the page shows ---
 
 type pageData struct {
-	User     *store.User
-	Name     string
-	Admin    bool
-	Version  string
-	Now      string
-	Model    string
-	Sprigs   []sprigView
-	MemGroup []memGroup
-	MemCount int
-	Jobs     []jobView
-	Skills   []store.Skill
-	Spend    *spendView
-	Health   []checkView
-	Activity []activityView
+	CSRF, Nonce    string
+	Flash, Problem string
+	AvatarCSS      template.CSS
+	Approvals      []approvalView
+	Inbox          []inboxView
+	Trail          []activityView
+	Costs          []costRow
+	Models         []costRow
+	User           *store.User
+	Name           string
+	Admin          bool
+	Version        string
+	Now            string
+	Model          string
+	Sprigs         []sprigView
+	MemGroup       []memGroup
+	MemCount       int
+	Jobs           []jobView
+	Skills         []store.Skill
+	Spend          *spendView
+	Health         []checkView
 }
 
 type sprigView struct {
-	Name, Role string
-	Host       bool
-	Scopes     []string
+	ID, Name, Role string
+	Host           bool
+	Scopes         []string
+	State          string
+	Avatar         template.HTML
+}
+
+type approvalView struct {
+	ID              int64
+	Sprig, Tool, At string
+	Args            string
+}
+
+type inboxView struct {
+	ID                         int64
+	Kind, Title, Detail, Sprig string
+	At                         string
+	Count                      int
+	Draft                      bool
+}
+
+type costRow struct {
+	Label, Heartbeat, Task, Total, Calls string
 }
 
 type memGroup struct {
@@ -160,7 +296,7 @@ type checkView struct {
 }
 
 type activityView struct {
-	At, Level, Summary string
+	At, Level, Kind, Sprig, Summary string
 }
 
 func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error) {
@@ -183,9 +319,21 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	}
 
 	names := map[string]string{}
+	states := map[string]string{}
+	if d.States != nil {
+		states = d.States(ctx)
+	}
+	p.AvatarCSS = template.CSS(avatar.CSS)
 	for _, c := range d.Chars.All() {
 		names[c.ID] = c.DisplayName()
-		p.Sprigs = append(p.Sprigs, sprigView{Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools})
+		st := states[c.ID]
+		if st == "" {
+			st = "idle"
+		}
+		look := avatar.Load(d.Chars.Dir(), c.ID, c.Color)
+		// Inline renders only validated parts and escapes the label.
+		svg := template.HTML(avatar.Inline(look, st, "av-"+c.ID, c.DisplayName()+" is "+st))
+		p.Sprigs = append(p.Sprigs, sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg})
 	}
 	name := func(id string) string {
 		if n, ok := names[id]; ok {
@@ -248,8 +396,43 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	if p.Skills, err = d.DB.Skills(ctx); err != nil {
 		return nil, err
 	}
+
+	apps, err := d.DB.PendingApprovals(ctx, u.ID, 30*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range apps {
+		what := a.Tool
+		if strings.HasPrefix(what, "thicket:") {
+			what = strings.ReplaceAll(strings.TrimPrefix(what, "thicket:"), "_", " ")
+		}
+		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: shorten(a.Args, 600)})
+	}
+	items, err := d.DB.OpenInbox(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		p.Inbox = append(p.Inbox, inboxView{ID: it.ID, Kind: it.Kind, Title: it.Title, Detail: shorten(it.Detail, 600), Sprig: name(it.Character),
+			At: stamp(it.UpdatedAt), Count: it.Count, Draft: it.Kind == store.InboxDraft && it.Action != ""})
+	}
+	var acts []store.Activity
+	if p.Admin {
+		acts, err = d.DB.RecentActivity(ctx, 60, "info")
+	} else {
+		acts, err = d.DB.UserActivity(ctx, u.ID, 60)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range acts {
+		p.Trail = append(p.Trail, activityView{At: stamp(a.At), Level: a.Level, Kind: a.Kind, Sprig: name(a.Character), Summary: a.Summary})
+	}
 	if !p.Admin {
 		return p, nil
+	}
+	if p.Costs, p.Models, err = d.costs(ctx, name); err != nil {
+		return nil, err
 	}
 	if p.Spend, err = d.spend(ctx); err != nil {
 		return nil, err
@@ -260,14 +443,57 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		}
 		sort.Slice(p.Health, func(i, j int) bool { return p.Health[i].Name < p.Health[j].Name })
 	}
-	acts, err := d.DB.RecentActivity(ctx, 50, "info")
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range acts {
-		p.Activity = append(p.Activity, activityView{At: stamp(a.At), Level: a.Level, Summary: a.Summary})
-	}
 	return p, nil
+}
+
+// costs is this month's spend per sprig, split heartbeat/task, and per model.
+func (d *Dashboard) costs(ctx context.Context, name func(string) string) ([]costRow, []costRow, error) {
+	now := d.now().UTC()
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	rows, err := d.DB.UsageSummary(ctx, month, "character", "origin")
+	if err != nil {
+		return nil, nil, err
+	}
+	type split struct{ hb, task float64 }
+	by := map[string]*split{}
+	var order []string
+	for _, r := range rows {
+		k := r.Keys[0]
+		if by[k] == nil {
+			by[k] = &split{}
+			order = append(order, k)
+		}
+		if r.Keys[1] == "heartbeat" {
+			by[k].hb += r.CostUSD
+		} else {
+			by[k].task += r.CostUSD
+		}
+	}
+	sort.SliceStable(order, func(i, j int) bool { return by[order[i]].hb+by[order[i]].task > by[order[j]].hb+by[order[j]].task })
+	var sprigs []costRow
+	for _, k := range order {
+		label := name(k)
+		if k == "" {
+			label = "Background (memory review, summaries)"
+		}
+		sprigs = append(sprigs, costRow{Label: label, Heartbeat: money(by[k].hb), Task: money(by[k].task), Total: money(by[k].hb + by[k].task)})
+	}
+	mrows, err := d.DB.UsageSummary(ctx, month, "model")
+	if err != nil {
+		return nil, nil, err
+	}
+	var models []costRow
+	for _, r := range mrows {
+		models = append(models, costRow{Label: r.Keys[0], Total: money(r.CostUSD), Calls: strconv.Itoa(r.Calls)})
+	}
+	return sprigs, models, nil
+}
+
+func shorten(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (d *Dashboard) spend(ctx context.Context) (*spendView, error) {

@@ -28,6 +28,9 @@ type Job struct {
 	// Payload is what a webhook call sent. Not stored: it lives only for
 	// the run it started.
 	Payload string
+	// Event names what fired a trigger job ("server → tool"); "" for a
+	// webhook call. Not stored.
+	Event string
 }
 
 const (

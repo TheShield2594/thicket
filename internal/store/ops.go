@@ -35,8 +35,18 @@ func (s *Store) RecentActivity(ctx context.Context, limit int, minLevel string) 
 	case "error":
 		levels = []any{"error", "error", "error"}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
+	return s.activity(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
 		WHERE level IN (?, ?, ?) ORDER BY id DESC LIMIT ?`, append(levels, limit)...)
+}
+
+// UserActivity is the trail of what sprigs did for one user, newest first.
+func (s *Store) UserActivity(ctx context.Context, userID int64, limit int) ([]Activity, error) {
+	return s.activity(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
+		WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+}
+
+func (s *Store) activity(ctx context.Context, q string, args ...any) ([]Activity, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

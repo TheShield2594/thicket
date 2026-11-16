@@ -65,7 +65,7 @@ func TestMigrateApprovalPoliciesToLevels(t *testing.T) {
 	}
 	defer s.Close()
 	for tool, want := range map[string]string{"mcp_ha__turn_on": LevelAct, "remember": LevelAsk, "other": ""} {
-		if got, _ := s.ToolLevel(ctx, "pip", tool); got != want {
+		if got, _ := s.ToolLevel(ctx, "pip", tool, true); got != want {
 			t.Errorf("%s: level %q, want %q", tool, got, want)
 		}
 	}
@@ -88,17 +88,17 @@ func TestToolLevelPrecedence(t *testing.T) {
 	if err := s.SetToolLevel(ctx, "pip", "send", LevelRead); err != nil {
 		t.Fatal(err)
 	}
-	if lv, _ := s.ToolLevel(ctx, "pip", "send"); lv != LevelRead {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelRead {
 		t.Fatalf("a sprig's own level must win: %q", lv)
 	}
-	if lv, _ := s.ToolLevel(ctx, "juniper", "send"); lv != LevelAct {
+	if lv, _ := s.ToolLevel(ctx, "juniper", "send", true); lv != LevelAct {
 		t.Fatalf("others get the all-sprigs level: %q", lv)
 	}
 	if err := s.SetToolLevel(ctx, "pip", "send", "sudo"); err == nil {
 		t.Fatal("an unknown level was accepted")
 	}
 	s.SetToolLevel(ctx, "pip", "send", "")
-	if lv, _ := s.ToolLevel(ctx, "pip", "send"); lv != LevelAct {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelAct {
 		t.Fatalf("clearing the sprig's level falls back: %q", lv)
 	}
 }
@@ -187,5 +187,27 @@ func TestUsageSummary(t *testing.T) {
 	}
 	if _, err := s.UsageSummary(ctx, time.Now(), "user_id; DROP TABLE usage"); err == nil {
 		t.Fatal("arbitrary grouping accepted")
+	}
+}
+
+// A sprig-wide level (tool "*") applies to granted tools only, and loses
+// to a level set for that exact tool.
+func TestSprigWideLevel(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	s.SetToolLevel(ctx, "pip", AnyTool, LevelDraft)
+	s.SetToolLevel(ctx, AllSprigs, "send", LevelAct)
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelDraft {
+		t.Fatalf("sprig-wide level should beat the all-sprigs one: %q", lv)
+	}
+	if lv, _ := s.ToolLevel(ctx, "pip", "remember", false); lv != "" {
+		t.Fatalf("a core tool picked up the sprig-wide level: %q", lv)
+	}
+	s.SetToolLevel(ctx, "pip", "send", LevelAsk)
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelAsk {
+		t.Fatalf("the exact tool level should win: %q", lv)
+	}
+	if LevelRank(LevelRead) >= LevelRank(LevelAct) || LevelRank("nope") != -1 {
+		t.Fatal("level ranks")
 	}
 }

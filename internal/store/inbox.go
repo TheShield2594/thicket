@@ -27,6 +27,8 @@ type InboxItem struct {
 	Detail    string
 	Count     int
 	Status    string // open | resolved
+	// Action is a draft's exact tool call, as JSON (see DraftAction).
+	Action    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -49,8 +51,8 @@ func (s *Store) AddInbox(ctx context.Context, it InboxItem) (int64, error) {
 			return 0, err
 		}
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO inbox (user_id, character, kind, ref, title, detail, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, it.Title, it.Detail, now, now)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO inbox (user_id, character, kind, ref, title, detail, action, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, it.Title, it.Detail, it.Action, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -59,7 +61,7 @@ func (s *Store) AddInbox(ctx context.Context, it InboxItem) (int64, error) {
 
 // OpenInbox lists open items, newest first. userID 0 means everyone's.
 func (s *Store) OpenInbox(ctx context.Context, userID int64) ([]InboxItem, error) {
-	q := "SELECT id, user_id, character, kind, ref, title, detail, count, status, created_at, updated_at FROM inbox WHERE status = 'open'"
+	q := "SELECT " + inboxCols + " FROM inbox WHERE status = 'open'"
 	var args []any
 	if userID != 0 {
 		q += " AND user_id = ?"
@@ -72,15 +74,43 @@ func (s *Store) OpenInbox(ctx context.Context, userID int64) ([]InboxItem, error
 	defer rows.Close()
 	var out []InboxItem
 	for rows.Next() {
-		var it InboxItem
-		var c, u int64
-		if err := rows.Scan(&it.ID, &it.UserID, &it.Character, &it.Kind, &it.Ref, &it.Title, &it.Detail, &it.Count, &it.Status, &c, &u); err != nil {
+		it, err := scanInbox(rows)
+		if err != nil {
 			return nil, err
 		}
-		it.CreatedAt, it.UpdatedAt = time.Unix(c, 0), time.Unix(u, 0)
-		out = append(out, it)
+		out = append(out, *it)
 	}
 	return out, rows.Err()
+}
+
+const inboxCols = "id, user_id, character, kind, ref, title, detail, count, status, action, created_at, updated_at"
+
+func scanInbox(r interface{ Scan(...any) error }) (*InboxItem, error) {
+	var it InboxItem
+	var c, u int64
+	if err := r.Scan(&it.ID, &it.UserID, &it.Character, &it.Kind, &it.Ref, &it.Title, &it.Detail, &it.Count, &it.Status, &it.Action, &c, &u); err != nil {
+		return nil, err
+	}
+	it.CreatedAt, it.UpdatedAt = time.Unix(c, 0), time.Unix(u, 0)
+	return &it, nil
+}
+
+// InboxItemByID returns one item, open or not.
+func (s *Store) InboxItemByID(ctx context.Context, id int64) (*InboxItem, error) {
+	it, err := scanInbox(s.db.QueryRowContext(ctx, "SELECT "+inboxCols+" FROM inbox WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return it, err
+}
+
+// OpenInboxFor counts open failed or interrupted items for a sprig newer
+// than since (a sprig with some is "stuck").
+func (s *Store) OpenInboxFor(ctx context.Context, character string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbox WHERE status = 'open' AND character = ?
+		AND kind IN ('failed', 'interrupted') AND updated_at >= ?`, character, since.Unix()).Scan(&n)
+	return n, err
 }
 
 // ResolveInbox closes an item. userID 0 skips the ownership check (CLI,
@@ -100,6 +130,54 @@ func (s *Store) ResolveInbox(ctx context.Context, id, userID int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ApprovalByID returns one approval, whatever its status.
+func (s *Store) ApprovalByID(ctx context.Context, id int64) (*Approval, error) {
+	var a Approval
+	var at int64
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at FROM approvals WHERE id = ?`, id).
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	a.CreatedAt = time.Unix(at, 0)
+	return &a, err
+}
+
+// ToolRecord is a sprig's track record with one tool, from the trail (the
+// activity log) and its approvals.
+type ToolRecord struct {
+	Actions  int // calls that ran and worked (directly or once approved)
+	Failures int // calls that ran and failed
+	Drafts   int // actions written up at draft level
+	Refused  int // calls refused at read level
+	Approved int
+	Denied   int
+	Expired  int // approval requests nobody answered
+}
+
+// ToolRecordSince builds a sprig's track record with a tool.
+func (s *Store) ToolRecordSince(ctx context.Context, character, tool string, since time.Time) (ToolRecord, error) {
+	var r ToolRecord
+	err := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(summary IN (?, ?)), 0),
+		COALESCE(SUM(summary IN (?, ?)), 0),
+		COALESCE(SUM(summary = ?), 0),
+		COALESCE(SUM(summary = ?), 0)
+		FROM activity WHERE character = ? AND at >= ?`,
+		"called "+tool, "ran approved tool "+tool,
+		"tool "+tool+" failed", "approved tool "+tool+" failed",
+		"drafted "+tool, "refused "+tool+": read-only access",
+		character, since.Unix()).Scan(&r.Actions, &r.Failures, &r.Drafts, &r.Refused)
+	if err != nil {
+		return r, err
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(status = 'approved'), 0), COALESCE(SUM(status = 'denied'), 0), COALESCE(SUM(status = 'expired'), 0)
+		FROM approvals WHERE character = ? AND tool = ? AND created_at >= ?`, character, tool, since.Unix()).
+		Scan(&r.Approved, &r.Denied, &r.Expired)
+	return r, err
 }
 
 // PendingApprovals lists approvals still waiting for an answer (younger

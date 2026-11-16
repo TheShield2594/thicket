@@ -63,7 +63,7 @@ func TestDashboard(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("dashboard: %d", resp.StatusCode)
 	}
-	for _, want := range []string{"Juni", "Has a dog named Biscuit.", "Morning digest", "30 7 * * 1-5", "Spending", "Recent activity", "Health", `href="/"`} {
+	for _, want := range []string{"Juni", "Has a dog named Biscuit.", "Morning digest", "30 7 * * 1-5", `id="costs"`, `id="trail"`, `id="inbox"`, "Health", `href="/"`, `class="sprig is-`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
@@ -76,7 +76,7 @@ func TestDashboard(t *testing.T) {
 	member, _ := a.DB.CreateUser(ctx, "discord", "m1", "Kim", "member")
 	ms, _ := a.DB.CreateWebSession(ctx, member.ID, "test", web.SessionTTL)
 	_, body = getDashboard(t, srv, ms)
-	if strings.Contains(body, "Biscuit") || strings.Contains(body, "Morning digest") || strings.Contains(body, "Spending") || strings.Contains(body, "Recent activity") {
+	if strings.Contains(body, "Biscuit") || strings.Contains(body, "Morning digest") || strings.Contains(body, `id="costs"`) || strings.Contains(body, `id="health"`) || strings.Contains(body, "called remember") {
 		t.Fatal("a member sees the owner's memories, jobs or admin sections")
 	}
 	if !strings.Contains(body, "Kim") {

@@ -286,6 +286,23 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	u := strings.ToLower(last.Content)
 	switch {
+	case strings.Contains(u, "bring on wren"):
+		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps the reading list.",
+			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "tools": []string{"schedule"},
+			"routines": []map[string]string{{"name": "Sunday reading nudge", "schedule": "0 10 * * 0", "task": "Suggest what to read next."}},
+			"look":     map[string]string{"body": "tall", "accessory": "book", "expression": "curious"}}), nil
+	case strings.Contains(u, "create wren"):
+		return toolCall("create_character", map[string]any{"id": "wren"}), nil
+	case strings.Contains(u, "schedule a reminder"):
+		return toolCall("schedule_job", map[string]any{"name": "Reminder", "schedule": "0 9 * * *", "task": "Remind me to stretch."}), nil
+	case strings.Contains(u, "ask for more trust"):
+		return toolCall("request_access", map[string]any{"tool": "mcp_ha__turn_on", "level": "act", "reason": "So I can switch the porch light at dusk without waking you."}), nil
+	case strings.Contains(u, "who handles calendars"):
+		return text("Not me! @Pip, can you take this one?"), nil
+	case strings.Contains(u, "watch the lights"):
+		return toolCall("create_trigger", map[string]any{"name": "Lights on", "task": "Tell me which light came on.", "integration": "ha", "tool": "get_state", "match": "/\"on\"/", "every_minutes": 5, "owner": "hal"}), nil
+	case strings.Contains(u, "watch the switch"):
+		return toolCall("create_trigger", map[string]any{"name": "Bad", "task": "x", "integration": "ha", "tool": "turn_on", "owner": "hal"}), nil
 	case strings.Contains(u, "turn on the light"):
 		return toolCall("mcp_ha__turn_on", map[string]any{"entity": "light.kitchen"}), nil
 	case strings.Contains(u, "check the light"):

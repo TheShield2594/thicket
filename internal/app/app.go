@@ -18,6 +18,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/api"
+	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
@@ -196,11 +197,13 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 				"My memory review keeps failing ("+shortErr(err)+"). Nothing is lost, but I'm not learning from recent chats until it's fixed.")
 		}}
 	a.Scheduler = scheduler.New(db, a.Engine, log)
+	a.Engine.Fire = a.Scheduler.Fire
 	// The local API is an internal channel: replies to its messages come
 	// back through it. It isn't listed in /health like the chat apps.
 	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
+		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft,
 		SessionTTL: web.SessionTTL,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
@@ -214,9 +217,22 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
 			Hooks: a.Webhook, MaxHookBody: agent.MaxWebhookPayload,
 			API: a.API.Handler(), Dashboard: a.Dashboard.Handler(), App: a.Web.Handler(),
+			Avatar: a.Avatar,
 		})
 	}
 	return a, nil
+}
+
+// Avatar draws a sprig's avatar; state "" means what it's doing now.
+func (a *App) Avatar(ctx context.Context, id, state string) (string, bool) {
+	c, ok := a.Chars.Get(id)
+	if !ok {
+		return "", false
+	}
+	if state == "" {
+		state = a.Engine.SprigStates(ctx)[c.ID]
+	}
+	return avatar.Render(avatar.Load(a.Chars.Dir(), c.ID, c.Color), state), true
 }
 
 func shortErr(err error) string {
@@ -335,6 +351,7 @@ func (a *App) Run(parent context.Context) error {
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })
 	goRun("memory", func() { a.Reviewer.Run(ctx) })
 	goRun("initiative", func() { a.Engine.RunInitiative(ctx) })
+	goRun("triggers", func() { a.Engine.RunTriggers(ctx) })
 	goRun("characters", func() {
 		a.Chars.Watch(ctx, 10*time.Second, func(errs []character.LoadError) {
 			for _, e := range errs {
@@ -492,6 +509,9 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 	if len(head) > 0 {
 		payload = strings.Join(head, "\n") + "\n\n" + payload
 	}
+	if tr, err := a.DB.TriggerFor(ctx, j.ID); err == nil && tr.Source == store.TriggerWebhook && !agent.Matches(tr.Match, payload) {
+		return http.StatusOK, "ignored: the body doesn't match this job's filter"
+	}
 	j.Payload = payload
 	fireErr := a.Scheduler.Fire(*j)
 	if fireErr != nil {
@@ -503,6 +523,8 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 		return http.StatusAccepted, "started"
 	case errors.Is(err, scheduler.ErrPaused):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, scheduler.ErrHeld):
+		return http.StatusServiceUnavailable, err.Error()
 	case errors.Is(err, scheduler.ErrBusy), errors.Is(err, scheduler.ErrTooSoon), errors.Is(err, scheduler.ErrTooMany):
 		a.Engine.WebhookRefused(ctx, *j, err)
 		return http.StatusTooManyRequests, err.Error()

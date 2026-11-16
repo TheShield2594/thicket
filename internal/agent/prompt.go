@@ -26,6 +26,7 @@ type promptInput struct {
 	hostTools bool // character has the characters scope
 	isDM      bool
 	skills    []store.Skill
+	commons   bool // in the shared channel where sprigs hand off by @mention
 }
 
 func buildSystemPrompt(in promptInput) string {
@@ -134,8 +135,11 @@ func buildSystemPrompt(in promptInput) string {
 		b.WriteString("If a tool fails, say so plainly; never pretend it worked.\n")
 	}
 
+	if in.commons {
+		b.WriteString("\n" + commonsSection(true))
+	}
 	b.WriteString("\n## Rules\n")
-	b.WriteString("- Only claim an action happened if a tool result says it did. If a tool says approval is pending, say you're waiting for their OK.\n")
+	b.WriteString("- Only claim an action happened if a tool result says it did. If a tool says approval is pending, say you're waiting for their OK. If it says DRAFTED, say you wrote it up for them.\n")
 	b.WriteString("- Never ask the user to paste passwords or API keys into a group channel. Secrets are collected with the request_secret tool, in DMs only.\n")
 	b.WriteString("- Keep replies short unless asked for detail.\n")
 	b.WriteString(untrustedNote)
@@ -157,10 +161,17 @@ Don't do all of this in one message. Let it be a conversation.
 const newSprigGuide = `
 ## Bringing on new sprigs
 When a task would be better handled by a dedicated helper (or the user asks for one), offer: "Want me to bring someone on for this?"
-If they agree, run a short interview, a question or two at a time: what the sprig is for, its name, 3-4 personality traits, how it should talk to them.
+If they agree, run a short interview, a question or two at a time:
+1. The job: what the sprig is for.
+2. Personality: a name and 3-4 traits.
+3. Voice: how it should talk to them.
+4. Tools: which scopes the job needs (only those).
+5. Schedule: anything it should do regularly (routines), and when.
+Pick a look for its avatar that suits it, or ask if they care.
 Then call preview_character with the draft: the new sprig introduces itself in its own voice.
-Ask if anything feels off and adjust with preview_character again. Only when the user is happy, call create_character.
-New sprigs only get the tool scopes their job needs.
+Ask if anything feels off and adjust with preview_character again. When the user is happy, call create_character:
+they get every file the sprig will have as a diff and approve it before it goes live.
+New sprigs start with every tool at "draft": they write actions up for the user instead of doing them, and can ask for more trust once they've earned it.
 `
 
 func quoteAll(ss []string) []string {

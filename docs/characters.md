@@ -104,6 +104,65 @@ What a granted tool may do is set separately, per sprig and tool, with
 permission levels (`read`, `draft`, `ask`, `act`): see
 [Approvals and permission levels](mcp.md#approvals-and-permission-levels).
 
+## A sprig's folder
+
+Next to `<id>.md`, a sprig can have a folder:
+
+```
+characters/
+  pip.md
+  pip/
+    avatar.json        its drawn look
+    voice_tests/       reference exchanges for thicket voice-check
+```
+
+Sprigs Juni brings on get both, written only after you approve them.
+
+## Bringing on a new sprig
+
+Ask Juni ("I need someone to keep my reading list"). She interviews you a
+question or two at a time: the job, its personality, how it talks, which
+tools it needs, and anything it should do on a schedule. The new sprig
+introduces itself in its own voice; tweak it until it feels right. Then
+Juni shows you every file it will get as a diff, plus its routines, and
+nothing is created until you **approve**:
+
+```diff
+--- /dev/null
++++ b/characters/wren.md
+@@ -0,0 +1,22 @@
++---
++id: wren
++name: Wren
+...
+```
+
+New sprigs start with every granted tool at **draft**: they write actions
+up for you (in your inbox) instead of doing them. Core abilities
+(remembering, working with other sprigs) aren't affected. A sprig can ask
+for more trust with one tool at a time (`request_access`): Juni puts the
+request to you with its track record from the trail (actions taken,
+drafts, approval rate, mistakes), and only an owner or admin can say yes.
+
+## Avatars
+
+Each sprig is drawn from parts, no image generation involved:
+
+| Part | Choices |
+|---|---|
+| `body` | round, tall, pear, bean |
+| `color` | any `#rrggbb` (defaults to the character's color) |
+| `hat` | sprout, curl, clover, fern, none |
+| `hat_color` | any `#rrggbb` |
+| `accessory` | none, watering-can, glasses, scarf, book, lantern |
+| `expression` | happy, calm, curious, sleepy, determined |
+
+They live in `<id>/avatar.json`; anything missing is picked from the
+sprig's id, so every sprig has a look. The avatar animates for idle,
+thinking, working, sleeping and stuck, on the dashboard and at
+`/avatars/<id>.svg`. Discord and Telegram still use the `avatar` image
+field, since they can't show SVG.
+
 ## Voice tests
 
 A sprig can have reference exchanges in `<id>/voice_tests/*.yaml` next to

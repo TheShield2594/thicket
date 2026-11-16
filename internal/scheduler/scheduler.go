@@ -115,6 +115,8 @@ var (
 	ErrBusy    = errors.New("the job is still running from the last call")
 	ErrTooSoon = fmt.Errorf("called again within %s of the last run", WebhookMinGap)
 	ErrTooMany = fmt.Errorf("already ran %d times in the last 24 hours", WebhookDailyRuns)
+	// ErrHeld means the run was held back on purpose (spend cap).
+	ErrHeld = errors.New("held back: the spend cap is reached")
 )
 
 type Scheduler struct {
@@ -259,6 +261,9 @@ func (s *Scheduler) Fire(j store.Job) error {
 	if !j.Enabled {
 		return ErrPaused
 	}
+	if p, ok := s.Exec.(Pauser); ok && p.PausedReason(s.baseCtx(), j) != "" {
+		return ErrHeld
+	}
 	now := s.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -302,6 +307,15 @@ func (s *Scheduler) Fire(j store.Job) error {
 		s.runOne(ctx, j, now, time.Time{})
 	}()
 	return nil
+}
+
+func (s *Scheduler) baseCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.base == nil {
+		return context.Background()
+	}
+	return s.base
 }
 
 // Wait blocks until running jobs finish. For tests.

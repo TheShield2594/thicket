@@ -87,3 +87,27 @@ func TestHealthOptionalChecks(t *testing.T) {
 		t.Fatalf("required failure: %d", resp.StatusCode)
 	}
 }
+
+func TestAvatarRoute(t *testing.T) {
+	var gotState string
+	av := func(_ context.Context, id, state string) (string, bool) {
+		gotState = state
+		return `<svg xmlns="http://www.w3.org/2000/svg"/>`, id == "juniper"
+	}
+	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return nil }, Routes{Avatar: av}).Handler)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/avatars/juniper.svg?state=working")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/svg+xml" || gotState != "working" ||
+		!strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("avatar: %d %v", resp.StatusCode, resp.Header)
+	}
+	resp, _ = http.Get(srv.URL + "/avatars/nobody.svg")
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown sprig: %d", resp.StatusCode)
+	}
+}

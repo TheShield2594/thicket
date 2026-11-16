@@ -34,7 +34,7 @@ type consult struct {
 }
 
 // teamTools are what an asked sprig can't use: no chains of sprigs.
-var teamTools = map[string]bool{"ask_sprig": true, "handoff": true, "delegate_task": true}
+var teamTools = map[string]bool{"ask_sprig": true, "handoff": true, "delegate_task": true, "request_access": true}
 
 func (e *Engine) findSprig(name string) (*character.Character, error) {
 	if c, ok := e.Chars.Get(strings.ToLower(strings.TrimSpace(name))); ok {

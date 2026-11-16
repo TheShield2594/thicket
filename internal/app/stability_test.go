@@ -23,8 +23,12 @@ import (
 )
 
 // fakeHA is an MCP server with one tool that reads and one that acts.
+// haState is what get_state returns (default "light is off").
+var haState atomic.Value
+
 func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
+	haState.Store("light is off")
 	var reads, writes atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -49,7 +53,7 @@ func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 				`{"name":"get_state","description":"read a light","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},`+
 				`{"name":"turn_on","description":"turn a light on","inputSchema":{"type":"object"}}]}}`, *req.ID)
 		case "tools/call":
-			out := "light is off"
+			out := haState.Load().(string)
 			if req.Params.Name == "turn_on" {
 				writes.Add(1)
 				out = "light is on"

@@ -97,6 +97,16 @@ expire after 30 minutes).
   clears it. Levels are checked in code on every call, and again when you
   approve: lowering a sprig to `read` or `draft` cancels what it was
   waiting to do.
+- A sprig can have one level for all its granted tools
+  (`set_tool_level(*, draft, sprig: wren)`); new sprigs start that way at
+  `draft`. A level for the exact tool still wins. Built-in tools that
+  change things (scheduling jobs, creating webhooks and triggers) act by
+  default but are held back at `read` and `draft` like integration tools.
+- Sprigs can ask for a higher level on one tool with `request_access`;
+  Juni shows you their track record first. See
+  [Bringing on a new sprig](characters.md#bringing-on-a-new-sprig).
+- Drafts land in your inbox; from the [dashboard](dashboard.md) you can
+  have one done as written.
 - Scheduled jobs that hit a tool needing approval ask in the chat you last talked in.
 - Upgrading from an earlier version: approval rules set with the old
   `set_tool_approval` carry over (`always` became `ask`, `never` became

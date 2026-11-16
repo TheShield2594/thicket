@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-//go:embed defaults/*.md defaults/*/voice_tests/*.yaml
+//go:embed defaults/*.md defaults/*/voice_tests/*.yaml defaults/*/avatar.json
 var defaultsFS embed.FS
 
 // HashStore remembers the hash of each file Thicket wrote, so a later
@@ -71,6 +71,9 @@ func (r *Registry) EnsureDefaults(ctx context.Context) error {
 			if err := r.ensureDefaultVoiceTests(e.Name()); err != nil {
 				return err
 			}
+			if err := r.ensureDefaultFile(e.Name(), "avatar.json"); err != nil {
+				return err
+			}
 			continue
 		}
 		dest := filepath.Join(r.dir, e.Name())
@@ -115,6 +118,23 @@ func (r *Registry) ensureDefaultVoiceTests(id string) error {
 		}
 	}
 	return nil
+}
+
+// ensureDefaultFile copies a bundled sprig's file into its folder if it
+// isn't there yet.
+func (r *Registry) ensureDefaultFile(id, name string) error {
+	dest := filepath.Join(r.dir, id, name)
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+	b, err := defaultsFS.ReadFile("defaults/" + id + "/" + name)
+	if err != nil {
+		return nil // not bundled
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, b, 0o644)
 }
 
 // Load (re)reads every *.md file in the directory. Invalid files are

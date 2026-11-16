@@ -37,6 +37,9 @@ type Routes struct {
 	API         http.Handler // /api/v1/ (the web app owns the rest of /api/)
 	Dashboard   http.Handler // /dashboard
 	App         http.Handler // the web app, at "/"
+	// Avatar draws a sprig's SVG avatar in a state ("" = its live state);
+	// false if there's no such sprig.
+	Avatar func(ctx context.Context, id, state string) (string, bool)
 }
 
 func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Server {
@@ -88,6 +91,19 @@ func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Ser
 	mux.HandleFunc("GET /avatars/{file}", func(w http.ResponseWriter, r *http.Request) {
 		name := filepath.Base(r.PathValue("file"))
 		ext := strings.ToLower(filepath.Ext(name))
+		if ext == ".svg" && rt.Avatar != nil {
+			svg, ok := rt.Avatar(r.Context(), strings.TrimSuffix(name, ext), r.URL.Query().Get("state"))
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "image/svg+xml")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = io.WriteString(w, svg)
+			return
+		}
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".gif" && ext != ".webp" {
 			http.NotFound(w, r)
 			return

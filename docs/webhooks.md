@@ -25,6 +25,13 @@ new URL"); the old URL stops working at once.
 Webhook jobs show up in "what jobs do I have?" and their runs in the job
 history, like scheduled jobs. Pause, resume and delete them the same way.
 
+## Only some calls
+
+Ask for a filter ("only when the body says unhealthy"): calls whose body
+doesn't contain the text (case-insensitive), or match a
+`/regular expression/`, get `200 ignored` and run nothing. See
+[Event triggers](triggers.md) for watching integrations instead.
+
 ## Signatures (GitHub, Gitea, Forgejo, GitLab)
 
 By default the URL is the webhook's only secret. When the sender is
