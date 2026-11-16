@@ -37,6 +37,10 @@ internal/server      /health and /avatars
    - if no model key exists yet, sends the scripted first-run greeting;
    - picks the sprig: addressed by name, else whoever spoke last in this
      chat, else the host.
+   - downloads attachments (https only, size-capped): images become
+     vision input for this turn only; text files are redacted, wrapped as
+     untrusted data and added to the message. A model that refuses
+     images gets the turn again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
    rules) plus recent history from this conversation only. A conversation
    ends after `THICKET_IDLE_AFTER` of quiet, so old chats don't bleed into

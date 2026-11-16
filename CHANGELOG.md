@@ -10,6 +10,13 @@ First version.
 
 - Discord channel: DMs and server channels, per-sprig name and avatar
   through webhooks, embeds in DMs.
+- Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
+  message, 5 MB each) and read text files (up to 256 KB, first 12,000
+  characters). Images go to the model with that message only and are
+  never stored. Text files stay in the conversation with secrets redacted,
+  marked as untrusted content. If the model refuses images, the sprig
+  still replies and says it couldn't see them. Other files are passed on
+  by name only.
 - Character system: one Markdown file per sprig with YAML frontmatter;
   validation, hot reload, never overwrites hand edits. Juniper ("Juni")
   ships as the host.

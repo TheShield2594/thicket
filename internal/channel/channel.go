@@ -24,6 +24,18 @@ type Incoming struct {
 	Mentioned bool
 	// Listening is true for group chats where the bot answers everything.
 	Listening bool
+	// Attachments are files sent with the message. Text holds only what
+	// the user typed; the engine decides what to download.
+	Attachments []Attachment
+}
+
+// Attachment is a file sent with a message. URL must be https and is
+// fetched with size limits (see Fetch).
+type Attachment struct {
+	Name        string
+	URL         string
+	ContentType string // as reported by the platform; may be empty
+	Size        int    // bytes, as reported by the platform; 0 if unknown
 }
 
 // ChatRef is a channel-qualified chat id, stored in the database.

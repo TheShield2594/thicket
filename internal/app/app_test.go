@@ -73,6 +73,10 @@ type fakeModel struct {
 	mu     sync.Mutex
 	calls  int
 	onChat func() // runs on every call (e.g. to move the clock)
+	reqs   []llm.Request
+	// rejectImages answers requests with images the way OpenRouter does
+	// for a model without vision.
+	rejectImages bool
 }
 
 func toolCall(name string, args any) *llm.Response {
@@ -89,7 +93,12 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	m.mu.Lock()
 	m.calls++
 	hook := m.onChat
+	m.reqs = append(m.reqs, req)
+	reject := m.rejectImages
 	m.mu.Unlock()
+	if reject && llm.HasImages(req.Messages) {
+		return nil, &llm.APIError{Status: 404, Message: "No endpoints found that support image input"}
+	}
 	if hook != nil {
 		hook()
 	}

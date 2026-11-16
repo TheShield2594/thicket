@@ -15,6 +15,69 @@ type Message struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Images go with a user message to vision models. When set, the
+	// message is sent as content parts: Content first, then each image.
+	// They are never stored, only sent with the turn they arrived in.
+	Images []Image `json:"-"`
+}
+
+// Image is a picture for a vision model, as an https or data: URL.
+type Image struct {
+	URL string
+}
+
+type contentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
+}
+
+type imageURL struct {
+	URL string `json:"url"`
+}
+
+// MarshalJSON sends plain string content unless the message has images.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type plain Message
+	if len(m.Images) == 0 {
+		return json.Marshal(plain(m))
+	}
+	parts := []contentPart{}
+	if m.Content != "" {
+		parts = append(parts, contentPart{Type: "text", Text: m.Content})
+	}
+	for _, img := range m.Images {
+		parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: img.URL}})
+	}
+	return json.Marshal(struct {
+		plain
+		Content []contentPart `json:"content"`
+	}{plain(m), parts})
+}
+
+// HasImages reports whether any message carries images.
+func HasImages(msgs []Message) bool {
+	for _, m := range msgs {
+		if len(m.Images) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ImageRejected reports whether err looks like the model refusing image
+// input (OpenRouter answers 404 "no endpoints that support image input",
+// providers 400/415/422), as opposed to an outage or a bad key.
+func ImageRejected(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	switch ae.Status {
+	case 400, 404, 413, 415, 422:
+		return true
+	}
+	return false
 }
 
 type ToolCall struct {

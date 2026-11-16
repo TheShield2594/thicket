@@ -49,7 +49,10 @@ type Engine struct {
 	Log      *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
-	Now      func() time.Time
+	// FetchAttachment downloads a file sent with a message; nil means
+	// channel.Fetch. Tests replace it.
+	FetchAttachment func(ctx context.Context, a channel.Attachment, max int) ([]byte, string, error)
+	Now             func() time.Time
 
 	channels  map[string]channel.Channel
 	chatLocks sync.Map   // chatRef -> *sync.Mutex
@@ -115,6 +118,14 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	unlock := e.lockChat(in.ChatRef())
 	defer unlock()
 
+	// What the user typed, minus a leading sprig name. Attachment markers
+	// go after it, so secret and approval checks see them as before.
+	typed := in.Text
+	if addressed != nil && rest != "" {
+		typed = rest
+	}
+	in.Text = strings.TrimSpace(in.Text + attachmentNotes(in.Attachments))
+
 	host, ok := e.Chars.Host()
 	if !ok {
 		return errors.New("no host character is loaded; check the characters directory")
@@ -133,12 +144,21 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		return e.bootstrapGreeting(ctx, in, user, host)
 	}
 
+	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))
+	var images []llm.Image
+	if len(in.Attachments) > 0 {
+		if ch := e.channels[in.Channel]; ch != nil {
+			ch.Typing(ctx, in.ChatID)
+		}
+		loaded, imgs := e.loadAttachments(ctx, in.Attachments)
+		images = imgs
+		typed += attachmentNotes(in.Attachments) + loaded
+	}
+	in.Text = strings.TrimSpace(typed)
+
 	char := host
 	if addressed != nil {
 		char = addressed
-		if rest != "" {
-			in.Text = rest
-		}
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
 		if c, ok := e.Chars.Get(id.(string)); ok {
 			char = c
@@ -156,7 +176,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: in.Text}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: images}
 	return e.respond(ctx, t, "")
 }
 

@@ -68,6 +68,11 @@ exactly what's missing, and `GET /health` reports each part.
 - Ask Juni to bring someone on: "I need help keeping on top of my
   calendar". She interviews you, the new sprig introduces itself as a
   preview, you tweak it, and the character file is written for you.
+- Send pictures and text files. Sprigs look at images (the chat model
+  needs vision, as the defaults have) and read text files such as notes,
+  CSVs or logs. Images aren't kept after the reply; text files stay in
+  the conversation like any message. Other files (PDFs, for example) are
+  passed on by name only.
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**.

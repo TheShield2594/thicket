@@ -27,6 +27,9 @@ type turn struct {
 	job     *store.Job
 	depth   int
 	query   string // text used to pick relevant memories
+	// images arrived with the user's newest message; they go to the
+	// model with it, this turn only.
+	images []llm.Image
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -65,6 +68,14 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 			req.Messages = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] Tool limit for this turn reached. Wrap up now: tell the user where things stand."})
 		}
 		resp, err := e.LLM.Chat(ctx, req)
+		if err != nil && llm.HasImages(req.Messages) && llm.ImageRejected(err) && ctx.Err() == nil {
+			// The model (and its fallback) won't take images: carry on
+			// without them rather than fail the whole reply.
+			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "model refused image input; replying without the images", shortErr(err))
+			msgs = withoutImages(msgs)
+			req.Messages = withoutImages(req.Messages)
+			resp, err = e.LLM.Chat(ctx, req)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -117,14 +128,25 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
-	for _, h := range history {
+	for i, h := range history {
+		newest := i == len(history)-1
 		content := h.Content
-		if len(content) > 4000 {
-			content = content[:4000] + " […]"
+		// The newest message may carry a text file the user just sent:
+		// let the model read all of it this once.
+		limit := 4000
+		if newest && h.Role == "user" {
+			limit = maxTextFileChars*maxFilesPerMessage/2 + 4000
+		}
+		if len(content) > limit {
+			content = content[:limit] + " […]"
 		}
 		switch {
 		case h.Role == "user":
-			msgs = append(msgs, llm.Message{Role: "user", Content: content})
+			m := llm.Message{Role: "user", Content: content}
+			if newest {
+				m.Images = t.images
+			}
+			msgs = append(msgs, m)
 		case h.Role == "assistant" && h.Character == t.char.ID:
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: content})
 		case h.Role == "assistant":
