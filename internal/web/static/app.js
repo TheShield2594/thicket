@@ -99,6 +99,8 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     const err = new Error(data.error || res.statusText);
     err.status = res.status;
+    // The session expired or was revoked: clean up as on sign-out.
+    if (res.status === 401 && path !== '/api/login' && S.me) endSession();
     throw err;
   }
   return data;
@@ -301,7 +303,7 @@ function connect() {
     clearTimeout(downTimer);
     downTimer = setTimeout(async () => {
       S.online = false; renderSidebar();
-      try { await api('/api/me'); } catch (e) { if (e.status === 401) { es.close(); showSignedOut(); } }
+      try { await api('/api/me'); } catch (e) { if (e.status === 401) endSession(); }
     }, 4000);
   };
   es.onmessage = (e) => {
@@ -320,7 +322,9 @@ async function resync() {
 
 function onMessage(chat, m) {
   const c = S.chats.get(chat);
-  if (c?.loaded && !c.messages.some((x) => x.id === m.id)) {
+  // Keep it even while the chat's first load (or a retry) is in flight:
+  // loadChat merges what arrived here with its snapshot by id.
+  if (c && !c.messages.some((x) => x.id === m.id)) {
     // Replace the optimistic copy of our own message if it's still there.
     const i = m.role === 'user' ? c.messages.findIndex((x) => x.pending && x.content === m.content) : -1;
     if (i >= 0) c.messages.splice(i, 1, m); else c.messages.push(m);
@@ -381,9 +385,11 @@ async function loadChat(chat, opts = {}) {
   if (!c) { c = { messages: [], more: false, loaded: false, loading: false, error: '' }; S.chats.set(chat, c); }
   if (c.loading || (c.loaded && !opts.fresh && !opts.older)) return;
   c.loading = true;
+  const session = S.session;
   try {
     const before = opts.older && c.messages.length ? c.messages[0].id : 0;
     const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages${before ? '?before=' + before : ''}`);
+    if (session !== S.session) return; // signed out meanwhile
     if (opts.older) {
       c.messages = res.messages.concat(c.messages);
     } else {
@@ -398,6 +404,7 @@ async function loadChat(chat, opts = {}) {
     c.loaded = true;
     c.error = '';
   } catch (e) {
+    if (session !== S.session) return;
     if (!c.loaded) c.error = e.message || 'network error';
     else toast('Couldn’t refresh messages: ' + e.message);
   } finally {
@@ -406,10 +413,11 @@ async function loadChat(chat, opts = {}) {
 }
 
 async function loadRoutines(id) {
-  try {
-    const res = await api('/api/sprigs/' + encodeURIComponent(id));
-    S.routines.set(id, res.routines);
-  } catch { S.routines.set(id, null); }
+  const session = S.session;
+  let routines = null;
+  try { routines = (await api('/api/sprigs/' + encodeURIComponent(id))).routines; } catch { /* shown as unavailable */ }
+  if (session !== S.session) return; // signed out meanwhile
+  S.routines.set(id, routines);
   renderDetails();
 }
 
@@ -421,14 +429,17 @@ async function send(chat, text) {
   const m = { id: tempId--, chat, role: 'user', content: text, at: new Date().toISOString(), pending: true };
   c.messages.push(m);
   renderFeed(chat, m.id, true);
+  const session = S.session;
   try {
     const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages`, { method: 'POST', body: { text } });
+    if (session !== S.session) return; // signed out meanwhile
     const i = c.messages.indexOf(m);
     const dup = c.messages.some((x) => x.id === res.message.id);
     if (i >= 0) { if (dup) c.messages.splice(i, 1); else c.messages.splice(i, 1, res.message); }
     if ((S.latest.get(chat)?.id || 0) < res.message.id) S.latest.set(chat, res.message);
     renderSidebar();
   } catch (e) {
+    if (session !== S.session) return;
     m.pending = false; m.failed = e.message || 'Not sent';
   }
   renderFeed(chat);
@@ -504,11 +515,17 @@ async function toggleNotify() {
 
 async function signOut() {
   try { await api('/api/logout', { method: 'POST' }); } catch { /* signed out anyway */ }
+  endSession();
+}
+
+// endSession drops everything the signed-in account loaded and shows the
+// signed-out screen. Used for sign-out and for a session that expired or
+// was revoked. Requests still in flight compare S.session before writing
+// anything, so a late response can't bring the account's data back.
+function endSession() {
   es?.close();
   clearTimeout(downTimer);
   save('thicket.layout', null);
-  // Drop everything the previous account loaded. Pending requests check
-  // S.me (and the cleared pane nodes) before touching the screen.
   S.session++;
   S.me = null;
   S.panes = []; S.focus = 0; S.details = false; S.filter = '';
