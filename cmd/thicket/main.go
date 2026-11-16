@@ -356,12 +356,16 @@ func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 		if err := fs.Parse(args); err != nil {
 			return nil, err
 		}
-		args = fs.Args()
-		if len(args) == 0 {
+		rest := fs.Args()
+		// "--" ends flag parsing for good: everything after it is positional.
+		if used := len(args) - len(rest); used > 0 && args[used-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		if len(rest) == 0 {
 			return pos, nil
 		}
-		pos = append(pos, args[0])
-		args = args[1:]
+		pos = append(pos, rest[0])
+		args = rest[1:]
 	}
 }
 

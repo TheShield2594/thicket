@@ -18,6 +18,9 @@ func TestParseFlagsAnyOrder(t *testing.T) {
 		{[]string{"juniper", "-o", "copy.md"}, []string{"juniper"}, false, "copy.md"},
 		{[]string{"-o", "copy.md", "juniper"}, []string{"juniper"}, false, "copy.md"},
 		{[]string{"a", "b"}, []string{"a", "b"}, false, ""},
+		// "--" ends flags: a later --force is a positional, not a flag.
+		{[]string{"--", "backup.tar.gz", "--force"}, []string{"backup.tar.gz", "--force"}, false, ""},
+		{[]string{"backup.tar.gz", "--", "-o"}, []string{"backup.tar.gz", "-o"}, false, ""},
 	}
 	for _, c := range cases {
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
