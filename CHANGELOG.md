@@ -33,6 +33,13 @@ First version.
   of overwriting. Secrets and untrusted content are refused in steps.
   `thicket skill list|export|import` shares them as Markdown. Schema v6
   adds `skills` and `skill_versions`.
+- Local models: run on Ollama, LM Studio, llama.cpp or vLLM instead of
+  OpenRouter. On the first DM, send Juni the server's address (or
+  "ollama"): Thicket checks it, picks a chat model and carries on with
+  onboarding. Also `THICKET_MODEL_URL` / `THICKET_MODEL_API_KEY`, and a
+  chat-changeable `model_url` setting. Models without tool support still
+  answer (without tools, with a notice); PDFs are declined on local
+  servers. The compose file maps `host.docker.internal` to the host.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

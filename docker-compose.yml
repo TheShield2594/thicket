@@ -22,6 +22,11 @@ services:
       THICKET_SECRET_KEY: ${THICKET_SECRET_KEY:-}
       # Optional. You can also paste the key to Juni in a DM instead.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Optional. A local OpenAI-compatible model server instead of OpenRouter
+      # (see docs/local-models.md), e.g. http://host.docker.internal:11434/v1 for Ollama.
+      # You can also just send Juni the address in a DM.
+      THICKET_MODEL_URL: ${THICKET_MODEL_URL:-}
+      THICKET_MODEL_API_KEY: ${THICKET_MODEL_API_KEY:-}
       # Optional overrides; each can also be changed later by asking Juni.
       THICKET_MODEL: ${THICKET_MODEL:-}
       THICKET_FALLBACK_MODEL: ${THICKET_FALLBACK_MODEL:-}
@@ -35,6 +40,9 @@ services:
       THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
       THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}
       TZ: ${TZ:-UTC}
+    # Lets the container reach a model server on this machine as host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - thicket-data:/data
     # /health, /avatars and /hooks. Put it behind your reverse proxy for avatars

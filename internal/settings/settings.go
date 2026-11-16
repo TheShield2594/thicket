@@ -5,6 +5,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -29,6 +30,7 @@ var Known = []Key{
 	{"budget.monthly_usd", "monthly spend cap in USD (0 = no cap)", "float"},
 	{"consistency_check", "run the personality check on replies (true/false)", "bool"},
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
+	{"model_url", "where models run: OpenRouter's API, or a local OpenAI-compatible server such as http://192.168.1.20:11434/v1 (Ollama)", "url"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
 }
 
@@ -68,6 +70,7 @@ func (s *Settings) defaults() map[string]string {
 		"consistency_check":  "true",
 		"checkin_days":       "3",
 		"pdf_engine":         "auto",
+		"model_url":          s.cfg.ModelURL,
 	}
 }
 
@@ -76,6 +79,12 @@ func (s *Settings) String(ctx context.Context, name string) string {
 		return v
 	}
 	return s.defaults()[name]
+}
+
+// IsSet reports whether a setting was changed in chat (not a default).
+func (s *Settings) IsSet(ctx context.Context, name string) bool {
+	_, ok, err := s.db.Setting(ctx, name)
+	return err == nil && ok
 }
 
 func (s *Settings) Float(ctx context.Context, name string) float64 {
@@ -129,6 +138,12 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 			return fmt.Errorf("%s needs true or false", name)
 		}
 		value = strconv.FormatBool(b)
+	case "url":
+		u, err := url.Parse(value)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || strings.ContainsAny(value, " \n\t") {
+			return fmt.Errorf("%s needs an http(s) address like http://192.168.1.20:11434/v1", name)
+		}
+		value = strings.TrimRight(value, "/")
 	case "choice":
 		value = strings.ToLower(value)
 		if !slices.Contains(choices[name], value) {

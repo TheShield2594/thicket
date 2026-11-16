@@ -49,6 +49,9 @@ type Engine struct {
 	Log      *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
+	// ListModels asks a model server which models it has; nil means
+	// llm.ListModels.
+	ListModels func(ctx context.Context, base, key string) ([]string, error)
 	// FetchAttachment downloads a file sent with a message; nil means
 	// channel.Fetch. Tests replace it.
 	FetchAttachment func(ctx context.Context, a channel.Attachment, max int) ([]byte, string, error)
@@ -164,9 +167,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
-	// 3. No model key yet: scripted first-run greeting.
-	if !e.Secrets.Has(ctx, secrets.OpenRouterKey) {
-		return e.bootstrapGreeting(ctx, in, user, host)
+	// 3. No model yet: scripted first-run setup.
+	if !e.ModelReady(ctx) {
+		return e.bootstrap(ctx, in, user, host)
 	}
 
 	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))

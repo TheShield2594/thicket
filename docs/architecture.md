@@ -11,7 +11,7 @@ internal/agent       the engine: routing, prompts, tool loop, approvals, onboard
 internal/character   character files: parse, validate, load, write without clobbering
 internal/memory      memory review (cheap model proposes, code validates) and relevance selection
 internal/scheduler   cron and webhook jobs with run history
-internal/llm         OpenRouter client, retries, fallback model
+internal/llm         OpenAI-compatible client (OpenRouter or a local server), retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
 internal/channel     channel interface; adapters in channel/discord and channel/telegram
@@ -115,6 +115,21 @@ the steps, which are returned as instructions, not untrusted data. That's
 why saving is admin-only and the validator refuses secrets and
 `<untrusted>` content. `thicket skill export/import` moves them as
 Markdown with YAML frontmatter.
+
+## Model servers
+
+The `model_url` setting (env `THICKET_MODEL_URL`, chat-changeable) is read
+on every call. OpenRouter needs its key and gets OpenRouter-only fields
+(`usage`, the PDF `plugins`); any other host is treated as a local
+OpenAI-compatible server: the key is optional (`model_api_key`), those
+fields are left out, calls may take 5 minutes, and PDFs are declined
+before download. `Engine.ModelReady` gates the scripted bootstrap: a key
+for OpenRouter, a chosen model for a local server. The bootstrap accepts
+an address (or "ollama"/"lm studio"), tries `GET /models` on each
+candidate, and sets `model_url`, `model`, `cheap_model` and
+`fallback_model` (the same model, so no fallback). A model that rejects
+tool definitions gets the turn again without tools, and admins are told
+once a day.
 
 ## Reliability rules
 

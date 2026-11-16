@@ -90,6 +90,9 @@ type fakeModel struct {
 	parseFail    bool
 	annotateTurn bool
 	parseCalls   int
+	// rejectTools answers requests with tools the way Ollama does for a
+	// model without tool support.
+	rejectTools bool
 }
 
 // annotations builds OpenRouter-style parse annotations for the files in
@@ -145,6 +148,12 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		r := text("Read it.")
 		r.Message.Annotations = annotations(req.Messages, pdfText+" (from the turn)")
 		return r, nil
+	}
+	m.mu.Lock()
+	noTools := m.rejectTools
+	m.mu.Unlock()
+	if noTools && req.Tools != nil {
+		return nil, &llm.APIError{Status: 400, Message: "registry.ollama.ai/library/tiny:1b does not support tools"}
 	}
 	if reject && llm.HasMedia(req.Messages) {
 		return nil, &llm.APIError{Status: 404, Message: "No endpoints found that support image input"}

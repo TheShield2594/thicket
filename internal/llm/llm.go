@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type Message struct {
@@ -98,6 +99,17 @@ func HasFiles(msgs []Message) bool {
 
 // HasMedia reports whether any message carries images or files.
 func HasMedia(msgs []Message) bool { return HasImages(msgs) || HasFiles(msgs) }
+
+// ToolsRejected reports whether err looks like the model refusing tool
+// definitions (common with small local models).
+func ToolsRejected(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) || (ae.Status != 400 && ae.Status != 422 && ae.Status != 500) {
+		return false
+	}
+	m := strings.ToLower(ae.Message)
+	return strings.Contains(m, "tool") || strings.Contains(m, "function call")
+}
 
 // MediaRejected reports whether err looks like the model refusing image
 // or file input (OpenRouter answers 404 "no endpoints that support image

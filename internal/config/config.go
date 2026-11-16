@@ -18,6 +18,7 @@ const (
 	DefaultModel         = "anthropic/claude-sonnet-5.5"
 	DefaultFallbackModel = "google/gemini-3.8-flash"
 	DefaultCheapModel    = "anthropic/claude-haiku-5.5"
+	DefaultModelURL      = "https://openrouter.ai/api/v1"
 )
 
 type Config struct {
@@ -36,7 +37,10 @@ type Config struct {
 	TelegramListenChats []string
 
 	OpenRouterKey string
-	OpenRouterURL string
+	// ModelURL is the OpenAI-compatible API models are called through:
+	// OpenRouter by default, or a local server such as Ollama.
+	ModelURL    string
+	ModelAPIKey string // optional key for a self-hosted server
 
 	Model         string
 	FallbackModel string
@@ -61,7 +65,8 @@ func Load() (*Config, error) {
 		DiscordToken:          env("DISCORD_TOKEN", ""),
 		DiscordOwnerID:        env("THICKET_OWNER_DISCORD_ID", ""),
 		OpenRouterKey:         env("OPENROUTER_API_KEY", ""),
-		OpenRouterURL:         env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
+		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),
@@ -115,9 +120,13 @@ func (c *Config) Check() []Problem {
 		f.Close()
 		os.Remove(f.Name())
 	}
-	if c.OpenRouterKey == "" {
+	switch {
+	case c.ModelURL != DefaultModelURL:
+		out = append(out, Problem{false, "models run on " + c.ModelURL,
+			"Juni checks the server and picks a model on the first DM (set THICKET_MODEL to choose one yourself)."})
+	case c.OpenRouterKey == "":
 		out = append(out, Problem{false, "OPENROUTER_API_KEY is not set",
-			"That's fine: Juni will ask for it in a DM and store it encrypted."})
+			"That's fine: Juni will ask for it in a DM and store it encrypted, or for the address of a local model server (Ollama, LM Studio) instead."})
 	}
 	if c.SecretKey == "" {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",

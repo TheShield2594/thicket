@@ -53,7 +53,9 @@ the first sprig.
    file instead.
 3. **DM the bot** (on Telegram, open the bot and press Start). Juni says hello and asks for an
    [OpenRouter](https://openrouter.ai/keys) key. Paste it in the DM: she
-   checks it works and stores it encrypted. Then she'll learn your name,
+   checks it works and stores it encrypted. Or, to run on your own
+   hardware, send her the address of your Ollama or LM Studio server
+   instead ([Local models](docs/local-models.md)). Then she'll learn your name,
    your timezone, and what you'd like help with.
 
 The first person to DM the bot becomes the owner, unless you set
@@ -115,6 +117,8 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DISCORD_CHANNELS` | | Discord channel ids where sprigs answer every message |
 | `THICKET_TELEGRAM_CHATS` | | Telegram group ids where sprigs answer every message |
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
+| `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
+| `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |
 | `THICKET_CHEAP_MODEL` *chat* | `anthropic/claude-haiku-5.5` | memory review and personality checks |
@@ -158,6 +162,7 @@ grant it.
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
 - [Skills](docs/skills.md)
+- [Local models](docs/local-models.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

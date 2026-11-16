@@ -106,7 +106,7 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if !e.Secrets.Has(ctx, "openrouter_api_key") {
+			if !e.ModelReady(ctx) {
 				continue
 			}
 			e.FollowUps(ctx)

@@ -168,6 +168,10 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 			}
 			b.WriteString("\n" + wrapUntrusted("file "+name, content))
 		case kindPDF:
+			if e.localModel(ctx) {
+				fmt.Fprintf(&b, "\n[pdf %s was not read: PDFs need OpenRouter, and Thicket is using a local model server]", name)
+				continue
+			}
 			if len(pdfs) >= maxPDFsPerMessage {
 				fmt.Fprintf(&b, "\n[pdf %s was not read: only %d PDFs per message]", name, maxPDFsPerMessage)
 				continue

@@ -134,7 +134,17 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		return nil, errors.New("no host character could be loaded; fix or delete the files in " + cfg.CharactersDir + " (Juniper is recreated if juniper.md is missing)")
 	}
 
-	or := llm.NewOpenRouter(cfg.OpenRouterURL, func(ctx context.Context) (string, error) { return sec.Get(ctx, secrets.OpenRouterKey) })
+	sec.SetEnvFallback(secrets.ModelAPIKey, cfg.ModelAPIKey)
+	// The address and key are read per call: onboarding can switch to a
+	// local server, and keys added in chat apply at once.
+	or := llm.NewOpenRouter(cfg.ModelURL, func(ctx context.Context) (string, error) {
+		if llm.IsOpenRouter(a.Settings.String(ctx, "model_url")) {
+			return sec.Get(ctx, secrets.OpenRouterKey)
+		}
+		k, _ := sec.Get(ctx, secrets.ModelAPIKey) // most local servers need none
+		return k, nil
+	})
+	or.URL = func(ctx context.Context) string { return a.Settings.String(ctx, "model_url") }
 	var base llm.Client = or
 	keyCheck := or.CheckKey
 	if opts.Model != nil {
@@ -210,10 +220,13 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 	for _, ch := range a.channels {
 		out["channel."+ch.Name()] = server.Check{OK: ch.Connected()}
 	}
-	if a.Secrets.Has(ctx, secrets.OpenRouterKey) {
+	switch url := a.Settings.String(ctx, "model_url"); {
+	case a.Engine.ModelReady(ctx) && llm.IsOpenRouter(url):
 		out["model_key"] = server.Check{OK: true}
-	} else {
-		out["model_key"] = server.Check{OK: false, Detail: "no OpenRouter key yet: DM the bot to set one up"}
+	case a.Engine.ModelReady(ctx):
+		out["model_key"] = server.Check{OK: true, Detail: "model server " + url}
+	default:
+		out["model_key"] = server.Check{OK: false, Detail: "no model yet: DM the bot to set one up"}
 	}
 	last := a.Scheduler.LastTick()
 	out["scheduler"] = server.Check{OK: !last.IsZero() && time.Since(last) < 2*time.Minute, Detail: "last tick " + last.UTC().Format(time.RFC3339)}

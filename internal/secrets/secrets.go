@@ -24,6 +24,8 @@ import (
 // Well-known secret names.
 const (
 	OpenRouterKey = "openrouter_api_key"
+	// ModelAPIKey is the optional key for a self-hosted model server.
+	ModelAPIKey = "model_api_key"
 )
 
 var ErrNotFound = errors.New("secret not found")

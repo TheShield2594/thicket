@@ -65,8 +65,16 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 				return true, e.send(ctx, in.ChatRef(), host, "Hmm, OpenRouter didn't accept that key ("+shortErr(err)+"). Could you double-check it and send it again?")
 			}
 		}
+		ready := e.ModelReady(ctx)
 		if err := e.Secrets.Put(ctx, secrets.OpenRouterKey, key); err != nil {
 			return true, err
+		}
+		if !ready && e.Settings.IsSet(ctx, "model_url") {
+			// A local server was tried in chat but never worked: the key
+			// means they've chosen OpenRouter.
+			for _, k := range []string{"model_url", "model", "cheap_model", "fallback_model"} {
+				_ = e.Settings.Set(ctx, k, "")
+			}
 		}
 		e.scrub(ctx, in)
 		e.logActivity(ctx, "info", "system", "", user.ID, "model API key connected", "")
@@ -173,8 +181,9 @@ func (e *Engine) bootstrapGreeting(ctx context.Context, in channel.Incoming, use
 	}
 	if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("bootstrap-greet:%d", user.ID), time.Hour); ok {
 		return e.send(ctx, in.ChatRef(), host, "Hi! I'm "+host.DisplayName()+", the gardener around here. 🌱 Welcome to your Thicket.\n\n"+
-			"Before I can really talk, I need a model key to think with. Make one at https://openrouter.ai/keys and paste it here in this DM. "+
-			"I'll check it works, encrypt it, and never show it to anyone, me included.")
+			"Before I can really talk, I need a model to think with. Two ways:\n"+
+			"• **OpenRouter** (easiest): make a key at https://openrouter.ai/keys and paste it here. I'll check it works, encrypt it, and never show it to anyone, me included.\n"+
+			"• **Your own machine**: if you run Ollama or LM Studio, send me its address (like `http://192.168.1.20:11434`), or just say \"ollama\".")
 	}
-	return e.send(ctx, in.ChatRef(), host, "I'm still waiting on that OpenRouter key before I can think properly. Paste it here whenever you're ready (it starts with `sk-or-`).")
+	return e.send(ctx, in.ChatRef(), host, "I still need a model before I can think properly: paste an OpenRouter key (it starts with `sk-or-`), or send the address of your Ollama or LM Studio server.")
 }

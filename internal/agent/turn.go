@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
@@ -81,6 +82,19 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "model refused the attached images or PDFs; replying without them", shortErr(err))
 			msgs = withoutMedia(msgs)
 			req.Messages = withoutMedia(req.Messages)
+			resp, err = e.LLM.Chat(ctx, req)
+		}
+		if err != nil && req.Tools != nil && llm.ToolsRejected(err) && ctx.Err() == nil {
+			// Small local models often can't take tool definitions: answer
+			// without tools rather than not at all, and say what's lost.
+			model := req.Model
+			if model == "" {
+				model = e.Settings.String(ctx, "model")
+			}
+			e.Notify(ctx, "notools:"+model, 24*time.Hour, "warn", fmt.Sprintf("The model %s can't use tools, so sprigs answer without them: they can't remember things, schedule jobs or use integrations. "+
+				"A model that supports tools (like qwen2.5 or llama3.1 on Ollama) fixes that: ask me to switch.", model))
+			defs = nil
+			req.Tools = nil
 			resp, err = e.LLM.Chat(ctx, req)
 		}
 		if err != nil {
