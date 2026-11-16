@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeServer speaks just enough Streamable HTTP MCP, answering tools/call
@@ -79,5 +80,56 @@ func TestHTTPClient(t *testing.T) {
 			t.Fatalf("collision or too long: %s", n)
 		}
 		names[n] = true
+	}
+}
+
+func TestHTTPAnswersServerPingOnSSE(t *testing.T) {
+	pinged := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var msg map[string]json.RawMessage
+		json.Unmarshal(b, &msg)
+		var method string
+		json.Unmarshal(msg["method"], &method)
+		w.Header().Set("Mcp-Session-Id", "s1")
+		switch {
+		case method == "" && string(msg["id"]) == `"srv-1"`: // our reply to the ping
+			if r.Header.Get("Mcp-Session-Id") != "s1" {
+				t.Error("ping reply without session id")
+			}
+			pinged <- string(msg["result"])
+			w.WriteHeader(202)
+		case method == "initialize":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{}}`, msg["id"])
+		case method == "tools/call":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fl := w.(http.Flusher)
+			fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"id\":\"srv-1\",\"method\":\"ping\"}\n\n")
+			fl.Flush()
+			// The server waits for the ping reply before answering the call.
+			select {
+			case got := <-pinged:
+				if got != "{}" {
+					t.Errorf("ping result = %s", got)
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("client never answered the ping")
+				return
+			}
+			fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n\n", msg["id"])
+		default:
+			w.WriteHeader(202)
+		}
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	c, err := DialHTTP(ctx, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.CallTool(ctx, "slow", nil)
+	if err != nil || res.Text != "done" {
+		t.Fatalf("call: %+v %v", res, err)
 	}
 }

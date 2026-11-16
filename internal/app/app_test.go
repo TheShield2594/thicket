@@ -70,8 +70,9 @@ func (f *fakeChannel) take() []sent {
 
 // fakeModel answers based on who is speaking and what was asked.
 type fakeModel struct {
-	mu    sync.Mutex
-	calls int
+	mu     sync.Mutex
+	calls  int
+	onChat func() // runs on every call (e.g. to move the clock)
 }
 
 func toolCall(name string, args any) *llm.Response {
@@ -87,7 +88,11 @@ func text(s string) *llm.Response {
 func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	m.mu.Lock()
 	m.calls++
+	hook := m.onChat
 	m.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	sys := req.Messages[0].Content
 	last := req.Messages[len(req.Messages)-1]
 	switch {
@@ -403,5 +408,51 @@ func TestUndeliveredApprovalCannotBeApproved(t *testing.T) {
 	e.HandleIncoming(ctx, dm("ok"))
 	if mems, _ := a.DB.AllMemories(ctx, owner.ID); len(mems) != 0 {
 		t.Fatalf("unseen approval was executed: %+v", mems)
+	}
+}
+
+func TestCheckInDeferredByQuietHoursIsRetried(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm("hi"))
+	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("ab78", 16)))
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	a.DB.MarkOnboarded(ctx, owner.ID)
+	// The owner last wrote 5 days ago (Juni checks in after 3).
+	a.DB.SetClock(func() time.Time { return time.Now().Add(-5 * 24 * time.Hour) })
+	conv, _ := a.DB.OpenConversation(ctx, owner.ID, "discord:dm-owner", time.Minute)
+	a.DB.AddMessage(ctx, conv.ID, "user", "", "talk soon")
+	a.DB.SetClock(time.Now)
+	fc.take()
+
+	// Juni's quiet hours are 22:00-08:00 (owner is on UTC). Generation
+	// starts at 21:59 and finishes at 22:01.
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	var mu sync.Mutex
+	clock := day.Add(21*time.Hour + 59*time.Minute)
+	e.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	fm.mu.Lock()
+	fm.onChat = func() { mu.Lock(); clock = day.Add(22*time.Hour + time.Minute); mu.Unlock() }
+	fm.mu.Unlock()
+
+	e.CheckIns(ctx)
+	if out := fc.take(); len(out) != 0 {
+		t.Fatalf("check-in sent during quiet hours: %+v", out)
+	}
+
+	// Next morning it goes out, exactly once.
+	fm.mu.Lock()
+	fm.onChat = nil
+	fm.mu.Unlock()
+	mu.Lock()
+	clock = day.Add(24*time.Hour + 9*time.Hour)
+	mu.Unlock()
+	e.CheckIns(ctx)
+	if out := fc.take(); len(out) != 1 {
+		t.Fatalf("deferred check-in not retried: %+v", out)
+	}
+	e.CheckIns(ctx)
+	if out := fc.take(); len(out) != 0 {
+		t.Fatalf("check-in sent twice in one quiet spell: %+v", out)
 	}
 }

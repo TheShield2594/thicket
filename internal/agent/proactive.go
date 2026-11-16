@@ -205,10 +205,15 @@ func (e *Engine) CheckIns(ctx context.Context) {
 		}
 		// One check-in per quiet spell: the key changes only when the user
 		// writes again, so a silent user isn't pinged every N days.
-		if ok, _ := e.DB.ClaimOnce(ctx, fmt.Sprintf("checkin:%d:%d", u.ID, last.Unix())); !ok {
+		key := fmt.Sprintf("checkin:%d:%d", u.ID, last.Unix())
+		if ok, _ := e.DB.ClaimOnce(ctx, key); !ok {
 			continue
 		}
-		_ = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
+		err = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
+		if errors.Is(err, errQuietHours) {
+			// Not sent: free the claim so it goes out after quiet hours.
+			_ = e.DB.ReleaseNotice(ctx, key)
+		}
 	}
 }
 

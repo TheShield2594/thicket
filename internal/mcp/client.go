@@ -365,7 +365,7 @@ type httpT struct {
 	session string
 }
 
-func (h *httpT) post(ctx context.Context, req rpcRequest) (*http.Response, error) {
+func (h *httpT) post(ctx context.Context, req any) (*http.Response, error) {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -409,7 +409,7 @@ func (h *httpT) roundTrip(ctx context.Context, req rpcRequest) (*rpcResponse, er
 	}
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return readSSE(resp.Body, *req.ID)
+		return readSSE(resp.Body, *req.ID, func(msg rpcResponse) { h.answer(ctx, msg) })
 	}
 	var out rpcResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&out); err != nil {
@@ -418,7 +418,26 @@ func (h *httpT) roundTrip(ctx context.Context, req rpcRequest) (*rpcResponse, er
 	return &out, nil
 }
 
-func readSSE(r io.Reader, id int64) (*rpcResponse, error) {
+// answer replies to a request the server sent on an SSE stream, as a
+// separate POST (same session headers): ping gets {}, anything else
+// "method not found".
+func (h *httpT) answer(ctx context.Context, req rpcResponse) {
+	reply := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+	if req.Method == "ping" {
+		reply["result"] = map[string]any{}
+	} else {
+		reply["error"] = map[string]any{"code": -32601, "message": "method not supported by this client"}
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if resp, err := h.post(cctx, reply); err == nil {
+		resp.Body.Close()
+	}
+}
+
+// readSSE reads an SSE stream until the response to id arrives. Requests
+// the server sends meanwhile (e.g. ping) are passed to onRequest.
+func readSSE(r io.Reader, id int64, onRequest func(rpcResponse)) (*rpcResponse, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16<<20)
 	var data strings.Builder
@@ -429,6 +448,10 @@ func readSSE(r io.Reader, id int64) (*rpcResponse, error) {
 		}
 		var resp rpcResponse
 		if json.Unmarshal([]byte(data.String()), &resp) == nil {
+			if resp.Method != "" && len(resp.ID) > 0 && onRequest != nil {
+				go onRequest(resp)
+				return nil
+			}
 			if got, ok := resp.responseID(); ok && got == id {
 				return &resp
 			}

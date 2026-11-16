@@ -408,6 +408,12 @@ func (s *Store) ClaimOnce(ctx context.Context, key string) (bool, error) {
 	return n == 1, nil
 }
 
+// ReleaseNotice drops a claim so the work can be tried again.
+func (s *Store) ReleaseNotice(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM notices WHERE key = ?", key)
+	return err
+}
+
 // ClaimNotice returns true if key hasn't been claimed within window, and
 // claims it. Used so alerts and check-ins never spam.
 func (s *Store) ClaimNotice(ctx context.Context, key string, window time.Duration) (bool, error) {
