@@ -224,9 +224,15 @@ one by one: `thicket memory runs`, then `thicket memory rollback RUN_ID`
 (or ask Juni).
 
 Share a sprig with `thicket character export pip` and add someone else's
-with `thicket character import pip.md`. Memories never travel with a
-character. Imported sprigs lose integration and admin access until you
+with `thicket character import pip.md`. Memories never travel with an
+exported sprig. Imported sprigs lose integration and admin access until you
 grant it.
+
+Coming from another app? `thicket character import` also reads character
+cards (`.json` or `.png`), an OpenClaw workspace, a Hermes Agent home, and
+a Grok persona or any system prompt saved as a text file, and can bring
+their memories of you along. You see the sprig before anything is written:
+see [Bringing a character from another app](docs/characters.md#bringing-a-character-from-another-app).
 
 ## Docs
 

@@ -1,5 +1,5 @@
 // Package backup exports and restores a Thicket install (database plus
-// character files) and shares individual characters.
+// character files). Importing single characters lives in charimport.
 package backup
 
 import (
@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -289,51 +288,4 @@ func Snapshot(ctx context.Context, db *store.Store, dir string, keep int) (strin
 		snaps = snaps[1:]
 	}
 	return path, nil
-}
-
-// ImportCharacter copies a shared character file into the characters
-// directory. For safety, an imported sprig keeps only the "schedule" scope:
-// integrations and admin powers must be granted explicitly by the owner.
-func ImportCharacter(src, charsDir string) (*character.Character, []string, error) {
-	b, err := os.ReadFile(src)
-	if err != nil {
-		return nil, nil, err
-	}
-	c, err := character.Parse(b)
-	if err != nil {
-		return nil, nil, err
-	}
-	if probs := c.Validate(); len(probs) > 0 {
-		return nil, nil, fmt.Errorf("invalid character: %s", strings.Join(probs, "; "))
-	}
-	if err := os.MkdirAll(charsDir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	dest := filepath.Join(charsDir, c.ID+".md")
-	if _, err := os.Stat(dest); err == nil {
-		return nil, nil, fmt.Errorf("a character with id %q already exists (%s)", c.ID, dest)
-	}
-	var stripped []string
-	var kept []string
-	for _, t := range c.Tools {
-		if t == character.ScopeSchedule {
-			kept = append(kept, t)
-		} else {
-			stripped = append(stripped, t)
-		}
-	}
-	c.Tools = kept
-	if c.Host {
-		c.Host = false
-		stripped = append(stripped, "host")
-	}
-	c.CreatedBy = "import"
-	out, err := character.Marshal(c)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := os.WriteFile(dest, out, 0o644); err != nil {
-		return nil, nil, err
-	}
-	return c, stripped, nil
 }

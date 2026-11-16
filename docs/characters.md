@@ -144,6 +144,54 @@ for more trust with one tool at a time (`request_access`): Juni puts the
 request to you with its track record from the trail (actions taken,
 drafts, approval rate, mistakes), and only an owner or admin can say yes.
 
+## Bringing a character from another app
+
+```bash
+thicket character import PATH [--from FORMAT] [--id ID] [--name NAME] [--memories] [--user ID] [--yes]
+```
+
+`PATH` is a file or folder. The format is detected; `--from` overrides it.
+
+| Source | `--from` | Point it at | What comes across |
+|---|---|---|---|
+| Thicket | `thicket` | `pip.md` | The file as is. |
+| Character card (chara_card v1, v2, v3) | `card` | `.json`, or a `.png` with the card inside | Name, description, personality, scenario, example dialogue, first message; the PNG becomes the avatar. |
+| OpenClaw | `openclaw` | `~/.openclaw/workspace` (or `~/.openclaw`) | `IDENTITY.md` (name, creature, vibe, emoji, avatar) and `SOUL.md`. With `--memories`, `USER.md` and `MEMORY.md`. |
+| Hermes Agent | `hermes` | `~/.hermes` | `SOUL.md`. With `--memories`, `memories/USER.md` and `memories/MEMORY.md`. |
+| Grok | `grok` | a text file | Grok can't export its companions or custom instructions: paste the persona or your "Customize Grok" text into a file and import that. |
+| Any system prompt | `text` | a `.md` or `.txt` file | The instructions, as the sprig's background. |
+
+Fields Thicket needs and the source doesn't have are filled in sensibly:
+the id comes from the name, the role from the first sentence, traits from
+a short `Personality:`/`Vibe:` list, and a generic voice rule points at the
+background. Anything guessed or left out is listed as a note. Not imported:
+a card's system prompt, post-history instructions and lorebook, OpenClaw's
+`AGENTS.md`, `TOOLS.md` and `HEARTBEAT.md` (operating instructions for
+OpenClaw, not personality), daily memory logs, skills, and Hermes'
+`config.yaml`.
+
+The full character file, the avatar, every memory and every note are
+printed first; nothing is written until you answer `y` (or pass `--yes`).
+Then:
+
+- The sprig gets no tool scopes except `schedule`, is never the host, and
+  starts with every tool at `draft`, whatever the source said. Grant more
+  in chat.
+- Imported text is untrusted. It only becomes background: the source's
+  own headings are turned into bold lines so they can't pass for sections
+  of Thicket's prompt, and nothing in it can grant tools or admin rights,
+  which code checks on every call.
+- With `--memories`, facts about you (`USER.md`) become shared memories and
+  the agent's own notes (`MEMORY.md`) become personal to the new sprig.
+  They're saved as yours (`source: user`, locked), so automatic review never
+  changes them. They go to the owner unless you pass `--user ID`.
+
+Afterwards, ask Juni to tune anything that doesn't fit, such as traits
+marked as placeholders. You can also skip the command and paste a persona
+straight into chat ("bring on this character: ..."): Juni drafts it
+through the usual interview and preview, and treats the paste as
+description, never as instructions.
+
 ## Avatars
 
 Each sprig is drawn from parts, no image generation involved:
