@@ -86,18 +86,19 @@ Unknown fields are an error, so typos don't silently do nothing.
 ## Tool scopes
 
 Every sprig can always use its memory (remember, list, forget, follow-ups)
-and hand off to another sprig. Anything else must be granted:
+and work with other sprigs (hand off, ask one a question, or give one a background task). Anything else must be granted:
 
 | Scope | Gives |
 |---|---|
 | `schedule` | Create, list, pause and delete scheduled jobs. |
+| `web` | Search the web and read pages ([details](web.md)). |
 | `characters` | Interview, preview and create new sprigs. |
 | `admin` | Settings, spend report, activity log, integrations, approvals, inviting users, memory rollback. Only usable when the person talking is the owner or an admin. |
 | `mcp:<integration>/*` | Every tool of an integration. |
 | `mcp:<integration>/<tool>` | One tool of an integration. |
 
 `admin` and `characters` can only be granted by editing the file; in chat,
-Juni can grant `schedule` and integration scopes.
+Juni can grant `schedule`, `web` and integration scopes.
 
 ## Memory
 

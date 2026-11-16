@@ -21,6 +21,7 @@ import (
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/channel/discord"
+	"github.com/theshield2594/thicket/internal/channel/telegram"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/secrets"
@@ -45,9 +46,22 @@ Usage:
   thicket web link [--user ID] [--ttl 24h]
                                       print a one-time sign-in link for the web app
                                       (default: the owner; on a fresh install it makes you the owner)
+  thicket skill list                  list saved skills (procedures sprigs follow)
+  thicket skill export ID [-o FILE]   write a skill as Markdown, to share
+  thicket skill import FILE           add a skill, or a new version of one with the same id
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket migrate                     apply database migrations and print the schema version
+  thicket api-token create NAME [--user APP:ID]
+                                      make a token for the local API (acts as the owner by default)
+  thicket api-token list | revoke ID
+  thicket ask [--sprig ID] [--conversation NAME] [--json] MESSAGE
+                                      message a sprig through the running server and print the reply
+                                      (MESSAGE or stdin; needs THICKET_API_TOKEN)
+  thicket jobs                        list your jobs (needs THICKET_API_TOKEN)
+  thicket run-job JOB_ID [--payload TEXT|-]
+                                      run a job now, optionally with input (needs THICKET_API_TOKEN)
+  thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -75,10 +89,22 @@ func main() {
 		err = characterCmd(args)
 	case "memory":
 		err = memoryCmd(args)
+	case "skill", "skills":
+		err = skillCmd(args)
 	case "web":
 		err = webCmd(args)
 	case "migrate":
 		err = migrate()
+	case "api-token", "api-tokens":
+		err = apiTokenCmd(args)
+	case "ask":
+		err = askCmd(args)
+	case "jobs":
+		err = jobsCmd()
+	case "run-job":
+		err = runJobCmd(args)
+	case "stop":
+		err = stopCmd(args)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":
@@ -130,10 +156,14 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(ctx, cfg, version, app.Options{Channels: func(log *slog.Logger) []channel.Channel {
-		if cfg.DiscordToken == "" {
-			return nil // web app only
+		var chs []channel.Channel
+		if cfg.DiscordToken != "" {
+			chs = append(chs, discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log))
 		}
-		return []channel.Channel{discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log)}
+		if cfg.TelegramToken != "" {
+			chs = append(chs, telegram.New(cfg.TelegramToken, cfg.TelegramListenChats, log))
+		}
+		return chs // none: the web app alone
 	}})
 	if err != nil {
 		return err

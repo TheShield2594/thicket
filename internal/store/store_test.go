@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,5 +306,162 @@ func TestRollbackOfAddLeavesNoContent(t *testing.T) {
 	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE run_id IS NULL AND memory_id = ?", ids[0]).Scan(&n)
 	if n != 0 {
 		t.Fatal("user-initiated history of a rolled-back memory was kept")
+	}
+}
+
+// A v1 database with history upgrades in place: messages survive the
+// table rebuild, cascades still work, and the new role is accepted.
+func TestMigrateV1MessagesToDocumentRole(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "thicket.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	init, _ := migrationFS.ReadFile("migrations/0001_init.sql")
+	for _, q := range []string{
+		"CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+		string(init),
+		"INSERT INTO schema_migrations VALUES (1, '0001_init.sql', 0)",
+		"INSERT INTO users (id, channel, external_id, created_at) VALUES (1, 'discord', 'u', 0)",
+		"INSERT INTO conversations (id, user_id, chat_ref, started_at, last_activity_at) VALUES (7, 1, 'discord:c', 0, 0)",
+		"INSERT INTO messages (conversation_id, role, content, created_at) VALUES (7, 'user', 'hello', 0)",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddMessage(ctx, 7, "document", "", "report.pdf\ntext"); err != nil {
+		t.Fatalf("document role refused after migration: %v", err)
+	}
+	msgs, err := s.RecentMessages(ctx, 7, 10)
+	if err != nil || len(msgs) != 2 || msgs[0].Content != "hello" || msgs[1].Role != "document" {
+		t.Fatalf("messages after migration: %+v %v", msgs, err)
+	}
+	if err := s.AddMessage(ctx, 7, "robot", "", "x"); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	if _, err := s.DB().Exec("DELETE FROM conversations WHERE id = 7"); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := s.RecentMessages(ctx, 7, 10); len(msgs) != 0 {
+		t.Fatal("messages didn't cascade with their conversation")
+	}
+}
+
+func TestIdentities(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	owner, _ := s.CreateUser(ctx, "discord", "d1", "Sam", "owner")
+	if u, err := s.UserByExternal(ctx, "discord", "d1"); err != nil || u.ID != owner.ID {
+		t.Fatalf("lookup by first identity: %+v %v", u, err)
+	}
+
+	// A brand-new account links and then resolves to the same person.
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UserByExternal(ctx, "telegram", "t1"); err != nil || u.ID != owner.ID {
+		t.Fatalf("lookup by linked identity: %+v %v", u, err)
+	}
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatalf("relinking the same account: %v", err)
+	}
+
+	// Writing from Telegram makes it where proactive messages go.
+	if err := s.UseIdentity(ctx, owner.ID, "telegram", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserByID(ctx, owner.ID); u.Channel != "telegram" || u.ExternalID != "t1" {
+		t.Fatalf("primary identity: %+v", u)
+	}
+
+	// An empty profile on the other platform is folded in...
+	empty, _ := s.CreateUser(ctx, "telegram", "t2", "", "member")
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UserByID(ctx, empty.ID); err != ErrNotFound {
+		t.Fatal("the empty profile should be gone")
+	}
+	// ...but one with a history, or an owner, is never taken over.
+	busy, _ := s.CreateUser(ctx, "telegram", "t3", "", "member")
+	if _, err := s.DB().Exec("INSERT INTO memories (user_id, kind, content, source, created_at, updated_at) VALUES (?, 'fact', 'x', 'auto', 0, 0)", busy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkIdentity(ctx, owner.ID, "telegram", "t3"); err != ErrIdentityTaken {
+		t.Fatalf("linking an account with memories: %v", err)
+	}
+	member, _ := s.CreateUser(ctx, "discord", "d9", "", "member")
+	if err := s.LinkIdentity(ctx, member.ID, "discord", "d1"); err != ErrIdentityTaken {
+		t.Fatalf("taking the owner's account: %v", err)
+	}
+	if ids, _ := s.Identities(ctx, owner.ID); len(ids) != 3 {
+		t.Fatalf("identities: %+v", ids)
+	}
+}
+
+func TestSkillVersions(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	k := Skill{ID: "briefing", Name: "Morning briefing", Description: "How to do the briefing", Body: "1. Weather\n2. Calendar", Author: "juniper"}
+	if _, err := s.SaveSkill(ctx, k, 1); err != ErrNotFound {
+		t.Fatalf("revising a skill that doesn't exist: %v", err)
+	}
+	v, err := s.SaveSkill(ctx, k, 0)
+	if err != nil || v != 1 {
+		t.Fatalf("create: %d %v", v, err)
+	}
+	if _, err := s.SaveSkill(ctx, k, 0); err == nil {
+		t.Fatal("creating an existing id should conflict")
+	}
+	if _, err := s.SaveSkill(ctx, k, 1); err != ErrNoChange {
+		t.Fatalf("identical save: %v", err)
+	}
+	k.Body = "1. Weather\n2. Calendar\n3. One nice thing"
+	if v, err := s.SaveSkill(ctx, k, 1); err != nil || v != 2 {
+		t.Fatalf("revise: %d %v", v, err)
+	}
+	var vc *VersionConflict
+	k.Body = "stale edit"
+	if _, err := s.SaveSkill(ctx, k, 1); !errors.As(err, &vc) || vc.Current != 2 {
+		t.Fatalf("stale base: %v", err)
+	}
+	cur, _ := s.SkillByID(ctx, "briefing", 0)
+	old, _ := s.SkillByID(ctx, "briefing", 1)
+	if cur.Version != 2 || !strings.Contains(cur.Body, "nice thing") || old.Body != "1. Weather\n2. Calendar" {
+		t.Fatalf("versions: %+v / %+v", cur, old)
+	}
+	if h, _ := s.SkillHistory(ctx, "briefing"); len(h) != 2 || h[0].Version != 2 {
+		t.Fatalf("history: %+v", h)
+	}
+	if all, _ := s.Skills(ctx); len(all) != 1 || all[0].Version != 2 {
+		t.Fatalf("list: %+v", all)
+	}
+	if err := s.DeleteSkill(ctx, "briefing"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SkillByID(ctx, "briefing", 0); err != ErrNotFound {
+		t.Fatal("a deleted skill is still readable")
+	}
+	if all, _ := s.Skills(ctx); len(all) != 0 {
+		t.Fatal("a deleted skill is still listed")
+	}
+	// Recreated with the same id: numbering carries on, so an edit based
+	// on the old version 2 is refused instead of landing on the new skill.
+	k.Body = "recreated"
+	if v, err := s.SaveSkill(ctx, k, 0); err != nil || v != 3 {
+		t.Fatalf("recreate: %d %v", v, err)
+	}
+	k.Body = "stale edit from before the delete"
+	if _, err := s.SaveSkill(ctx, k, 2); !errors.As(err, &vc) || vc.Current != 3 {
+		t.Fatalf("stale save onto a recreated skill: %v", err)
 	}
 }

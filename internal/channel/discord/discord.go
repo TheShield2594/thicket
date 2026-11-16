@@ -81,8 +81,9 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		if text == "" && len(m.Attachments) == 0 {
 			return
 		}
+		var atts []channel.Attachment
 		for _, att := range m.Attachments {
-			text += fmt.Sprintf("\n[attachment: %s]", att.Filename)
+			atts = append(atts, channel.Attachment{Name: att.Filename, URL: att.URL, ContentType: att.ContentType, Size: att.Size})
 		}
 		name := m.Author.GlobalName
 		if name == "" {
@@ -92,6 +93,7 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 			Channel: "discord", ChatID: m.ChannelID, MessageID: m.ID,
 			UserID: m.Author.ID, UserName: name, Text: strings.TrimSpace(text),
 			IsDM: m.GuildID == "", Mentioned: mentioned, Listening: a.listen[m.ChannelID],
+			Attachments: atts,
 		}
 		go h(ctx, in)
 	})

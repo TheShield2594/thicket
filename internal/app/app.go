@@ -14,13 +14,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/agent"
+	"github.com/theshield2594/thicket/internal/api"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -57,6 +60,8 @@ type App struct {
 	Engine    *agent.Engine
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
+	API       *api.API
+	Dashboard *dashboard.Dashboard
 	HTTP      *http.Server
 	Web       *web.Adapter
 	channels  []channel.Channel
@@ -80,6 +85,9 @@ func NewLogger(level string, out io.Writer, red *secrets.Redactor) *slog.Logger 
 
 func New(ctx context.Context, cfg *config.Config, version string, opts Options) (*App, error) {
 	red := secrets.NewRedactor()
+	// Chat tokens aren't stored secrets, but must never be logged either.
+	red.Add(cfg.DiscordToken)
+	red.Add(cfg.TelegramToken)
 	out := opts.LogOut
 	if out == nil {
 		out = os.Stdout
@@ -130,7 +138,17 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		return nil, errors.New("no host character could be loaded; fix or delete the files in " + cfg.CharactersDir + " (Juniper is recreated if juniper.md is missing)")
 	}
 
-	or := llm.NewOpenRouter(cfg.OpenRouterURL, func(ctx context.Context) (string, error) { return sec.Get(ctx, secrets.OpenRouterKey) })
+	sec.SetEnvFallback(secrets.ModelAPIKey, cfg.ModelAPIKey)
+	// The address and key are read per call: onboarding can switch to a
+	// local server, and keys added in chat apply at once.
+	or := llm.NewOpenRouter(cfg.ModelURL, func(ctx context.Context, base string) (string, error) {
+		if llm.IsOpenRouter(base) {
+			return sec.Get(ctx, secrets.OpenRouterKey)
+		}
+		k, _ := sec.Get(ctx, secrets.ModelAPIKey) // most local servers need none
+		return k, nil
+	})
+	or.URL = func(ctx context.Context) string { return a.Settings.String(ctx, "model_url") }
 	var base llm.Client = or
 	keyCheck := or.CheckKey
 	if opts.Model != nil {
@@ -178,9 +196,25 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 				"My memory review keeps failing ("+shortErr(err)+"). Nothing is lost, but I'm not learning from recent chats until it's fixed.")
 		}}
 	a.Scheduler = scheduler.New(db, a.Engine, log)
+	// The local API is an internal channel: replies to its messages come
+	// back through it. It isn't listed in /health like the chat apps.
+	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
+	a.Engine.AddChannel(a.API)
+	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
+		SessionTTL: web.SessionTTL,
+		Health: func(ctx context.Context) map[string]dashboard.Check {
+			out := map[string]dashboard.Check{}
+			for k, c := range a.health(ctx) {
+				out[k] = dashboard.Check{OK: c.OK, Detail: c.Detail}
+			}
+			return out
+		}}
 
 	if !opts.NoHTTP {
-		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, a.Web.Handler())
+		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
+			Hooks: a.Webhook, MaxHookBody: agent.MaxWebhookPayload,
+			API: a.API.Handler(), Dashboard: a.Dashboard.Handler(), App: a.Web.Handler(),
+		})
 	}
 	return a, nil
 }
@@ -209,10 +243,13 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		}
 		out["channel."+ch.Name()] = server.Check{OK: ch.Connected()}
 	}
-	if a.Secrets.Has(ctx, secrets.OpenRouterKey) {
+	switch url := a.Settings.String(ctx, "model_url"); {
+	case a.Engine.ModelReady(ctx) && llm.IsOpenRouter(url):
 		out["model_key"] = server.Check{OK: true}
-	} else {
-		out["model_key"] = server.Check{OK: false, Detail: "no OpenRouter key yet: DM the bot to set one up"}
+	case a.Engine.ModelReady(ctx):
+		out["model_key"] = server.Check{OK: true, Detail: "model server " + url}
+	default:
+		out["model_key"] = server.Check{OK: false, Detail: "no model yet: DM the bot to set one up"}
 	}
 	last := a.Scheduler.LastTick()
 	out["scheduler"] = server.Check{OK: !last.IsZero() && time.Since(last) < 2*time.Minute, Detail: "last tick " + last.UTC().Format(time.RFC3339)}
@@ -226,7 +263,7 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 }
 
 func (a *App) webStatus(ctx context.Context, admin bool) web.Status {
-	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Secrets.Has(ctx, secrets.OpenRouterKey)}
+	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Engine.ModelReady(ctx)}
 	for _, ch := range a.channels {
 		st.Channels[ch.Name()] = ch.Connected()
 	}
@@ -248,6 +285,7 @@ func (a *App) Run(parent context.Context) error {
 	// waits for them before returning (Close must not race live workers).
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	a.Engine.SetLifetime(ctx) // background tasks end with Thicket
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
 	mcpDone := make(chan struct{})
@@ -316,6 +354,7 @@ func (a *App) Run(parent context.Context) error {
 		scancel()
 	}
 	wg.Wait()
+	a.Engine.WaitTasks()
 	return err
 }
 
@@ -409,5 +448,59 @@ func (a *App) Close() {
 	}
 	if a.DB != nil {
 		a.DB.Close()
+	}
+}
+
+// Webhook starts the webhook job a token belongs to. Unknown tokens get
+// the same answer as a missing route, and nothing about the job leaks.
+func (a *App) Webhook(ctx context.Context, token string, body []byte, header http.Header) (int, string) {
+	if !strings.HasPrefix(token, "thk_") || len(token) > 100 {
+		return http.StatusNotFound, "not found"
+	}
+	j, err := a.DB.JobByHook(ctx, agent.HookHash(token))
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound, "not found"
+	}
+	if err != nil {
+		a.Log.Error("webhook lookup", "err", err)
+		return http.StatusInternalServerError, "internal error"
+	}
+	switch err := a.Engine.CheckWebhook(ctx, *j, body, header); {
+	case errors.Is(err, agent.ErrDuplicate):
+		return http.StatusOK, "already received"
+	case err != nil:
+		return http.StatusUnauthorized, err.Error()
+	}
+	payload := string(body)
+	if !utf8.ValidString(payload) {
+		payload = fmt.Sprintf("(%d bytes of binary data, not shown)", len(body))
+	}
+	var head []string
+	if ev := agent.WebhookEvent(header); ev != "" {
+		head = append(head, "Event: "+ev)
+	}
+	if ct := strings.TrimSpace(header.Get("Content-Type")); ct != "" && payload != "" {
+		head = append(head, "Content-Type: "+ct)
+	}
+	if len(head) > 0 {
+		payload = strings.Join(head, "\n") + "\n\n" + payload
+	}
+	j.Payload = payload
+	fireErr := a.Scheduler.Fire(*j)
+	if fireErr != nil {
+		// Not run: let the sender's retry of this delivery through.
+		a.Engine.ReleaseDelivery(ctx, *j, header)
+	}
+	switch err := fireErr; {
+	case err == nil:
+		return http.StatusAccepted, "started"
+	case errors.Is(err, scheduler.ErrPaused):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, scheduler.ErrBusy), errors.Is(err, scheduler.ErrTooSoon), errors.Is(err, scheduler.ErrTooMany):
+		a.Engine.WebhookRefused(ctx, *j, err)
+		return http.StatusTooManyRequests, err.Error()
+	default:
+		a.Log.Error("webhook fire", "job", j.ID, "err", err)
+		return http.StatusInternalServerError, "internal error"
 	}
 }

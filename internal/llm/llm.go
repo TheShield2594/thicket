@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type Message struct {
@@ -15,6 +16,130 @@ type Message struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Annotations are OpenRouter's parsed copies of PDFs, returned on an
+	// assistant message. Sending them back on that message in the next
+	// call of the same turn skips parsing the PDF again.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	// Images and Files go with a user message. When set, the message is
+	// sent as content parts: Content first, then images, then files.
+	// They are never stored, only sent with the turn they arrived in.
+	Images []Image `json:"-"`
+	Files  []File  `json:"-"`
+}
+
+// Image is a picture for a vision model, as an https or data: URL.
+type Image struct {
+	URL string
+}
+
+// File is a document (a PDF) as a data: URL. OpenRouter reads it natively
+// or parses it, depending on the model and Request.PDFEngine.
+type File struct {
+	Name string
+	URL  string
+}
+
+type contentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
+	File     *filePart `json:"file,omitempty"`
+}
+
+type imageURL struct {
+	URL string `json:"url"`
+}
+
+type filePart struct {
+	Filename string `json:"filename"`
+	FileData string `json:"file_data"`
+}
+
+// MarshalJSON sends plain string content unless the message has media.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type plain Message
+	if len(m.Images) == 0 && len(m.Files) == 0 {
+		return json.Marshal(plain(m))
+	}
+	parts := []contentPart{}
+	if m.Content != "" {
+		parts = append(parts, contentPart{Type: "text", Text: m.Content})
+	}
+	for _, img := range m.Images {
+		parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: img.URL}})
+	}
+	for _, f := range m.Files {
+		parts = append(parts, contentPart{Type: "file", File: &filePart{Filename: f.Name, FileData: f.URL}})
+	}
+	return json.Marshal(struct {
+		plain
+		Content []contentPart `json:"content"`
+	}{plain(m), parts})
+}
+
+// HasImages reports whether any message carries images.
+func HasImages(msgs []Message) bool {
+	for _, m := range msgs {
+		if len(m.Images) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFiles reports whether any message carries files.
+func HasFiles(msgs []Message) bool {
+	for _, m := range msgs {
+		if len(m.Files) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMedia reports whether any message carries images or files.
+func HasMedia(msgs []Message) bool { return HasImages(msgs) || HasFiles(msgs) }
+
+// ContextExceeded reports whether err says the prompt didn't fit the
+// model's context window.
+func ContextExceeded(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) || (ae.Status != 400 && ae.Status != 413 && ae.Status != 422 && ae.Status != 500) {
+		return false
+	}
+	m := strings.ToLower(ae.Message)
+	for _, s := range []string{"context length", "context window", "maximum context", "context_length", "too many tokens", "prompt is too long", "exceeds the context", "input is too long"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// ToolsRejected reports whether err looks like the model refusing tool
+// definitions (common with small local models).
+func ToolsRejected(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) || (ae.Status != 400 && ae.Status != 422 && ae.Status != 500) {
+		return false
+	}
+	m := strings.ToLower(ae.Message)
+	return strings.Contains(m, "tool") || strings.Contains(m, "function call")
+}
+
+// MediaRejected reports whether err looks like the model refusing image
+// or file input (OpenRouter answers 404 "no endpoints that support image
+// input", providers 400/415/422), as opposed to an outage or a bad key.
+func MediaRejected(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) || ToolsRejected(err) || ContextExceeded(err) {
+		return false // other recoveries handle these, keeping the media
+	}
+	switch ae.Status {
+	case 400, 404, 413, 415, 422:
+		return true
+	}
+	return false
 }
 
 type ToolCall struct {
@@ -49,6 +174,13 @@ type Request struct {
 	JSON        bool // ask for a JSON object response
 	// NoFallback disables falling back to the secondary model.
 	NoFallback bool
+	// PDFEngine picks how OpenRouter reads PDFs: "native", "cloudflare-ai"
+	// or "mistral-ocr". Empty lets OpenRouter choose (native if the model
+	// reads files, else OCR). Only sent when a message carries a file.
+	PDFEngine string
+	// WebResults > 0 has OpenRouter search the web first and give the
+	// model that many results (its "web" plugin). OpenRouter only.
+	WebResults int
 }
 
 type Usage struct {
@@ -101,7 +233,7 @@ type Meta struct {
 	UserID    int64
 	Character string
 	JobID     int64
-	Purpose   string // chat | job | memory | consistency | preview | proactive
+	Purpose   string // chat | job | memory | consistency | preview | proactive | document
 }
 
 type metaKey struct{}

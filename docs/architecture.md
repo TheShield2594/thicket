@@ -10,17 +10,20 @@ internal/app         wires everything together (also used by the smoke test)
 internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
 internal/character   character files: parse, validate, load, write without clobbering
 internal/memory      memory review (cheap model proposes, code validates) and relevance selection
-internal/scheduler   cron jobs with run history
-internal/llm         OpenRouter client, retries, fallback model
+internal/scheduler   cron and webhook jobs with run history
+internal/llm         OpenAI-compatible client (OpenRouter or a local server), retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
-internal/channel     channel interface; channel/discord is the Discord adapter
+internal/channel     channel interface; adapters in channel/discord and channel/telegram
 internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
-internal/server      /health, /avatars, and mounts the web app at /
+internal/server      /health, /avatars, /hooks, /api/v1, /dashboard, and mounts the web app at /
+internal/api         local HTTP API (/api/v1): an internal "api" channel plus token auth
+internal/websearch   page fetching (public addresses only) and SearXNG search
+internal/dashboard   read-only /dashboard, signed in through the web app's session
 ```
 
 ## A message's journey
@@ -38,10 +41,24 @@ internal/server      /health, /avatars, and mounts the web app at /
    - if no model key exists yet, sends the scripted first-run greeting;
    - picks the sprig: addressed by name, else whoever spoke last in this
      chat, else the host.
+   - downloads attachments (https only, size-capped): images and PDFs
+     go to the model with this turn only (PDFs as `file` parts, parsed
+     by OpenRouter per the `pdf_engine` setting; its parse annotations
+     ride along on later calls in the turn so the PDF isn't parsed
+     twice); text files are redacted, wrapped as untrusted data and added
+     to the message. After the reply, each PDF's text (from the parse
+     annotations, or a parse-only call to the cheap model when the model
+     read it natively) is stored as a `document` message, capped at
+     20,000 characters, so follow-up turns can use it. Memory review
+     skips documents. A model that refuses images or PDFs gets the turn
+     again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
-   rules) plus recent history from this conversation only. A conversation
-   ends after `THICKET_IDLE_AFTER` of quiet, so old chats don't bleed into
-   new tasks.
+   skills, rules), then this conversation's summary if it has one, then
+   its newest messages up to the history budget (`history_tokens`;
+   automatic: 12,000 tokens on OpenRouter, 3,000 on a local model). A
+   conversation ends after `THICKET_IDLE_AFTER` of quiet, so old chats
+   don't bleed into new tasks. If the model says its context is full, the
+   turn is retried once with half the history, and admins are told.
 4. The tool loop: tools are offered by scope and role, and checked again in
    code when called. Risky tools create an approval instead of running.
    Integration output is wrapped as untrusted data. Hard caps: 8 tool calls
@@ -49,8 +66,13 @@ internal/server      /health, /avatars, and mounts the web app at /
 5. Consistency: banned phrases are checked in code; then (if enabled) the
    cheap model compares the reply with the identity. One rewrite on
    failure.
-6. The reply is posted as the sprig. A handoff runs the next sprig's turn
-   (at most 2 deep).
+6. The reply is posted as the sprig. Then, if the conversation's
+   unsummarised messages are over budget, the cheap model folds the
+   oldest into the running summary (`conversations.summary`, up to
+   `summary_upto`) until half the budget remains, keeping the last 4
+   messages verbatim. Raw messages stay for memory review. A failed
+   summary just lets old messages drop out, and isn't retried for 10
+   minutes. A handoff then runs the next sprig's turn (at most 2 deep).
 
 ## Memory
 
@@ -66,6 +88,114 @@ internal/server      /health, /avatars, and mounts the web app at /
   size budget, so only what matters goes in the prompt.
 - `context` memories expire after 14 days; expired memories are deleted 30
   days later.
+
+## Webhook jobs
+
+A job is either `cron` (the scheduler's 20-second tick runs it when due)
+or `webhook` (never ticked; `POST /hooks/{token}` starts it through
+`Scheduler.Fire`). The token is 24 random bytes; only its SHA-256 is
+stored, looked up on each call. The URL is DMed by code straight to the
+channel, outside the conversation history, so the model never sees it,
+and `thk_…` is a secret pattern, so a pasted URL is intercepted like any
+key. `Fire` refuses paused jobs, overlapping runs, a run within a minute
+of the last and more than 50 a day; the body (64 KB max, secrets
+redacted) is wrapped as untrusted data in the job prompt. Runs are
+recorded and reported exactly like scheduled ones. A job can also require
+signatures (`jobs.hook_auth`: github, gitea, gitlab): `CheckWebhook`
+verifies the HMAC (or GitLab's token) in constant time against a secret
+in the encrypted secret store (`webhook_<id>_signing`, DMed by code),
+before the job is fired, and drops repeated delivery ids via
+`ClaimNotice`.
+
+## Local API
+
+`internal/api` is a channel named `api` that no platform drives: an HTTP
+request becomes a `channel.Incoming` with `KnownUser` set from the token,
+goes through `Engine.Handle` (the same path as a DM, returning only after
+every reply and handoff), and the replies the engine `Send`s to that chat
+are collected and returned in the response. One request runs per
+conversation at a time. `KnownUser` messages never change where proactive
+messages go and can't redeem link codes. Tokens are stored as SHA-256
+hashes and made by the CLI. `POST /api/v1/jobs/{id}/run` goes through
+`Scheduler.Fire`, with the webhook limits.
+
+## Skills
+
+Skills are rows in `skills` (id and current version) and
+`skill_versions` (every version's name, description, steps, note and
+author). `SaveSkill` takes the version the change was based on and
+refuses a stale one (`VersionConflict`), so concurrent edits never
+overwrite each other; restoring copies an old version forward. The
+prompt carries an index (first 40 skills); sprigs call `read_skill` for
+the steps, which are returned as instructions, not untrusted data. That's
+why saving is admin-only and the validator refuses secrets and
+`<untrusted>` content. `thicket skill export/import` moves them as
+Markdown with YAML frontmatter.
+
+## Model servers
+
+The `model_url` setting (env `THICKET_MODEL_URL`, chat-changeable) is read
+on every call. OpenRouter needs its key and gets OpenRouter-only fields
+(`usage`, the PDF `plugins`); any other host is treated as a local
+OpenAI-compatible server: the key is optional (`model_api_key`), those
+fields are left out, calls may take 5 minutes, and PDFs are declined
+before download. `Engine.ModelReady` gates the scripted bootstrap: a key
+for OpenRouter, a chosen model for a local server. The bootstrap accepts
+an address (or "ollama"/"lm studio"), tries `GET /models` on each
+candidate, and sets `model_url`, `model`, `cheap_model` and
+`fallback_model` (the same model, so no fallback). A model that rejects
+tool definitions gets the turn again without tools, and admins are told
+once a day.
+
+## Stopping
+
+Messages in a chat take turns behind a lock, so a stop request
+(`isStopRequest`: "stop", "cancel", "never mind", 🛑, `/stop`, also after a
+sprig's name) is handled before the lock. `Engine.Stop` cancels the
+context of the reply in progress in that chat (registered in `turnsIn` by
+`handle`; only its user or an admin may stop it) and records the arrival
+number, so messages already queued are dropped when they get the lock.
+`respond` sees the stop, sends nothing but the acknowledgement (which
+lists tools that already ran, from `turn.done`), registers no approvals
+and starts no handoff, and records an event so the next reply knows. With
+no reply running, a stop cancels the user's running jobs (`jobsRunning`),
+whose runs are recorded as "stopped by the user" without a failure
+report. Tools that finished stay done: nothing is rolled back.
+
+## Sprigs working together
+
+Three ways, all tools: `handoff` (the next sprig replies to the user, at
+most 2 deep), `ask_sprig` and `delegate_task`. `ask_sprig` runs a nested
+turn for the other sprig with a `consult` marker: its own identity,
+memories and tools, no conversation history (the question must carry the
+context), and no `ask_sprig`, `handoff`, `delegate_task` or chat-only
+tools, so there are no chains. Its answer comes back wrapped as untrusted
+data and is recorded as an event in the conversation; approvals it raises
+go out with the asking sprig's reply; at most 2 per turn. `delegate_task`
+starts a background turn in job mode (kind `task`, not stored as a job),
+registered with the running jobs so "stop" cancels it, capped at 3 per
+user and 10 minutes, tied to the app's lifetime; the result goes to the
+user by DM from the sprig that did it.
+
+## Web
+
+`web_search` and `fetch_page` need the `web` scope and are `Untrusted`,
+so their output is wrapped as data. Search goes to SearXNG
+(`search_url`) or, on OpenRouter, to the cheap model with OpenRouter's
+`web` plugin, whose `url_citation` annotations become the source list.
+`websearch.Fetcher` refuses non-public addresses in the dialer's `Control`
+hook, after DNS resolution, so a redirect or a hostname that resolves to
+a private address is stopped the same way; it bypasses any HTTP proxy
+for that reason. HTML becomes text with the standard library only.
+
+## Dashboard
+
+`/dashboard` is server-rendered with `html/template` (no JavaScript). It
+has no sign-in of its own: it reads the web app's session cookie and
+looks it up with `WebSessionUser`, which also keeps the session alive.
+Every response carries a CSP with `default-src 'none'`, no
+framing, no referrer and no caching. A user sees their own memories and
+jobs; spending, health and activity are added for admins.
 
 ## Reliability rules
 
@@ -83,9 +213,20 @@ internal/server      /health, /avatars, and mounts the web app at /
 ## Adding a channel
 
 Implement `channel.Channel` (Run, Send, SendDirect, Delete, Typing,
-Connected), then register it in `cmd/thicket` alongside Discord. Chat
-references are stored as `<channel>:<chat id>`, and users are keyed by
-`(channel, external id)`, so nothing else needs to change.
+Connected), then register it in `cmd/thicket` alongside Discord and
+Telegram, with its token added to the log redactor in `app.New`. Chat
+references are stored as `<channel>:<chat id>`. Attachments that need an
+authenticated download set `Attachment.Open`, whose errors must not
+contain the token (Telegram's file URLs do).
+
+A user can have several identities, one per app account
+(`identities` table). `UserByExternal` resolves any of them;
+`users.channel/external_id` hold the one the user last wrote from, which
+is where proactive messages go. Linking uses a one-time code issued by
+`link_account` (DMed by code, held in memory for 15 minutes) and redeemed
+by DMing it from the new account. `LinkIdentity` never merges two
+histories and never changes a role: an account with its own memories,
+jobs or owner role is refused.
 
 ## The web app
 
@@ -93,7 +234,9 @@ references are stored as `<channel>:<chat id>`, and users are keyed by
 `web:<user id>.<sprig id>` (one thread per sprig) or `web:<user id>.all`
 (the shared room). The adapter authenticates the browser itself and passes
 `Incoming.UserRef`, so a web session acts as an existing Thicket user,
-Discord or web. `Incoming.Character` pins a thread to its sprig unless the
+from any app. (The local API does the same with its tokens.) Messages
+with a `UserRef` never change where proactive messages go and can't
+redeem link codes. `Incoming.Character` pins a thread to its sprig unless the
 user addresses another by name.
 
 Everything a user sees in a web chat is kept in `web_messages`, which is

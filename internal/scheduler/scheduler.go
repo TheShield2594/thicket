@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -102,20 +103,37 @@ type Executor interface {
 	Location(ctx context.Context, userID int64) *time.Location
 }
 
+// Webhook limits: each run costs model calls, and a leaked URL or a
+// chatty integration must not drain the budget.
+const (
+	WebhookMinGap    = time.Minute
+	WebhookDailyRuns = 50
+)
+
+var (
+	ErrPaused  = errors.New("this webhook's job is paused")
+	ErrBusy    = errors.New("the job is still running from the last call")
+	ErrTooSoon = fmt.Errorf("called again within %s of the last run", WebhookMinGap)
+	ErrTooMany = fmt.Errorf("already ran %d times in the last 24 hours", WebhookDailyRuns)
+)
+
 type Scheduler struct {
 	DB   *store.Store
 	Exec Executor
 	Log  *slog.Logger
 	Now  func() time.Time
 
+	// base outlives any one HTTP request: webhook runs use it.
+	base     context.Context
 	mu       sync.Mutex
 	running  map[int64]bool
+	admitted map[int64]time.Time // job id -> when Fire last started it
 	lastTick time.Time
 	wg       sync.WaitGroup
 }
 
 func New(db *store.Store, exec Executor, log *slog.Logger) *Scheduler {
-	return &Scheduler{DB: db, Exec: exec, Log: log, Now: time.Now, running: map[int64]bool{}}
+	return &Scheduler{DB: db, Exec: exec, Log: log, Now: time.Now, running: map[int64]bool{}, admitted: map[int64]time.Time{}}
 }
 
 // LastTick is when the scheduler last checked for due jobs (for /health).
@@ -127,6 +145,9 @@ func (s *Scheduler) LastTick() time.Time {
 
 // Run checks for due jobs every 20 seconds until ctx ends.
 func (s *Scheduler) Run(ctx context.Context) {
+	s.mu.Lock()
+	s.base = ctx
+	s.mu.Unlock()
 	if n, err := s.DB.FailStaleRuns(ctx); err != nil {
 		s.Log.Error("fail stale runs", "err", err)
 	} else if n > 0 {
@@ -158,6 +179,9 @@ func (s *Scheduler) Tick(ctx context.Context) {
 		return
 	}
 	for _, j := range jobs {
+		if j.Kind == store.JobWebhook {
+			continue // started by Fire, not the clock
+		}
 		sched, err := Parse(j.Schedule)
 		if err != nil {
 			s.Log.Error("job has invalid schedule; disabling", "job", j.ID, "err", err)
@@ -188,12 +212,69 @@ func (s *Scheduler) Tick(ctx context.Context) {
 				delete(s.running, j.ID)
 				s.mu.Unlock()
 			}()
-			s.runOne(ctx, j, now, sched, loc)
+			// Same base Due uses (last_run_at = this tick), so the
+			// reported next run matches when it will actually fire.
+			s.runOne(ctx, j, now, sched.Next(now.In(loc)))
 		}(j)
 	}
 }
 
-func (s *Scheduler) runOne(ctx context.Context, j store.Job, now time.Time, sched cron.Schedule, loc *time.Location) {
+// Fire starts a webhook job now, in the background. It refuses when the
+// job is paused, still running, or over its rate limits; the run itself
+// is recorded and reported like any other job's.
+func (s *Scheduler) Fire(j store.Job) error {
+	if !j.Enabled {
+		return ErrPaused
+	}
+	now := s.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running[j.ID] {
+		return ErrBusy
+	}
+	ctx := s.base
+	if ctx == nil {
+		ctx = context.Background() // not started (tests)
+	}
+	// The caller's copy of the job may predate a run that has finished
+	// since: re-read the last run time under the lock, and also count
+	// this scheduler's own latest admission.
+	last := j.LastRunAt
+	if fresh, err := s.DB.JobByID(ctx, j.ID); err == nil {
+		last = fresh.LastRunAt
+	}
+	if a := s.admitted[j.ID]; a.After(last) {
+		last = a
+	}
+	if !last.IsZero() && now.Sub(last) < WebhookMinGap {
+		return ErrTooSoon
+	}
+	n, err := s.DB.JobRunsSince(ctx, j.ID, now.Add(-24*time.Hour))
+	if err != nil {
+		return err
+	}
+	if n >= WebhookDailyRuns {
+		return ErrTooMany
+	}
+	s.running[j.ID] = true
+	s.admitted[j.ID] = now
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			delete(s.running, j.ID)
+			s.mu.Unlock()
+		}()
+		s.runOne(ctx, j, now, time.Time{})
+	}()
+	return nil
+}
+
+// Wait blocks until running jobs finish. For tests.
+func (s *Scheduler) Wait() { s.wg.Wait() }
+
+func (s *Scheduler) runOne(ctx context.Context, j store.Job, now time.Time, next time.Time) {
 	runID, err := s.DB.StartJobRun(ctx, j.ID, now)
 	if err != nil {
 		s.Log.Error("start job run", "job", j.ID, "err", err)
@@ -222,7 +303,5 @@ func (s *Scheduler) runOne(ctx context.Context, j store.Job, now time.Time, sche
 		s.Log.Error("finish job run", "job", j.ID, "err", err)
 	}
 	s.Log.Info("job finished", "job", j.ID, "name", j.Name, "status", res.Status)
-	// Same base Due uses (last_run_at = this tick), so the reported next
-	// run matches when it will actually fire.
-	s.Exec.JobFinished(ctx, j, res, sched.Next(now.In(loc)))
+	s.Exec.JobFinished(ctx, j, res, next)
 }

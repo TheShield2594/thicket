@@ -15,12 +15,16 @@ type Conversation struct {
 	LastActivityAt time.Time
 	ReviewedAt     time.Time
 	ReviewAttempts int
+	// Summary covers every message up to and including SummaryUpto; the
+	// messages after it are shown as they are.
+	Summary     string
+	SummaryUpto int64
 }
 
 type Message struct {
 	ID             int64
 	ConversationID int64
-	Role           string // user | assistant | event
+	Role           string // user | assistant | event | document
 	Character      string
 	Content        string
 	CreatedAt      time.Time
@@ -33,9 +37,9 @@ func (s *Store) OpenConversation(ctx context.Context, userID int64, chatRef stri
 	var c Conversation
 	var started, last int64
 	var reviewed sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, chat_ref, started_at, last_activity_at, reviewed_at, review_attempts
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, chat_ref, started_at, last_activity_at, reviewed_at, review_attempts, summary, summary_upto
 		FROM conversations WHERE user_id = ? AND chat_ref = ? ORDER BY id DESC LIMIT 1`, userID, chatRef).
-		Scan(&c.ID, &c.UserID, &c.ChatRef, &started, &last, &reviewed, &c.ReviewAttempts)
+		Scan(&c.ID, &c.UserID, &c.ChatRef, &started, &last, &reviewed, &c.ReviewAttempts, &c.Summary, &c.SummaryUpto)
 	now := s.unix()
 	if err == nil && !reviewed.Valid && now-last < int64(idle.Seconds()) {
 		c.StartedAt, c.LastActivityAt = time.Unix(started, 0), time.Unix(last, 0)
@@ -53,13 +57,43 @@ func (s *Store) OpenConversation(ctx context.Context, userID int64, chatRef stri
 }
 
 func (s *Store) AddMessage(ctx context.Context, convID int64, role, character, content string) error {
-	now := s.unix()
-	if _, err := s.db.ExecContext(ctx, "INSERT INTO messages (conversation_id, role, character, content, created_at) VALUES (?, ?, ?, ?, ?)",
-		convID, role, character, content, now); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, "UPDATE conversations SET last_activity_at = ? WHERE id = ?", now, convID)
+	_, err := s.AddMessageID(ctx, convID, role, character, content)
 	return err
+}
+
+// AddMessageID adds a message and returns its id.
+func (s *Store) AddMessageID(ctx context.Context, convID int64, role, character, content string) (int64, error) {
+	now := s.unix()
+	res, err := s.db.ExecContext(ctx, "INSERT INTO messages (conversation_id, role, character, content, created_at) VALUES (?, ?, ?, ?, ?)",
+		convID, role, character, content, now)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	_, err = s.db.ExecContext(ctx, "UPDATE conversations SET last_activity_at = ? WHERE id = ?", now, convID)
+	return id, err
+}
+
+// OldestMessagesAfter returns up to limit messages with an id above
+// afterID, oldest first: a contiguous run right after afterID.
+func (s *Store) OldestMessagesAfter(ctx context.Context, convID, afterID int64, limit int) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, role, character, content, created_at FROM messages
+		WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?`, convID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		var at int64
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = time.Unix(at, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // RecentMessages returns up to limit most recent messages, oldest first.
@@ -81,6 +115,39 @@ func (s *Store) RecentMessages(ctx context.Context, convID int64, limit int) ([]
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// MessagesAfter returns up to limit of the newest messages with an id
+// above afterID, oldest first.
+func (s *Store) MessagesAfter(ctx context.Context, convID, afterID int64, limit int) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, role, character, content, created_at FROM
+		(SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		var at int64
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = time.Unix(at, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// SetSummary stores a conversation's new summary, only if nobody else
+// moved it since prevUpto (false otherwise).
+func (s *Store) SetSummary(ctx context.Context, convID int64, summary string, upto, prevUpto int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ? AND summary_upto = ?", summary, upto, convID, prevUpto)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // ConversationsToReview returns idle, unreviewed conversations that contain

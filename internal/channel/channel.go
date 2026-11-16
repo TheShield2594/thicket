@@ -1,5 +1,6 @@
 // Package channel defines the interface every chat adapter implements.
-// Discord is the first; Telegram slots in behind the same interface.
+// Discord, Telegram and the web app implement it (plus the internal
+// "api" channel of the local HTTP API).
 package channel
 
 import "context"
@@ -7,7 +8,7 @@ import "context"
 // Persona is how a character appears in a chat.
 type Persona struct {
 	// ID is the character id. Adapters that keep one thread per character
-	// (the web app) use it; Discord ignores it.
+	// (the web app) and the local API use it; Discord ignores it.
 	ID        string
 	Name      string
 	AvatarURL string
@@ -28,11 +29,27 @@ type Incoming struct {
 	// Listening is true for group chats where the bot answers everything.
 	Listening bool
 	// UserRef is the Thicket user id when the adapter has already
-	// authenticated the sender (the web app). 0 means "look up UserID".
+	// authenticated the sender (the web app, the local API). 0 means
+	// "look up UserID".
 	UserRef int64
 	// Character pins the chat to one sprig (a per-sprig web thread). It
 	// still yields to a sprig addressed by name.
 	Character string
+	// Attachments are files sent with the message. Text holds only what
+	// the user typed; the engine decides what to download.
+	Attachments []Attachment
+}
+
+// Attachment is a file sent with a message. URL must be https and is
+// fetched with size limits (see Fetch).
+type Attachment struct {
+	Name        string
+	URL         string
+	ContentType string // as reported by the platform; may be empty
+	Size        int    // bytes, as reported by the platform; 0 if unknown
+	// Open downloads the file when a plain URL won't do (the platform
+	// needs an authenticated call). Its errors must not contain secrets.
+	Open func(ctx context.Context, max int) ([]byte, string, error)
 }
 
 // ChatRef is a channel-qualified chat id, stored in the database.

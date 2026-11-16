@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/budget"
@@ -24,6 +25,7 @@ import (
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // Limits that keep agents from running away.
@@ -31,7 +33,6 @@ const (
 	maxToolCallsPerTurn  = 8
 	maxModelCallsPerTurn = 6
 	maxHandoffDepth      = 2
-	historyMessages      = 30
 	userMsgsPerMinute    = 20
 	approvalMaxAge       = 30 * time.Minute
 	secretCaptureMaxAge  = 15 * time.Minute
@@ -49,7 +50,18 @@ type Engine struct {
 	Log      *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
-	Now      func() time.Time
+	// Fetcher reads web pages for the web tools; nil means one that only
+	// reaches public addresses. Tests replace it.
+	Fetcher        *websearch.Fetcher
+	fetchOnce      sync.Once
+	defaultFetcher *websearch.Fetcher
+	// ListModels asks a model server which models it has; nil means
+	// llm.ListModels.
+	ListModels func(ctx context.Context, base, key string) ([]string, error)
+	// FetchAttachment downloads a file sent with a message; nil means
+	// channel.Fetch. Tests replace it.
+	FetchAttachment func(ctx context.Context, a channel.Attachment, max int) ([]byte, string, error)
+	Now             func() time.Time
 
 	channels  map[string]channel.Channel
 	chatLocks sync.Map   // chatRef -> *sync.Mutex
@@ -58,6 +70,28 @@ type Engine struct {
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
+	// compactBackoff: conversation id -> time before which summarising
+	// isn't retried (it failed).
+	compactBackoff sync.Map
+	// Stopping: replies and jobs in progress, messages waiting per chat,
+	// and the arrival number up to which a chat's queue was stopped.
+	turnsIn     sync.Map // chatRef -> *inFlight
+	jobsRunning sync.Map // job id -> *inFlight
+	waitingIn   sync.Map // chatRef -> *atomic.Int32
+	stopSeq     sync.Map // chatRef -> uint64
+	arrivals    atomic.Uint64
+	// Background tasks sprigs hand each other (delegate_task). They end
+	// with lifetime (set by the app), not with the message that started
+	// them.
+	tasks     sync.WaitGroup
+	taskMu    sync.Mutex
+	taskUse   map[int64]int // user id -> background tasks reserved or running
+	taskSeq   atomic.Int64
+	lifeMu    sync.Mutex
+	lifetime  context.Context
+	linkMu    sync.Mutex
+	links     map[string]linkCode    // code -> pending link
+	linkFails map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -83,18 +117,32 @@ func (e *Engine) lockChat(ref string) func() {
 	return mu.Unlock
 }
 
+// ErrRateLimited means the user sent too many messages in the last minute.
+var ErrRateLimited = errors.New("too many messages in the last minute")
+
 // HandleIncoming is the entry point for every user message from a channel.
 func (e *Engine) HandleIncoming(ctx context.Context, in channel.Incoming) {
+	if err := e.Handle(ctx, in); err != nil && !errors.Is(err, ErrRateLimited) {
+		e.Log.Error("handle message", "err", err, "chat", in.ChatRef())
+	}
+}
+
+// Handle processes a message and returns once every reply has been sent.
+// Replies go out through the channel, as always; the error is for callers
+// that answer someone directly (the local API).
+func (e *Engine) Handle(ctx context.Context, in channel.Incoming) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			e.Log.Error("panic handling message", "panic", p)
 			e.logActivity(ctx, "error", "system", "", 0, "panic while handling a message", fmt.Sprint(p))
+			err = fmt.Errorf("internal error")
 		}
 	}()
-	if err := e.handle(ctx, in); err != nil {
-		e.Log.Error("handle message", "err", err, "chat", in.ChatRef())
+	err = e.handle(ctx, in)
+	if err != nil && !errors.Is(err, ErrRateLimited) {
 		e.logActivity(ctx, "error", "system", "", 0, "failed to handle a message", err.Error())
 	}
+	return err
 }
 
 func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
@@ -103,17 +151,68 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if !in.IsDM && !in.Mentioned && !in.Listening && addressed == nil {
 		return nil
 	}
+	if in.IsDM && in.UserRef == 0 && linkCodeRe.MatchString(in.Text) {
+		return e.redeemLinkCode(ctx, in)
+	}
 	user, err := e.resolveUser(ctx, in)
 	if err != nil || user == nil {
 		return err
 	}
 	_ = e.DB.TouchUser(ctx, user.ID)
+	// Proactive messages go to the app the user last wrote from (never
+	// to an internal channel like the API, which can't receive them).
+	if in.UserRef == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
+		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
+	}
+	// A stop request comes before the rate limit: someone sending a burst
+	// of messages is exactly who may need to stop a reply.
+	stopText := in.Text
+	if addressed != nil {
+		stopText = rest // "Pip, stop"
+	}
+	isStop := isStopRequest(stopText) && len(in.Attachments) == 0
+	if isStop {
+		stopped, jobs := e.Stop(in.ChatRef(), user)
+		if stopped {
+			return nil // the reply being stopped says so itself
+		}
+		if len(jobs) > 0 {
+			host, _ := e.Chars.Host()
+			return e.send(ctx, in.ChatRef(), host, "Okay, I've stopped "+quoteJoin(jobs)+".")
+		}
+		// Nothing running: an ordinary message (it may deny an approval).
+	}
 	if !e.allow(user.ID) {
 		e.Log.Warn("rate limited", "user", user.ID)
-		return nil
+		return ErrRateLimited
 	}
+	seq := e.arrivals.Add(1)
+	w := e.waiting(in.ChatRef())
+	w.Add(1)
 	unlock := e.lockChat(in.ChatRef())
+	w.Add(-1)
 	defer unlock()
+	if v, ok := e.stopSeq.Load(in.ChatRef()); ok && seq <= v.(uint64) {
+		return nil // sent before a stop: set aside, as the stop said
+	}
+	ctx, flight, done := e.track(ctx, &e.turnsIn, in.ChatRef(), user.ID, "")
+	defer done()
+	defer func() {
+		// A stop that came after the reply was already out: say so.
+		if flight.stopped.Load() && flight.acked.CompareAndSwap(false, true) {
+			if host, ok := e.Chars.Host(); ok {
+				_ = e.send(context.WithoutCancel(ctx), in.ChatRef(), host, "I'd already finished, so there was nothing left to stop.")
+			}
+		}
+	}()
+
+	// What the user typed, minus a leading sprig name. Attachment markers
+	// go after it, so secret and approval checks see them as before.
+	typed := in.Text
+	if addressed != nil && rest != "" {
+		typed = rest
+	}
+	in.Text = strings.TrimSpace(in.Text + attachmentNotes(in.Attachments))
 
 	host, ok := e.Chars.Host()
 	if !ok {
@@ -128,19 +227,27 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
-	// 3. No model key yet: scripted first-run greeting.
-	if !e.Secrets.Has(ctx, secrets.OpenRouterKey) {
-		return e.bootstrapGreeting(ctx, in, user, host)
+	// 3. No model yet: scripted first-run setup.
+	if !e.ModelReady(ctx) {
+		return e.bootstrap(ctx, in, user, host)
 	}
+
+	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))
+	var media loaded
+	if len(in.Attachments) > 0 {
+		if ch := e.channels[in.Channel]; ch != nil {
+			ch.Typing(ctx, in.ChatID)
+		}
+		media = e.loadAttachments(ctx, in.Attachments)
+		typed += attachmentNotes(in.Attachments) + media.text
+	}
+	in.Text = strings.TrimSpace(typed)
 
 	char := host
 	if addressed != nil {
 		char = addressed
-		if rest != "" {
-			in.Text = rest
-		}
 	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" {
-		char = c
+		char = c // a per-sprig web thread
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
 		if c, ok := e.Chars.Get(id.(string)); ok {
 			char = c
@@ -152,13 +259,14 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err != nil {
 		return err
 	}
-	if err := e.DB.AddMessage(ctx, conv.ID, "user", "", in.Text); err != nil {
+	msgID, err := e.DB.AddMessageID(ctx, conv.ID, "user", "", in.Text)
+	if err != nil {
 		return err
 	}
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: in.Text}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, userMsgID: msgID}
 	return e.respond(ctx, t, "")
 }
 
@@ -166,6 +274,11 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
 	reply, err := e.runTurn(ctx, t, event)
+	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
+		// Stopped: no reply, no approval prompts, no handoff.
+		e.stopAck(ctx, t, f)
+		return nil
+	}
 	if err != nil {
 		reply = e.failureReply(ctx, t, err)
 	}
@@ -188,8 +301,22 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 			e.Log.Error("post after reply", "err", err)
 		}
 	}
+	// Keep the text of PDFs sent this turn for follow-up questions (and
+	// for a sprig this is handed to). Even if the reply failed: "try
+	// again" should still know the document.
+	if len(t.pdfs) > 0 && t.conv != nil {
+		e.keepDocuments(ctx, t)
+	}
+	// The user has their reply: now's the time to compact a long
+	// conversation, before the next message (or a handoff) needs it.
+	if t.conv != nil {
+		e.maybeCompact(ctx, t)
+	}
 	if sendErr != nil {
 		return sendErr
+	}
+	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
+		return nil // stopped after the reply went out: no handoff
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
@@ -261,18 +388,24 @@ func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.U
 		return nil, err
 	}
 	role := ""
+	ownerID := e.Cfg.OwnerID(in.Channel)
+	noOwnerConfigured := e.Cfg.DiscordOwnerID == "" && e.Cfg.TelegramOwnerID == ""
 	switch {
-	case in.Channel == "discord" && e.Cfg.DiscordOwnerID != "" && in.UserID == e.Cfg.DiscordOwnerID:
+	// A configured owner id makes that account the owner, unless an owner
+	// already exists (from another app): then it links like anyone else,
+	// so one person never ends up as two owners with split memories.
+	case ownerID != "" && in.UserID == ownerID && !hasOwner:
 		role = "owner"
-	case !hasOwner && e.Cfg.DiscordOwnerID == "" && in.IsDM:
+	case !hasOwner && noOwnerConfigured && in.IsDM:
 		role = "owner"
-	case contains(e.Cfg.AllowedUsers, in.UserID):
+	case contains(e.Cfg.AllowedUsers, in.UserID) || contains(e.Cfg.AllowedUsers, in.Channel+":"+in.UserID):
 		role = "member"
 	}
 	if role == "" {
 		if ok, _ := e.DB.ClaimNotice(ctx, "stranger:"+in.Channel+":"+in.UserID, 24*time.Hour); ok {
 			if host, ok := e.Chars.Host(); ok {
-				_ = e.send(ctx, in.ChatRef(), host, "Hi! I don't think we've met. This Thicket is private, so ask its owner to invite you and I'll happily say hello properly.")
+				_ = e.send(ctx, in.ChatRef(), host, "Hi! I don't think we've met. This Thicket is private, so ask its owner to invite you and I'll happily say hello properly. "+
+					"Already using it on another app? Ask me there for a link code and send it here.")
 			}
 		}
 		return nil, nil
@@ -364,6 +497,16 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 // sendToUser posts proactively in the user's DMs and records it in that
 // conversation, so the user can reply with context.
 func (e *Engine) sendToUser(ctx context.Context, u *store.User, c *character.Character, text string) error {
+	return e.deliverToUser(ctx, u, c, text, true)
+}
+
+// sendNotice is sendToUser for operational notices: the user's current
+// sprig stays the one they were talking to.
+func (e *Engine) sendNotice(ctx context.Context, u *store.User, c *character.Character, text string) error {
+	return e.deliverToUser(ctx, u, c, text, false)
+}
+
+func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.Character, text string, takeOver bool) error {
 	ch := e.channels[u.Channel]
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
@@ -373,7 +516,9 @@ func (e *Engine) sendToUser(ctx context.Context, u *store.User, c *character.Cha
 		return err
 	}
 	ref := u.Channel + ":" + chatID
-	e.active.Store(ref, c.ID)
+	if takeOver {
+		e.active.Store(ref, c.ID)
+	}
 	conv, err := e.DB.OpenConversation(ctx, u.ID, ref, e.Cfg.IdleAfter)
 	if err != nil {
 		return err
@@ -406,8 +551,16 @@ func (e *Engine) Notify(ctx context.Context, key string, window time.Duration, l
 	}
 	for _, a := range admins {
 		a := a
-		if err := e.sendToUser(ctx, &a, host, text); err != nil {
+		if err := e.sendNotice(ctx, &a, host, text); err != nil {
 			e.Log.Error("notify admin", "user", a.ID, "err", err)
 		}
 	}
+}
+
+func quoteJoin(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = "“" + n + "”"
+	}
+	return strings.Join(q, ", ")
 }

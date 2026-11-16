@@ -27,6 +27,7 @@ type sent struct {
 }
 
 type fakeChannel struct {
+	name    string // "" means discord
 	mu      sync.Mutex
 	sent    []sent
 	deleted []string
@@ -34,7 +35,12 @@ type fakeChannel struct {
 	failIf func(text string) bool
 }
 
-func (f *fakeChannel) Name() string { return "discord" }
+func (f *fakeChannel) Name() string {
+	if f.name == "" {
+		return "discord"
+	}
+	return f.name
+}
 func (f *fakeChannel) Run(ctx context.Context, h channel.Handler) error {
 	<-ctx.Done()
 	return nil
@@ -73,6 +79,62 @@ type fakeModel struct {
 	mu     sync.Mutex
 	calls  int
 	onChat func() // runs on every call (e.g. to move the clock)
+	reqs   []llm.Request
+	// rejectImages answers requests with images the way OpenRouter does
+	// for a model without vision.
+	rejectImages bool
+	// pdfText is what the fake PDF parser "finds"; parseFail makes the
+	// parse-only call fail; annotateTurn returns annotations on chat
+	// replies, as non-native PDF engines do.
+	pdfText      string
+	parseFail    bool
+	annotateTurn bool
+	parseCalls   int
+	// rejectTools answers requests with tools the way Ollama does for a
+	// model without tool support.
+	rejectTools bool
+	// compactFail makes summarising fail; contextLimit makes requests
+	// whose messages exceed it fail like a full context window.
+	compactFail  bool
+	contextLimit int
+	compactions  int
+	// "slow task" in a request makes it hang until the context ends (a
+	// stop) or release closes; entered is signalled as it starts waiting.
+	// "slow tool task" first calls a tool, then hangs.
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
+	m.mu.Lock()
+	entered, release := m.entered, m.release
+	m.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-release:
+		return text("Finished the slow task."), nil
+	}
+}
+
+// annotations builds OpenRouter-style parse annotations for the files in
+// the newest user message.
+func annotations(msgs []llm.Message, text string) json.RawMessage {
+	var anns []any
+	for _, m := range msgs {
+		for _, f := range m.Files {
+			anns = append(anns, map[string]any{"type": "file", "file": map[string]any{"hash": "h-" + f.Name, "name": f.Name,
+				"content": []any{map[string]any{"type": "text", "text": text}}}})
+		}
+	}
+	if anns == nil {
+		return nil
+	}
+	b, _ := json.Marshal(anns)
+	return b
 }
 
 func toolCall(name string, args any) *llm.Response {
@@ -89,17 +151,93 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	m.mu.Lock()
 	m.calls++
 	hook := m.onChat
+	m.reqs = append(m.reqs, req)
+	reject := m.rejectImages
+	pdfText, parseFail, annotate := m.pdfText, m.parseFail, m.annotateTurn
+	if req.Messages[0].Content == "Reply with OK." {
+		m.parseCalls++
+	}
 	m.mu.Unlock()
+	if pdfText == "" {
+		pdfText = "Quarterly revenue rose 12%."
+	}
+	if req.Messages[0].Content == "Reply with OK." {
+		if parseFail {
+			return nil, &llm.APIError{Status: 502, Message: "parser down"}
+		}
+		r := text("O")
+		r.Message.Annotations = annotations(req.Messages, pdfText)
+		return r, nil
+	}
+	if annotate && llm.HasFiles(req.Messages) {
+		r := text("Read it.")
+		r.Message.Annotations = annotations(req.Messages, pdfText+" (from the turn)")
+		return r, nil
+	}
+	m.mu.Lock()
+	noTools := m.rejectTools
+	compactFail, limit := m.compactFail, m.contextLimit
+	if strings.HasPrefix(req.Messages[0].Content, "You keep the running summary") {
+		m.compactions++
+	}
+	m.mu.Unlock()
+	if strings.HasPrefix(req.Messages[0].Content, "You keep the running summary") {
+		if compactFail {
+			return nil, &llm.APIError{Status: 502, Message: "upstream down"}
+		}
+		return text("SUMMARY-NOTES: the user listed topics, starting with topic-01."), nil
+	}
+	if limit > 0 {
+		n := 0
+		for _, msg := range req.Messages[1:] { // the system prompt is fixed
+			n += len(msg.Content)
+		}
+		if n > limit {
+			return nil, &llm.APIError{Status: 400, Message: "This model's maximum context length is 8192 tokens"}
+		}
+	}
+	if noTools && req.Tools != nil {
+		return nil, &llm.APIError{Status: 400, Message: "registry.ollama.ai/library/tiny:1b does not support tools"}
+	}
+	if reject && llm.HasMedia(req.Messages) {
+		return nil, &llm.APIError{Status: 404, Message: "No endpoints found that support image input"}
+	}
 	if hook != nil {
 		hook()
 	}
 	sys := req.Messages[0].Content
 	last := req.Messages[len(req.Messages)-1]
+	if !strings.HasPrefix(sys, "You check whether") {
+		all := ""
+		for _, msg := range req.Messages[1:] {
+			all += msg.Content + "\n"
+		}
+		switch {
+		case strings.Contains(all, "slow tool task") && last.Role != "tool":
+			return toolCall("remember", map[string]any{"content": "Likes slow tasks.", "scope": "shared", "kind": "fact"}), nil
+		case strings.Contains(all, "slow tool task"),
+			// "have pip look into the slow task" delegates it: Juni herself
+			// answers at once, and Pip's background task hangs.
+			strings.Contains(lastUserText(req.Messages)+last.Content, "slow task") && !strings.HasPrefix(lastUserText(req.Messages), "have pip"):
+			return m.hang(ctx)
+		}
+	}
 	switch {
 	case strings.Contains(sys, "You check whether a chat reply"):
 		return text(`{"in_character": true}`), nil
 	case strings.Contains(sys, "You maintain long-term memory"):
 		return text(`{"ops":[{"op":"add","scope":"shared","kind":"person","content":"Has a sister called Maya."}]}`), nil
+	case strings.HasPrefix(sys, "You search the web for an AI companion"):
+		r := text("Tomatoes need 6 hours of sun [1].")
+		r.Message.Annotations = json.RawMessage(`[{"type":"url_citation","url_citation":{"url":"https://garden.example/tomatoes","title":"Tomato care"}},{"type":"url_citation","url_citation":{"url":"https://garden.example/tomatoes","title":"Tomato care"}}]`)
+		return r, nil
+	case strings.HasPrefix(sys, "You are Pip") && strings.Contains(last.Content, "is asking you this"):
+		if strings.Contains(last.Content, "chain") {
+			return toolCall("ask_sprig", map[string]any{"to": "juniper", "question": "and you?"}), nil
+		}
+		return text("Tomorrow: dentist at 10, standup at 2."), nil
+	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
+		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
 		return text("Pip here! I'll sort your calendar."), nil
 	}
@@ -124,6 +262,58 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	switch {
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
+	case strings.HasPrefix(u, "save skill "):
+		steps := "1. Weather\n2. Calendar"
+		base := 0
+		switch strings.TrimPrefix(u, "save skill ") {
+		case "with key":
+			steps = "1. Log in with ghp_" + strings.Repeat("k", 36)
+		case "v2":
+			steps, base = "1. Weather\n2. Calendar\n3. One nice thing", 1
+		case "stale":
+			steps, base = "1. Something else", 1
+		}
+		return toolCall("save_skill", map[string]any{"id": "briefing", "name": "Morning briefing",
+			"description": "When putting together the morning summary", "steps": steps, "base_version": base}), nil
+	case strings.Contains(u, "use the briefing skill"):
+		return toolCall("read_skill", map[string]any{"id": "briefing"}), nil
+	case strings.HasPrefix(u, "restore briefing to "):
+		var v int
+		fmt.Sscanf(u, "restore briefing to %d", &v)
+		return toolCall("manage_skill", map[string]any{"id": "briefing", "action": "restore", "version": v}), nil
+	case strings.HasPrefix(u, "search the web for "):
+		return toolCall("web_search", map[string]any{"query": strings.TrimPrefix(u, "search the web for ")}), nil
+	case strings.HasPrefix(u, "read the page "):
+		return toolCall("fetch_page", map[string]any{"url": strings.TrimPrefix(lastUserText(req.Messages), "read the page ")}), nil
+	case strings.Contains(u, "ask pip"):
+		q := "What's on the calendar tomorrow?"
+		if strings.Contains(u, "chain") {
+			q = "chain: ask someone else"
+		}
+		return toolCall("ask_sprig", map[string]any{"to": "pip", "question": q}), nil
+	case strings.Contains(u, "have pip look into"):
+		return toolCall("delegate_task", map[string]any{"to": "pip", "task": strings.TrimPrefix(u, "have pip look into ")}), nil
+	case strings.Contains(u, "link my other app"):
+		return toolCall("link_account", map[string]any{}), nil
+	case strings.HasPrefix(u, "sign job ") && strings.TrimSpace(strings.TrimPrefix(u, "sign job 1 with")) == "":
+		return toolCall("update_job", map[string]any{"job_id": 1, "action": "set_signature"}), nil
+	case strings.Contains(u, "signed webhook for ci"):
+		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke.", "signature": "github"}), nil
+	case strings.HasPrefix(u, "sign job "):
+		var id int
+		var style string
+		fmt.Sscanf(u, "sign job %d with %s", &id, &style)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "set_signature", "signature": style}), nil
+	case strings.Contains(u, "webhook for ci"):
+		return toolCall("create_webhook", map[string]any{"name": "CI watch", "task": "Tell me what broke."}), nil
+	case strings.HasPrefix(u, "new url for job "):
+		var id int
+		fmt.Sscanf(u, "new url for job %d", &id)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "new_url"}), nil
+	case strings.HasPrefix(u, "pause job "):
+		var id int
+		fmt.Sscanf(u, "pause job %d", &id)
+		return toolCall("update_job", map[string]any{"job_id": id, "action": "pause"}), nil
 	case strings.Contains(u, "calendar"):
 		return toolCall("handoff", map[string]any{"to": "pip", "message": "help with the calendar"}), nil
 	}
@@ -155,6 +345,13 @@ Pip is small and tidy.
 
 func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 	t.Helper()
+	fc := &fakeChannel{}
+	a, fm, ctx := setupWith(t, fc)
+	return a, fc, fm, ctx
+}
+
+func setupWith(t *testing.T, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
+	t.Helper()
 	dir := t.TempDir()
 	os.Setenv("THICKET_DATA_DIR", dir)
 	t.Cleanup(func() { os.Unsetenv("THICKET_DATA_DIR") })
@@ -164,22 +361,27 @@ func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 	}
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.CharactersDir = filepath.Join(dir, "characters") // never touch a developer's real files
-	fc := &fakeChannel{}
 	fm := &fakeModel{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	a, err := New(ctx, cfg, "test", Options{
 		Model:    fm,
 		KeyCheck: func(context.Context, string) error { return nil },
-		Channels: func(*slog.Logger) []channel.Channel { return []channel.Channel{fc} },
-		LogOut:   io.Discard,
-		NoHTTP:   true,
+		Channels: func(*slog.Logger) []channel.Channel {
+			var out []channel.Channel
+			for _, c := range chans {
+				out = append(out, c)
+			}
+			return out
+		},
+		LogOut: io.Discard,
+		NoHTTP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
-	return a, fc, fm, ctx
+	return a, fm, ctx
 }
 
 func dm(text string) channel.Incoming {

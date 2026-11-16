@@ -18,6 +18,7 @@ const (
 	DefaultModel         = "anthropic/claude-sonnet-5.5"
 	DefaultFallbackModel = "google/gemini-3.8-flash"
 	DefaultCheapModel    = "anthropic/claude-haiku-5.5"
+	DefaultModelURL      = "https://openrouter.ai/api/v1"
 )
 
 type Config struct {
@@ -31,8 +32,16 @@ type Config struct {
 	DiscordOwnerID        string
 	DiscordListenChannels []string
 
+	TelegramToken       string
+	TelegramOwnerID     string
+	TelegramListenChats []string
+
 	OpenRouterKey string
-	OpenRouterURL string
+	// ModelURL is the OpenAI-compatible API models are called through:
+	// OpenRouter by default, or a local server such as Ollama.
+	ModelURL    string
+	ModelAPIKey string // optional key for a self-hosted server
+	SearchURL   string // a SearXNG instance for web search (optional)
 
 	Model         string
 	FallbackModel string
@@ -57,13 +66,18 @@ func Load() (*Config, error) {
 		DiscordToken:          env("DISCORD_TOKEN", ""),
 		DiscordOwnerID:        env("THICKET_OWNER_DISCORD_ID", ""),
 		OpenRouterKey:         env("OPENROUTER_API_KEY", ""),
-		OpenRouterURL:         env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
+		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
+		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),
 		SecretKey:             env("THICKET_SECRET_KEY", ""),
 		DiscordListenChannels: list(env("THICKET_DISCORD_CHANNELS", "")),
 		AllowedUsers:          list(env("THICKET_ALLOWED_USERS", "")),
+		TelegramToken:         env("TELEGRAM_TOKEN", ""),
+		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
+		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
 	}
 	c.CharactersDir = env("THICKET_CHARACTERS_DIR", filepath.Join(c.DataDir, "characters"))
 
@@ -105,9 +119,14 @@ type Problem struct {
 // Check reports exactly what is missing. Fatal problems stop `serve`.
 func (c *Config) Check() []Problem {
 	var out []Problem
+	// The web app always runs; Discord and Telegram are optional.
 	if c.DiscordToken == "" {
 		out = append(out, Problem{false, "DISCORD_TOKEN is not set, so Discord is off",
-			"That's fine if you only want the web app (run `thicket web link` for a sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN."})
+			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and set DISCORD_TOKEN."})
+	}
+	if c.TelegramToken == "" {
+		out = append(out, Problem{false, "TELEGRAM_TOKEN is not set, so Telegram is off",
+			"For Telegram, message @BotFather, send /newbot, and set TELEGRAM_TOKEN (see docs/telegram.md)."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -119,19 +138,34 @@ func (c *Config) Check() []Problem {
 		f.Close()
 		os.Remove(f.Name())
 	}
-	if c.OpenRouterKey == "" {
+	switch {
+	case c.ModelURL != DefaultModelURL:
+		out = append(out, Problem{false, "models run on " + c.ModelURL,
+			"Juni checks the server and picks a model on the first DM (set THICKET_MODEL to choose one yourself)."})
+	case c.OpenRouterKey == "":
 		out = append(out, Problem{false, "OPENROUTER_API_KEY is not set",
-			"That's fine: Juni will ask for it in a Discord DM and store it encrypted."})
+			"That's fine: Juni will ask for it in a DM and store it encrypted, or for the address of a local model server (Ollama, LM Studio) instead."})
 	}
 	if c.SecretKey == "" {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
 			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or set THICKET_SECRET_KEY to keep it outside the volume."})
 	}
-	if c.DiscordToken != "" && c.DiscordOwnerID == "" {
-		out = append(out, Problem{false, "THICKET_OWNER_DISCORD_ID is not set",
+	if (c.DiscordToken != "" || c.TelegramToken != "") && c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
+		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID)",
 			"The first person to DM the bot becomes the owner."})
 	}
 	return out
+}
+
+// OwnerID is the configured owner's account id on a chat app, if any.
+func (c *Config) OwnerID(channel string) string {
+	switch channel {
+	case "discord":
+		return c.DiscordOwnerID
+	case "telegram":
+		return c.TelegramOwnerID
+	}
+	return ""
 }
 
 func env(k, def string) string {

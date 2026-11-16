@@ -40,6 +40,7 @@ relationships:
   characters: {}
 tools:
   - schedule
+  - web
   - characters
   - admin
 initiative:

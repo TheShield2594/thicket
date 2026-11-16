@@ -9,31 +9,58 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
 
-// OpenRouter is a Client for https://openrouter.ai (or any OpenAI-compatible
-// endpoint). The key is looked up on every call so a key added in chat
-// takes effect immediately.
+// OpenRouter is a Client for https://openrouter.ai or any OpenAI-compatible
+// server (Ollama, LM Studio, llama.cpp, vLLM). The address and key are
+// looked up on every call, so changes made in chat take effect at once.
 type OpenRouter struct {
 	BaseURL string
-	Key     func(ctx context.Context) (string, error)
-	HTTP    *http.Client
+	// URL, if set, returns the base URL for each call (overrides BaseURL).
+	URL func(ctx context.Context) string
+	// Key returns the credential for base, the server this call goes to,
+	// so a concurrent change of server can't pair one server's address
+	// with another's key.
+	Key  func(ctx context.Context, base string) (string, error)
+	HTTP *http.Client
 }
 
-func NewOpenRouter(baseURL string, key func(ctx context.Context) (string, error)) *OpenRouter {
-	return &OpenRouter{BaseURL: strings.TrimRight(baseURL, "/"), Key: key, HTTP: &http.Client{Timeout: 120 * time.Second}}
+func NewOpenRouter(baseURL string, key func(ctx context.Context, base string) (string, error)) *OpenRouter {
+	return &OpenRouter{BaseURL: strings.TrimRight(baseURL, "/"), Key: key, HTTP: &http.Client{}}
+}
+
+// DefaultURL is OpenRouter's API.
+const DefaultURL = "https://openrouter.ai/api/v1"
+
+// IsOpenRouter reports whether a base URL is OpenRouter's (as opposed to a
+// local or self-hosted OpenAI-compatible server).
+func IsOpenRouter(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	return err == nil && (u.Hostname() == "openrouter.ai" || strings.HasSuffix(u.Hostname(), ".openrouter.ai"))
+}
+
+func (o *OpenRouter) base(ctx context.Context) string {
+	if o.URL != nil {
+		if u := o.URL(ctx); u != "" {
+			return strings.TrimRight(u, "/")
+		}
+	}
+	return o.BaseURL
 }
 
 type orRequest struct {
-	Model          string         `json:"model"`
-	Messages       []Message      `json:"messages"`
-	Tools          []ToolDef      `json:"tools,omitempty"`
-	Temperature    *float64       `json:"temperature,omitempty"`
-	MaxTokens      int            `json:"max_tokens,omitempty"`
-	ResponseFormat map[string]any `json:"response_format,omitempty"`
-	Usage          map[string]any `json:"usage"`
+	Model          string           `json:"model"`
+	Messages       []Message        `json:"messages"`
+	Tools          []ToolDef        `json:"tools,omitempty"`
+	Temperature    *float64         `json:"temperature,omitempty"`
+	MaxTokens      int              `json:"max_tokens,omitempty"`
+	ResponseFormat map[string]any   `json:"response_format,omitempty"`
+	Usage          map[string]any   `json:"usage,omitempty"`
+	Plugins        []map[string]any `json:"plugins,omitempty"`
 }
 
 type orResponse struct {
@@ -50,27 +77,47 @@ type orResponse struct {
 }
 
 func (o *OpenRouter) Chat(ctx context.Context, req Request) (*Response, error) {
-	key, err := o.Key(ctx)
-	if err != nil || key == "" {
-		return nil, ErrNoKey
+	base := o.base(ctx)
+	hosted := IsOpenRouter(base)
+	key, err := o.Key(ctx, base)
+	if hosted && (err != nil || key == "") {
+		return nil, ErrNoKey // local servers usually need no key
 	}
 	body := orRequest{
 		Model: req.Model, Messages: req.Messages, Tools: req.Tools,
 		Temperature: req.Temperature, MaxTokens: req.MaxTokens,
-		Usage: map[string]any{"include": true},
 	}
 	if req.JSON {
 		body.ResponseFormat = map[string]any{"type": "json_object"}
 	}
+	// OpenRouter-only extensions; other servers may reject unknown fields.
+	if hosted {
+		body.Usage = map[string]any{"include": true}
+		if req.PDFEngine != "" && HasFiles(req.Messages) {
+			body.Plugins = append(body.Plugins, map[string]any{"id": "file-parser", "pdf": map[string]any{"engine": req.PDFEngine}})
+		}
+		if req.WebResults > 0 {
+			body.Plugins = append(body.Plugins, map[string]any{"id": "web", "max_results": req.WebResults})
+		}
+	}
+	// Local models can be slow, especially on a CPU.
+	timeout := 2 * time.Minute
+	if !hosted {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, o.BaseURL+"/chat/completions", bytes.NewReader(b))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
-	hreq.Header.Set("Authorization", "Bearer "+key)
+	if key != "" {
+		hreq.Header.Set("Authorization", "Bearer "+key)
+	}
 	hreq.Header.Set("Content-Type", "application/json")
 	hreq.Header.Set("X-Title", "Thicket")
 	resp, err := o.HTTP.Do(hreq)
@@ -118,7 +165,7 @@ func errorMessage(raw []byte) string {
 // CheckKey validates an OpenRouter key against the API. Success is checked
 // in code, not assumed.
 func (o *OpenRouter) CheckKey(ctx context.Context, key string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.BaseURL+"/key", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DefaultURL+"/key", nil)
 	if err != nil {
 		return err
 	}
@@ -215,3 +262,62 @@ func IsBudget(err error) bool {
 type BudgetError struct{ Reason string }
 
 func (e *BudgetError) Error() string { return "spend cap reached: " + e.Reason }
+
+// ListModels asks an OpenAI-compatible server which models it serves
+// (GET {base}/models). key may be empty.
+func ListModels(ctx context.Context, base, key string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode/100 != 2 {
+		return nil, &APIError{Status: resp.StatusCode, Message: errorMessage(raw)}
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("that doesn't look like an OpenAI-compatible server (unreadable model list)")
+	}
+	var ids []string
+	for _, m := range out.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
+}
+
+// ChatModels drops models that can't chat (embeddings, speech,
+// rerankers), keeping the server's order.
+func ChatModels(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		l := strings.ToLower(id)
+		if strings.Contains(l, "embed") || strings.Contains(l, "whisper") || strings.Contains(l, "tts") || strings.Contains(l, "rerank") {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+// SortedCopy is a sorted copy, for stable listings.
+func SortedCopy(ss []string) []string {
+	out := append([]string{}, ss...)
+	sort.Strings(out)
+	return out
+}

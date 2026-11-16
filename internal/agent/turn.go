@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
@@ -27,11 +29,26 @@ type turn struct {
 	job     *store.Job
 	depth   int
 	query   string // text used to pick relevant memories
+	// images and pdfs arrived with the user's newest message; they go to
+	// the model with it, this turn only.
+	images []llm.Image
+	pdfs   []llm.File
+	// annotations are OpenRouter's parsed copies of pdfs from this turn.
+	annotations []json.RawMessage
+	// budgetChars overrides the history budget (after the model said its
+	// context was full).
+	budgetChars int
+	// userMsgID is the stored message this turn answers (0 if none).
+	userMsgID int64
 
 	toolCalls       int
 	handoff         *handoffReq
 	nothingToReport bool
-	afterReply      []post // canned posts after the reply (approval prompts)
+	done            []string             // tools that ran, for a stop acknowledgement
+	consult         *consult             // answering another sprig (ask_sprig)
+	consults        int                  // ask_sprig calls this turn
+	taskFrom        *character.Character // background task given by this sprig
+	afterReply      []post               // canned posts after the reply (approval prompts)
 	noTools         bool
 }
 
@@ -55,25 +72,72 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 		defs = nil
 	}
 	model := t.char.Model
+	pdfEngine := e.Settings.String(ctx, "pdf_engine")
+	if pdfEngine == "auto" {
+		pdfEngine = ""
+	}
 
 	var reply string
 	for i := 0; ; i++ {
-		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200}
+		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine}
 		if i >= maxModelCallsPerTurn-1 || t.toolCalls >= maxToolCallsPerTurn {
 			// Out of budget for tools: force a final answer.
 			req.Tools = nil
 			req.Messages = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] Tool limit for this turn reached. Wrap up now: tell the user where things stand."})
 		}
 		resp, err := e.LLM.Chat(ctx, req)
+		if err != nil && i == 0 && llm.ContextExceeded(err) && ctx.Err() == nil {
+			// The model's context is smaller than the budget assumed:
+			// retry with half the history that was sent (compaction then
+			// catches up).
+			budget := e.historyBudget(ctx, t)
+			sent := 0
+			for _, m := range msgs[1:] {
+				sent += len(m.Content)
+			}
+			t.budgetChars = max(min(sent, budget)/2, minHistoryChars)
+			e.Notify(ctx, "context:"+req.Model, 24*time.Hour, "warn", fmt.Sprintf("The model ran out of context, so I'm sending it less of the conversation (about %d tokens instead of %d). "+
+				"If this keeps happening, ask me to set history_tokens lower.", t.budgetChars/4, budget/4))
+			if msgs, err = e.buildMessages(ctx, t, event); err != nil {
+				return "", err
+			}
+			req.Messages = msgs
+			resp, err = e.LLM.Chat(ctx, req)
+		}
+		if err != nil && llm.HasMedia(req.Messages) && llm.MediaRejected(err) && ctx.Err() == nil {
+			// The model (and its fallback) won't take the images or PDFs:
+			// carry on without them rather than fail the whole reply.
+			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "model refused the attached images or PDFs; replying without them", shortErr(err))
+			msgs = withoutMedia(msgs)
+			req.Messages = withoutMedia(req.Messages)
+			resp, err = e.LLM.Chat(ctx, req)
+		}
+		if err != nil && req.Tools != nil && llm.ToolsRejected(err) && ctx.Err() == nil {
+			// Small local models often can't take tool definitions: answer
+			// without tools rather than not at all, and say what's lost.
+			model := req.Model
+			if model == "" {
+				model = e.Settings.String(ctx, "model")
+			}
+			e.Notify(ctx, "notools:"+model, 24*time.Hour, "warn", fmt.Sprintf("The model %s can't use tools, so sprigs answer without them: they can't remember things, schedule jobs or use integrations. "+
+				"A model that supports tools (like qwen2.5 or llama3.1 on Ollama) fixes that: ask me to switch.", model))
+			defs = nil
+			req.Tools = nil
+			resp, err = e.LLM.Chat(ctx, req)
+		}
 		if err != nil {
 			return "", err
 		}
 		m := resp.Message
+		if len(m.Annotations) > 0 {
+			t.annotations = append(t.annotations, m.Annotations)
+		}
 		if len(m.ToolCalls) == 0 || req.Tools == nil {
 			reply = m.Content
 			break
 		}
-		msgs = append(msgs, llm.Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls})
+		// Annotations carry parsed PDFs, so later calls skip re-parsing.
+		msgs = append(msgs, llm.Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls, Annotations: m.Annotations})
 		for _, call := range m.ToolCalls {
 			result := e.executeTool(ctx, t, tools, call)
 			msgs = append(msgs, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
@@ -95,10 +159,13 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		return nil, err
 	}
 	var history []store.Message
+	summary := ""
 	if t.conv != nil {
-		if history, err = e.DB.RecentMessages(ctx, t.conv.ID, historyMessages); err != nil {
+		if history, err = e.DB.MessagesAfter(ctx, t.conv.ID, t.conv.SummaryUpto, historyLoadLimit); err != nil {
 			return nil, err
 		}
+		history, _ = fitHistory(history, e.historyBudget(ctx, t), t.userMsgID)
+		summary = t.conv.Summary
 	}
 	query := t.query + " " + event
 	for i := len(history) - 1; i >= 0 && i >= len(history)-4; i-- {
@@ -111,30 +178,72 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	_ = e.DB.MarkMemoriesUsed(ctx, ids)
 
+	skills, err := e.DB.Skills(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sys := buildSystemPrompt(promptInput{
-		char: t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
+		skills: skills,
+		char:   t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
-	for _, h := range history {
+	if summary != "" {
+		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
+	}
+	for i, h := range history {
+		// The message this turn answers, tracked by id: a notice added to
+		// the conversation mid-turn mustn't take its media or its room.
+		origin := h.Role == "user" && (h.ID == t.userMsgID || (t.userMsgID == 0 && i == len(history)-1))
 		content := h.Content
-		if len(content) > 4000 {
-			content = content[:4000] + " […]"
+		// It may carry text files the user just sent: let the model read
+		// them all this once (each file is capped, plus its wrapper).
+		limit := 4000
+		if origin {
+			limit = maxFilesPerMessage*(maxTextFileChars+200) + 4000
+			if t.budgetChars > 0 {
+				// The model said its context was full: this message must
+				// shrink too, not just the history before it.
+				limit = min(limit, max(t.budgetChars, minHistoryChars))
+			}
+		}
+		if len(content) > limit && h.Role != "document" { // documents are capped when stored
+			cut := limit
+			for cut > 0 && !utf8.RuneStart(content[cut]) {
+				cut--
+			}
+			content = content[:cut] + " […cut to fit]"
 		}
 		switch {
 		case h.Role == "user":
-			msgs = append(msgs, llm.Message{Role: "user", Content: content})
+			m := llm.Message{Role: "user", Content: content}
+			if origin {
+				m.Images, m.Files = t.images, t.pdfs
+			}
+			msgs = append(msgs, m)
 		case h.Role == "assistant" && h.Character == t.char.ID:
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: content})
 		case h.Role == "assistant":
 			msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("[%s said to the user]: %s", e.charName(h.Character), content)})
+		case h.Role == "document":
+			msgs = append(msgs, llm.Message{Role: "user", Content: documentMessage(h.Content)})
 		case h.Role == "event":
 			msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + content})
 		}
 	}
 	if t.jobMode() {
-		msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("[Scheduled job %q]\nTask: %s", t.job.Name, t.job.Prompt)})
+		task := fmt.Sprintf("[Scheduled job %q]\nTask: %s", t.job.Name, t.job.Prompt)
+		switch {
+		case t.taskFrom != nil:
+			task = fmt.Sprintf("[Background task from %s]\nDo this, then write the message the user should get with the result:\n%s", t.taskFrom.DisplayName(), t.job.Prompt)
+		case t.job.Kind == store.JobWebhook || t.job.Payload != "":
+			task = e.webhookTask(t.job)
+		}
+		msgs = append(msgs, llm.Message{Role: "user", Content: task})
+	}
+	if t.consult != nil {
+		msgs = append(msgs, llm.Message{Role: "user", Content: consultMessage(t.consult)})
 	}
 	if event != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + event})
@@ -198,6 +307,8 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if err != nil {
 		level, summary = "warn", "tool "+name+" failed"
 		out = "Error: " + err.Error()
+	} else {
+		t.done = append(t.done, tool.Label())
 	}
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, e.Secrets.Redact(truncate(string(args), 500)+" → "+truncate(out, 500)))
 	if tool.Untrusted {

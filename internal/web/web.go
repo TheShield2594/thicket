@@ -37,7 +37,7 @@ var staticFS embed.FS
 const (
 	ChannelName   = "web"
 	sessionCookie = "thicket_session"
-	sessionTTL    = 30 * 24 * time.Hour
+	SessionTTL    = 30 * 24 * time.Hour
 	maxTextLen    = 8000
 	roomID        = "all"
 )
@@ -300,7 +300,7 @@ func (a *Adapter) auth(next authed) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "not signed in")
 			return
 		}
-		u, err := a.DB.WebSessionUser(r.Context(), c.Value, sessionTTL)
+		u, err := a.DB.WebSessionUser(r.Context(), c.Value, SessionTTL)
 		if errors.Is(err, store.ErrNotFound) {
 			a.clearCookie(w, r)
 			writeErr(w, http.StatusUnauthorized, "session expired")
@@ -369,12 +369,12 @@ func (a *Adapter) login(w http.ResponseWriter, r *http.Request) {
 		}
 		uid = u.ID
 	}
-	token, err := a.DB.CreateWebSession(ctx, uid, r.UserAgent(), sessionTTL)
+	token, err := a.DB.CreateWebSession(ctx, uid, r.UserAgent(), SessionTTL)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", MaxAge: int(sessionTTL.Seconds()),
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", MaxAge: int(SessionTTL.Seconds()),
 		HttpOnly: true, Secure: a.secure(r), SameSite: http.SameSiteLaxMode})
 	a.Log.Info("web sign-in", "user", uid)
 	_ = a.DB.LogActivity(ctx, store.Activity{Level: "info", Kind: "system", UserID: uid, Summary: "signed in to the web app"})
@@ -639,7 +639,7 @@ func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) 
 		case <-ping.C:
 			// A session signed out elsewhere, expired or revoked stops
 			// receiving; a live one has its expiry slid forward.
-			if _, err := a.DB.WebSessionUser(r.Context(), session.Value, sessionTTL); errors.Is(err, store.ErrNotFound) {
+			if _, err := a.DB.WebSessionUser(r.Context(), session.Value, SessionTTL); errors.Is(err, store.ErrNotFound) {
 				return
 			}
 			fmt.Fprint(w, ": ping\n\n")

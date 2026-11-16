@@ -25,6 +25,7 @@ type promptInput struct {
 	onboarded bool
 	hostTools bool // character has the characters scope
 	isDM      bool
+	skills    []store.Skill
 }
 
 func buildSystemPrompt(in promptInput) string {
@@ -85,7 +86,9 @@ func buildSystemPrompt(in promptInput) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("If a request is clearly another sprig's job, use the handoff tool rather than doing it badly yourself.\n")
+		b.WriteString("Working together: if you need something another sprig knows or can do, ask_sprig them and carry on with their answer. ")
+		b.WriteString("If the request is really another sprig's job and the user should talk to them, use handoff. ")
+		b.WriteString("For longer work that can happen while the user does other things, delegate_task.\n")
 	}
 
 	b.WriteString("\n## What you remember\n")
@@ -107,6 +110,14 @@ func buildSystemPrompt(in promptInput) string {
 	}
 	b.WriteString("Use memories naturally; don't recite them. When the user tells you something worth keeping, or asks you to remember something, call remember. ")
 	b.WriteString("When they ask what you remember, call list_memories and answer honestly. When they say \"forget that\", find it and call forget.\n")
+
+	b.WriteString(skillIndex(in.skills))
+	if in.user.IsAdmin() && !in.jobMode {
+		if len(in.skills) == 0 {
+			b.WriteString("\n## Skills\n")
+		}
+		b.WriteString(skillOfferGuide)
+	}
 
 	if c.Host && !in.onboarded && !in.jobMode {
 		b.WriteString(onboardingGuide)

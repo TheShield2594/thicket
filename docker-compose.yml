@@ -1,7 +1,7 @@
 # Thicket: one service, one volume. Paste this into Portainer as a stack,
-# or run `docker compose up -d`. Nothing is required: without DISCORD_TOKEN
-# Thicket runs as a web app only (the sign-in link is in the logs). Juni
-# asks for everything else in chat.
+# or run `docker compose up -d`. Nothing is required: without DISCORD_TOKEN or
+# TELEGRAM_TOKEN Thicket runs as a web app only (the sign-in link is in the
+# logs). Juni asks for everything else in chat.
 services:
   thicket:
     # Published by CI on every push to main. Without a checkout, Compose
@@ -11,17 +11,26 @@ services:
     container_name: thicket
     restart: unless-stopped
     environment:
-      # Optional. Leave empty to use only the web app.
+      # Optional chat apps. Leave both empty to use only the web app.
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
-      # Optional. Your Discord user id; otherwise the first person to DM the bot becomes the owner.
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      # Optional. Your user id on either app; otherwise the first person to DM the bot becomes the owner.
       THICKET_OWNER_DISCORD_ID: ${THICKET_OWNER_DISCORD_ID:-}
+      THICKET_OWNER_TELEGRAM_ID: ${THICKET_OWNER_TELEGRAM_ID:-}
       # Optional. Public https URL of this server (behind your reverse proxy), used for
-      # web app sign-in links and avatar images.
+      # web app sign-in links, webhook URLs and avatar images.
       THICKET_PUBLIC_URL: ${THICKET_PUBLIC_URL:-}
       # Optional. Keeps the encryption key outside the volume. Any long random string.
       THICKET_SECRET_KEY: ${THICKET_SECRET_KEY:-}
       # Optional. You can also paste the key to Juni in a DM instead.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Optional. A local OpenAI-compatible model server instead of OpenRouter
+      # (see docs/local-models.md), e.g. http://host.docker.internal:11434/v1 for Ollama.
+      # You can also just send Juni the address in a DM.
+      THICKET_MODEL_URL: ${THICKET_MODEL_URL:-}
+      THICKET_MODEL_API_KEY: ${THICKET_MODEL_API_KEY:-}
+      # Optional. Your SearXNG for web search (see docs/web.md); without it, OpenRouter's is used.
+      THICKET_SEARCH_URL: ${THICKET_SEARCH_URL:-}
       # Optional overrides; each can also be changed later by asking Juni.
       THICKET_MODEL: ${THICKET_MODEL:-}
       THICKET_FALLBACK_MODEL: ${THICKET_FALLBACK_MODEL:-}
@@ -30,14 +39,19 @@ services:
       THICKET_MONTHLY_BUDGET_USD: ${THICKET_MONTHLY_BUDGET_USD:-}
       THICKET_ALLOWED_USERS: ${THICKET_ALLOWED_USERS:-}
       THICKET_DISCORD_CHANNELS: ${THICKET_DISCORD_CHANNELS:-}
+      THICKET_TELEGRAM_CHATS: ${THICKET_TELEGRAM_CHATS:-}
       THICKET_IDLE_AFTER: ${THICKET_IDLE_AFTER:-}
       THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
       THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}
       TZ: ${TZ:-UTC}
+    # Lets the container reach a model server on this machine as host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - thicket-data:/data
-    # The web app, /health and /avatars. Open http://localhost:8080 on this machine,
-    # or put it behind your reverse proxy (with HTTPS) to use it from elsewhere.
+    # The web app, /dashboard, /health, /avatars, /hooks and /api/v1. Open
+    # http://localhost:8080 on this machine, or put it behind your reverse proxy (with
+    # HTTPS) to use it from elsewhere. Telegram needs no open port.
     ports:
       - "127.0.0.1:8080:8080"
 

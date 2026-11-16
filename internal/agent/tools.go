@@ -64,6 +64,11 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 		if tool.JobOnly && !t.jobMode() || tool.ChatOnly && t.jobMode() {
 			continue
 		}
+		// A sprig answering another sprig gets its own tools, minus the
+		// conversation-shaping ones and the ability to pull in others.
+		if t.consult != nil && (teamTools[tool.Name] || tool.ChatOnly || tool.JobOnly) {
+			continue
+		}
 		if tool.AdminOnly && !t.user.IsAdmin() {
 			continue
 		}
@@ -163,6 +168,19 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolHandoff,
 		},
 		{
+			Name:        "ask_sprig",
+			Description: "Ask a fellow sprig something you need (what's on the calendar, what they know about a topic) and get their answer back, without handing the user over. Include the context they need: they don't see this conversation.",
+			Params:      `{"type":"object","properties":{"to":{"type":"string","description":"sprig id or name"},"question":{"type":"string"}},"required":["to","question"]}`,
+			Run:         e.toolAskSprig,
+		},
+		{
+			Name:        "delegate_task",
+			Description: "Give a fellow sprig (or yourself, with no 'to') a longer piece of work to do in the background, so the chat stays free. They message the user with the result when done. Write the task so it stands alone: they don't see this conversation.",
+			Params:      `{"type":"object","properties":{"to":{"type":"string","description":"sprig id or name (default: you)"},"task":{"type":"string","description":"what to do and what to report"}},"required":["task"]}`,
+			ChatOnly:    true,
+			Run:         e.toolDelegateTask,
+		},
+		{
 			Name:        "nothing_to_report",
 			Description: "Call this in a scheduled job when there is genuinely nothing worth telling the user. The run is recorded as 'nothing found', not as a failure.",
 			Params:      `{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}`,
@@ -204,8 +222,16 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolScheduleJob,
 		},
 		{
+			Name:        "create_webhook",
+			Description: "Create a job that runs when something outside Thicket calls a private URL (Home Assistant, CI, a script, another service), instead of on a schedule. Whatever the caller POSTs is given to the owner sprig as input. Thicket DMs the URL to the user; you never see it.",
+			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"require calls signed the way that service signs webhooks (recommended when the sender is GitHub, Gitea/Forgejo or GitLab)"}},"required":["name","task"]}`,
+			Scope:       "schedule",
+			ChatOnly:    true,
+			Run:         e.toolCreateWebhook,
+		},
+		{
 			Name:        "list_jobs",
-			Description: "List the user's scheduled jobs with their last run status.",
+			Description: "List the user's scheduled and webhook jobs with their last run status.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "schedule",
 			Run:         e.toolListJobs,
@@ -219,11 +245,51 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "update_job",
-			Description: "Pause, resume or delete a scheduled job.",
-			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete"]}},"required":["job_id","action"]}`,
+			Description: "Pause, resume or delete a scheduled or webhook job. new_url gives a webhook job a fresh URL (and signing secret), DMed to the user, and stops the old ones, e.g. if they leaked. set_signature makes a webhook job require calls signed the way GitHub, Gitea/Forgejo or GitLab sign them (or none).",
+			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete","new_url","set_signature"]},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"for set_signature"}},"required":["job_id","action"]}`,
 			Scope:       "schedule",
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
+		},
+		// --- the web (granted per sprig) ---
+		{
+			Name:        "web_search",
+			Description: "Search the web for current information (news, prices, opening hours, facts you're unsure of). Returns results or a sourced answer; then fetch_page a source to read it in full. Say where things came from when you tell the user.",
+			Params:      `{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+			Scope:       character.ScopeWeb,
+			Untrusted:   true,
+			Run:         e.toolWebSearch,
+		},
+		{
+			Name:        "fetch_page",
+			Description: "Read a web page (an http(s) address the user gave, or one from web_search) as plain text. Only public internet addresses.",
+			Params:      `{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`,
+			Scope:       character.ScopeWeb,
+			Untrusted:   true,
+			Run:         e.toolFetchPage,
+		},
+		// --- skills (a shared library of procedures) ---
+		{
+			Name:        "read_skill",
+			Description: "Read a saved skill (a procedure listed under Skills in your instructions) before doing the task it covers. Returns its steps and version.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
+			Run:         e.toolReadSkill,
+		},
+		{
+			Name:        "save_skill",
+			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it"},"steps":{"type":"string"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
+			AdminOnly:   true,
+			ChatOnly:    true,
+			Run:         e.toolSaveSkill,
+		},
+		{
+			Name:        "manage_skill",
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), or delete a skill.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			AdminOnly:   true,
+			ChatOnly:    true,
+			Run:         e.toolManageSkill,
 		},
 		// --- characters ---
 		{
@@ -244,7 +310,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,
@@ -254,7 +320,7 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days. Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,
@@ -322,16 +388,24 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_user",
-			Description: "Let another Discord user talk to this Thicket. Pass their Discord user id or @mention. Their memories are kept separate.",
-			Params:      `{"type":"object","properties":{"user":{"type":"string"},"admin":{"type":"boolean"}},"required":["user"]}`,
+			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. To use Thicket from a second app themselves, people use link_account instead.",
+			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolInvite,
 		},
 		{
+			Name:        "link_account",
+			Description: "When the user wants to talk to Thicket from another chat app too (Discord or Telegram) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
+			Params:      `{"type":"object","properties":{}}`,
+			Scope:       "host",
+			ChatOnly:    true,
+			Run:         e.toolLinkAccount,
+		},
+		{
 			Name:        "web_app_link",
-			Description: "Post a one-time sign-in link to the Thicket web app, where the user can chat with every sprig side by side. Thicket posts the link itself right after your reply; never write or guess a URL.",
+			Description: "Post a one-time sign-in link to the Thicket web app, where the user can chat with every sprig side by side; once signed in, its read-only dashboard (/dashboard: memories, jobs, skills, and spending for admins) works too. Thicket posts the link itself right after your reply; never write or guess a URL.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "host",
 			ChatOnly:    true,
@@ -609,6 +683,10 @@ func (e *Engine) toolListJobs(ctx context.Context, t *turn, _ json.RawMessage) (
 		if runs, _ := e.DB.JobRuns(ctx, j.ID, 1); len(runs) > 0 {
 			last = fmt.Sprintf("last run %s: %s", runs[0].StartedAt.In(loc).Format("Mon 2 Jan 15:04"), runs[0].Status)
 		}
+		if j.Kind == store.JobWebhook {
+			fmt.Fprintf(&b, "#%d %q by %s, webhook (%s), %s\n", j.ID, j.Name, e.charName(j.Character), state, last)
+			continue
+		}
 		next := ""
 		if j.Enabled {
 			if n := scheduler.Next(j.Schedule, e.now(), loc); !n.IsZero() {
@@ -663,8 +741,9 @@ func (e *Engine) toolJobHistory(ctx context.Context, t *turn, args json.RawMessa
 
 func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		JobID  int64  `json:"job_id"`
-		Action string `json:"action"`
+		JobID     int64  `json:"job_id"`
+		Action    string `json:"action"`
+		Signature string `json:"signature"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -674,12 +753,19 @@ func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessag
 		return "", err
 	}
 	switch a.Action {
+	case "new_url":
+		return e.regenerateHook(ctx, t, j)
+	case "set_signature":
+		return e.setHookSignature(ctx, t, j, a.Signature)
 	case "pause":
 		err = e.DB.SetJobEnabled(ctx, j.ID, false)
 	case "resume":
 		err = e.DB.SetJobEnabled(ctx, j.ID, true)
 	case "delete":
 		err = e.DB.DeleteJob(ctx, j.ID)
+		if err == nil && j.HookAuth != "" {
+			_ = e.Secrets.Delete(ctx, hookSecretName(j.ID))
+		}
 	default:
 		return "", fmt.Errorf("unknown action %q", a.Action)
 	}
@@ -704,7 +790,7 @@ const draftSchema = `{"type":"object","properties":{
 "never_say":{"type":"array","items":{"type":"string"}},
 "relationship_to_user":{"type":"string"},
 "relationships":{"type":"object","additionalProperties":{"type":"string"},"description":"how they see other sprigs, keyed by id"},
-"tools":{"type":"array","items":{"type":"string"},"description":"scopes they need: schedule, mcp:<integration>/<tool or *>"},
+"tools":{"type":"array","items":{"type":"string"},"description":"scopes they need: schedule, web, mcp:<integration>/<tool or *>"},
 "avatar":{"type":"string","description":"https URL of an avatar image, if the user has one"},
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
@@ -1061,14 +1147,31 @@ func (e *Engine) toolSetApproval(ctx context.Context, t *turn, args json.RawMess
 func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
 		User  string `json:"user"`
+		App   string `json:"app"`
 		Admin bool   `json:"admin"`
 	}](args)
 	if err != nil {
 		return "", err
 	}
+	app := strings.ToLower(a.App)
+	if app == "" {
+		app, _ = splitRef(t.chatRef)
+		if app == "" {
+			app = t.user.Channel
+		}
+	}
+	if e.channels[app] == nil {
+		return "", fmt.Errorf("this Thicket isn't connected to %q", app)
+	}
 	id := strings.Trim(a.User, "<@!> ")
+	if id == "" {
+		return "", errors.New("pass their numeric user id")
+	}
 	for _, r := range id {
 		if r < '0' || r > '9' {
+			if app == "telegram" {
+				return "", errors.New("Telegram bots can't look people up by @username: pass their numeric user id (they can get it from @userinfobot)")
+			}
 			return "", errors.New("pass a Discord user id or @mention")
 		}
 	}
@@ -1076,16 +1179,16 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 	if a.Admin {
 		role = "admin"
 	}
-	if u, err := e.DB.UserByExternal(ctx, "discord", id); err == nil {
+	if u, err := e.DB.UserByExternal(ctx, app, id); err == nil {
 		if u.Role != "owner" {
 			_ = e.DB.SetUserRole(ctx, u.ID, role)
 		}
 		return "They already have access; role is now " + role + ".", nil
 	}
-	if _, err := e.DB.CreateUser(ctx, "discord", id, "", role); err != nil {
+	if _, err := e.DB.CreateUser(ctx, app, id, "", role); err != nil {
 		return "", err
 	}
-	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited discord user "+id+" as "+role, "")
+	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited "+app+" user "+id+" as "+role, "")
 	return "Invited. When they DM me I'll welcome them; their memories stay separate from yours.", nil
 }
 
