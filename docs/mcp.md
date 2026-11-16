@@ -74,7 +74,7 @@ Options:
   over HTTP.
 - Put an MCP gateway in front that handles the OAuth for you.
 
-## Approvals
+## Approvals and permission levels
 
 Before a sprig runs a tool that changes something, Thicket posts the exact
 action and arguments and waits for **approve** or **deny** (pending requests
@@ -82,10 +82,35 @@ expire after 30 minutes).
 
 - Integration tools the server marks read-only (`readOnlyHint`) run
   without asking. Everything else asks by default.
-- Change it per tool: "Juni, don't ask me before turning on lights" →
-  `set_tool_approval(mcp_homeassistant__HassTurnOn, never)`. Or `always` to
-  require approval for something that normally doesn't.
+- Each tool has a permission level, for one sprig or for all of them:
+
+  | Level | Tools that change things | Tools that only read |
+  |---|---|---|
+  | `read` | refused | run |
+  | `draft` | not run: the exact action goes to your inbox as a draft | run |
+  | `ask` | run after you approve (the default) | run after you approve |
+  | `act` | run straight away | run (the default) |
+
+  "Juni, let Hal turn on lights without asking" →
+  `set_tool_level(mcp_homeassistant__HassTurnOn, act, sprig: hal)`. Leave
+  out `sprig` to set it for everyone; a sprig's own level wins. `default`
+  clears it. Levels are checked in code on every call, and again when you
+  approve: lowering a sprig to `read` or `draft` cancels what it was
+  waiting to do.
+- A sprig can have one level for all its granted tools
+  (`set_tool_level(*, draft, sprig: wren)`); new sprigs start that way at
+  `draft`. A level for the exact tool still wins. Built-in tools that
+  change things (scheduling jobs, creating webhooks and triggers) act by
+  default but are held back at `read` and `draft` like integration tools.
+- Sprigs can ask for a higher level on one tool with `request_access`;
+  Juni shows you their track record first. See
+  [Bringing on a new sprig](characters.md#bringing-on-a-new-sprig).
+- Drafts land in your inbox; from the [dashboard](dashboard.md) you can
+  have one done as written.
 - Scheduled jobs that hit a tool needing approval ask in the chat you last talked in.
+- Upgrading from an earlier version: approval rules set with the old
+  `set_tool_approval` carry over (`always` became `ask`, `never` became
+  `act`, for every sprig).
 
 ## Untrusted content
 

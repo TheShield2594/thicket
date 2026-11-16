@@ -20,6 +20,7 @@ import (
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/llm"
+	"github.com/theshield2594/thicket/internal/store"
 )
 
 type sent struct {
@@ -103,6 +104,12 @@ type fakeModel struct {
 	// "slow tool task" first calls a tool, then hangs.
 	entered chan struct{}
 	release chan struct{}
+	// failOn makes any request mentioning it fail like an outage.
+	failOn string
+	// voice is what replies to voice-test prompts; judgeDrift makes the
+	// voice judge fail the tone item.
+	voice      string
+	judgeDrift bool
 }
 
 func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
@@ -205,6 +212,25 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	if hook != nil {
 		hook()
 	}
+	m.mu.Lock()
+	failOn, voice, drift := m.failOn, m.voice, m.judgeDrift
+	m.mu.Unlock()
+	if failOn != "" {
+		for _, msg := range req.Messages {
+			if strings.Contains(msg.Content, failOn) {
+				return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
+			}
+		}
+	}
+	if strings.HasPrefix(req.Messages[0].Content, "You check whether a character's new reply") {
+		if drift {
+			return text(`{"tone": false, "length": true, "catchphrases": true, "in_role": true, "note": "sounds like a help desk"}`), nil
+		}
+		return text(`{"tone": true, "length": true, "catchphrases": true, "in_role": true, "note": ""}`), nil
+	}
+	if voice != "" && strings.HasPrefix(lastUserText(req.Messages), "voice:") {
+		return text(voice), nil
+	}
 	sys := req.Messages[0].Content
 	last := req.Messages[len(req.Messages)-1]
 	if !strings.HasPrefix(sys, "You check whether") {
@@ -260,6 +286,35 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	u := strings.ToLower(last.Content)
 	switch {
+	case strings.Contains(u, "bring on wren"):
+		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps the reading list.",
+			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "tools": []string{"schedule"},
+			"routines": []map[string]string{{"name": "Sunday reading nudge", "schedule": "0 10 * * 0", "task": "Suggest what to read next."}},
+			"look":     map[string]string{"body": "tall", "accessory": "book", "expression": "curious"}}), nil
+	case strings.Contains(u, "create wren"):
+		return toolCall("create_character", map[string]any{"id": "wren"}), nil
+	case strings.Contains(u, "schedule a reminder"):
+		return toolCall("schedule_job", map[string]any{"name": "Reminder", "schedule": "0 9 * * *", "task": "Remind me to stretch."}), nil
+	case strings.Contains(u, "ask for more trust"):
+		return toolCall("request_access", map[string]any{"tool": "mcp_ha__turn_on", "level": "act", "reason": "So I can switch the porch light at dusk without waking you."}), nil
+	case strings.Contains(u, "who handles calendars"):
+		return text("Not me! @Pip, can you take this one?"), nil
+	case strings.Contains(u, "watch the lights"):
+		return toolCall("create_trigger", map[string]any{"name": "Lights on", "task": "Tell me which light came on.", "integration": "ha", "tool": "get_state", "match": "/\"on\"/", "every_minutes": 5, "owner": "hal"}), nil
+	case strings.Contains(u, "watch the switch"):
+		return toolCall("create_trigger", map[string]any{"name": "Bad", "task": "x", "integration": "ha", "tool": "turn_on", "owner": "hal"}), nil
+	case strings.Contains(u, "turn on the light"):
+		return toolCall("mcp_ha__turn_on", map[string]any{"entity": "light.kitchen"}), nil
+	case strings.Contains(u, "check the light"):
+		return toolCall("mcp_ha__get_state", map[string]any{"entity": "light.kitchen"}), nil
+	case strings.Contains(u, "what needs me"):
+		return toolCall("needs_you", map[string]any{}), nil
+	case strings.Contains(u, "what do you remember"):
+		return toolCall("list_memories", map[string]any{}), nil
+	case strings.HasPrefix(u, "forget memory "):
+		var id int64
+		fmt.Sscanf(u, "forget memory %d", &id)
+		return toolCall("forget", map[string]any{"ids": []int64{id}}), nil
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
 	case strings.HasPrefix(u, "save skill "):
@@ -436,7 +491,7 @@ func TestSmoke(t *testing.T) {
 	}
 
 	// 5. Approvals: require approval for remember, then approve.
-	if err := a.DB.SetToolPolicy(ctx, "remember", "always"); err != nil {
+	if err := a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.DB.ApplyMemoryChanges(ctx, 0, nil); err != nil {
@@ -592,7 +647,7 @@ func TestUndeliveredApprovalCannotBeApproved(t *testing.T) {
 	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("ef56", 16)))
 	fc.take()
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
-	a.DB.SetToolPolicy(ctx, "remember", "always")
+	a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk)
 
 	// The approval prompt fails to send.
 	fc.mu.Lock()

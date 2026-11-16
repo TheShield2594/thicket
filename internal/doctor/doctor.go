@@ -1,0 +1,305 @@
+// Package doctor checks a Thicket installation end to end: configuration,
+// database, stored secrets, the model server, chat app tokens, each MCP
+// server, and the running server's live state. `thicket doctor` prints it.
+package doctor
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/llm"
+	"github.com/theshield2594/thicket/internal/mcp"
+	"github.com/theshield2594/thicket/internal/secrets"
+	"github.com/theshield2594/thicket/internal/settings"
+	"github.com/theshield2594/thicket/internal/store"
+)
+
+// Check is one finding. Optional ones are reported but don't make the
+// doctor fail.
+type Check struct {
+	Name     string
+	OK       bool
+	Optional bool
+	Detail   string
+}
+
+type Doctor struct {
+	Cfg  *config.Config
+	HTTP *http.Client
+	Log  *slog.Logger
+	// API bases, replaced in tests.
+	DiscordAPI  string
+	TelegramAPI string
+	// ServerURL is the running server's base URL; empty means
+	// http://127.0.0.1<THICKET_HTTP_ADDR>.
+	ServerURL string
+}
+
+func (d *Doctor) client() *http.Client {
+	if d.HTTP != nil {
+		return d.HTTP
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+// Run performs every check. It opens the database (applying migrations,
+// as startup does) and connects to each enabled MCP server briefly.
+func (d *Doctor) Run(ctx context.Context) []Check {
+	var out []Check
+	add := func(c Check) { out = append(out, c) }
+
+	fatal := []string{}
+	for _, p := range d.Cfg.Check() {
+		if p.Fatal {
+			fatal = append(fatal, p.What)
+		}
+	}
+	add(Check{Name: "config", OK: len(fatal) == 0, Detail: orDefault(strings.Join(fatal, "; "), "required settings present")})
+
+	db, err := store.Open(ctx, filepath.Join(d.Cfg.DataDir, "thicket.db"))
+	if err != nil {
+		add(Check{Name: "database", Detail: err.Error()})
+		return out // everything else needs it
+	}
+	defer db.Close()
+	ver, _ := db.SchemaVersion(ctx)
+	if err := db.QuickCheck(ctx); err != nil {
+		add(Check{Name: "database", Detail: fmt.Sprintf("schema v%d, integrity check failed: %v", ver, err)})
+	} else {
+		add(Check{Name: "database", OK: true, Detail: fmt.Sprintf("schema v%d, integrity ok", ver)})
+	}
+
+	red := secrets.NewRedactor()
+	red.Add(d.Cfg.ModelAPIKey)
+	red.Add(d.Cfg.DiscordToken)
+	red.Add(d.Cfg.TelegramToken)
+	var sec *secrets.Store
+	if key, err := secrets.LoadKey(d.Cfg.SecretKey, d.Cfg.DataDir); err != nil {
+		add(Check{Name: "secrets", Detail: err.Error()})
+	} else if sec, err = secrets.New(db, key, red); err != nil {
+		add(Check{Name: "secrets", Detail: err.Error()})
+	} else if err := sec.WarmRedactor(ctx); err != nil {
+		add(Check{Name: "secrets", Detail: "some stored secrets can't be decrypted (did THICKET_SECRET_KEY or secret.key change?): " + err.Error()})
+	} else {
+		add(Check{Name: "secrets", OK: true, Detail: "all stored secrets decrypt"})
+	}
+	if sec != nil {
+		sec.SetEnvFallback(secrets.OpenRouterKey, d.Cfg.OpenRouterKey)
+		sec.SetEnvFallback(secrets.ModelAPIKey, d.Cfg.ModelAPIKey)
+	}
+
+	add(d.model(ctx, settings.New(db, d.Cfg), sec, red))
+	if d.Cfg.DiscordToken != "" {
+		add(d.discord(ctx, red))
+	}
+	if d.Cfg.TelegramToken != "" {
+		add(d.telegram(ctx, red))
+	}
+	if sec != nil {
+		out = append(out, d.mcpServers(ctx, db, sec)...)
+	}
+	out = append(out, d.server(ctx)...)
+	return out
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// get does a GET and returns the body of a 2xx response.
+func (d *Doctor) get(ctx context.Context, url string, header map[string]string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
+	resp, err := d.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode/100 != 2 {
+		return body, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return body, nil
+}
+
+func (d *Doctor) model(ctx context.Context, st *settings.Settings, sec *secrets.Store, red *secrets.Redactor) Check {
+	base := strings.TrimRight(st.String(ctx, "model_url"), "/")
+	c := Check{Name: "model server"}
+	key := ""
+	if sec != nil {
+		name := secrets.ModelAPIKey
+		if llm.IsOpenRouter(base) {
+			name = secrets.OpenRouterKey
+		}
+		key, _ = sec.Get(ctx, name)
+	}
+	var auth map[string]string
+	if key != "" && !llm.IsOpenRouter(base) {
+		auth = map[string]string{"Authorization": "Bearer " + key} // a protected local server
+	}
+	if _, err := d.get(ctx, base+"/models", auth); err != nil {
+		c.Detail = fmt.Sprintf("%s isn't reachable: %s", base, red.Redact(err.Error()))
+		return c
+	}
+	if !llm.IsOpenRouter(base) {
+		c.OK, c.Detail = true, base+" reachable"
+		return c
+	}
+	if key == "" {
+		c.Detail = "OpenRouter is reachable, but no key is stored yet: DM Juni to add one"
+		return c
+	}
+	if _, err := d.get(ctx, base+"/key", map[string]string{"Authorization": "Bearer " + key}); err != nil {
+		c.Detail = "OpenRouter is reachable, but the stored key was refused (" + red.Redact(err.Error()) + ")"
+		return c
+	}
+	c.OK, c.Detail = true, "OpenRouter reachable, key accepted"
+	return c
+}
+
+func (d *Doctor) discord(ctx context.Context, red *secrets.Redactor) Check {
+	base := orDefault(d.DiscordAPI, "https://discord.com/api/v10")
+	body, err := d.get(ctx, base+"/users/@me", map[string]string{"Authorization": "Bot " + d.Cfg.DiscordToken})
+	if err != nil {
+		return Check{Name: "discord token", Detail: "Discord refused the token or isn't reachable: " + red.Redact(err.Error())}
+	}
+	var me struct {
+		Username string `json:"username"`
+	}
+	_ = json.Unmarshal(body, &me)
+	return Check{Name: "discord token", OK: true, Detail: "valid, bot " + orDefault(me.Username, "(unnamed)")}
+}
+
+func (d *Doctor) telegram(ctx context.Context, red *secrets.Redactor) Check {
+	base := orDefault(d.TelegramAPI, "https://api.telegram.org")
+	body, err := d.get(ctx, base+"/bot"+d.Cfg.TelegramToken+"/getMe", nil)
+	if err != nil {
+		// The token is in the URL: keep it out of the message.
+		return Check{Name: "telegram token", Detail: "Telegram refused the token or isn't reachable: " + red.Redact(err.Error())}
+	}
+	var me struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Username string `json:"username"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(body, &me) != nil || !me.OK {
+		return Check{Name: "telegram token", Detail: "unexpected answer from Telegram"}
+	}
+	return Check{Name: "telegram token", OK: true, Detail: "valid, bot @" + me.Result.Username}
+}
+
+func (d *Doctor) mcpServers(ctx context.Context, db *store.Store, sec *secrets.Store) []Check {
+	servers, err := db.MCPServers(ctx)
+	if err != nil {
+		return []Check{{Name: "mcp", Detail: err.Error()}}
+	}
+	log := d.Log
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	reg := mcp.NewRegistry(db, sec, log)
+	defer reg.Close()
+	var out []Check
+	for _, s := range servers {
+		if !s.Enabled {
+			out = append(out, Check{Name: "mcp." + s.Name, OK: true, Optional: true, Detail: "disabled"})
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		tools, err := reg.Connect(cctx, s)
+		cancel()
+		if err != nil {
+			out = append(out, Check{Name: "mcp." + s.Name, Optional: true, Detail: "not responding: " + sec.Redact(err.Error())})
+			continue
+		}
+		out = append(out, Check{Name: "mcp." + s.Name, OK: true, Optional: true, Detail: fmt.Sprintf("responding, %d tools", len(tools))})
+	}
+	return out
+}
+
+// server asks the running Thicket for its live state (chat connections,
+// scheduler). If it isn't running here, that's reported, not failed.
+func (d *Doctor) server(ctx context.Context) []Check {
+	base := d.ServerURL
+	if base == "" {
+		addr := d.Cfg.HTTPAddr
+		if strings.HasPrefix(addr, ":") {
+			addr = "127.0.0.1" + addr
+		}
+		base = "http://" + addr
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", nil)
+	if err != nil {
+		return []Check{{Name: "server", Optional: true, Detail: err.Error()}}
+	}
+	resp, err := d.client().Do(req)
+	if err != nil {
+		return []Check{{Name: "server", Optional: true, Detail: "not running at " + base + ", so live connections weren't checked"}}
+	}
+	defer resp.Body.Close()
+	var h struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
+		Checks  map[string]struct {
+			OK       bool   `json:"ok"`
+			Detail   string `json:"detail"`
+			Optional bool   `json:"optional"`
+		} `json:"checks"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&h); err != nil {
+		return []Check{{Name: "server", Detail: "unreadable /health answer from " + base}}
+	}
+	names := make([]string, 0, len(h.Checks))
+	for n := range h.Checks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	// The model key was checked above: don't fail twice for it.
+	var failing []string
+	for _, n := range names {
+		if c := h.Checks[n]; !c.OK && !c.Optional && n != "model_key" {
+			failing = append(failing, n)
+		}
+	}
+	detail := fmt.Sprintf("running, version %s", h.Version)
+	if len(failing) > 0 {
+		detail += ", failing: " + strings.Join(failing, ", ")
+	}
+	out := []Check{{Name: "server", OK: len(failing) == 0, Detail: detail}}
+	for _, n := range names {
+		c := h.Checks[n]
+		// Live chat connections and the scheduler are what only the
+		// running server knows; the rest was checked above.
+		if !strings.HasPrefix(n, "channel.") && n != "scheduler" {
+			continue
+		}
+		detail := c.Detail
+		if strings.HasPrefix(n, "channel.") {
+			detail = orDefault(detail, map[bool]string{true: "connected", false: "not connected"}[c.OK])
+		}
+		out = append(out, Check{Name: "live " + strings.TrimPrefix(n, "channel."), OK: c.OK, Optional: c.Optional, Detail: detail})
+	}
+	return out
+}

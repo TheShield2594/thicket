@@ -4,6 +4,60 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: sprigs that feel alive (schema v11)
+
+- New sprigs through an approved diff: Juni's interview covers the job,
+  personality, voice, tools and schedule; `create_character` shows every
+  file the sprig will get (character file, `avatar.json`, voice tests)
+  and its routines as a diff, and writes them only when you approve.
+  New sprigs start with every granted tool at `draft`.
+- Sprig-wide levels (`tool: "*"`), and built-in tools that change things
+  (scheduling, webhooks, triggers) are now held back at read and draft.
+- Trust upgrades: `request_access` asks for a higher level on one tool;
+  Juni presents it with the sprig's track record from the trail.
+- Parametric SVG avatars (body, color, leaf hat, accessory, expression)
+  with animated idle, thinking, working, sleeping and stuck states.
+  `/avatars/<id>.svg`. Juni gets hers.
+- Dashboard: roster with live avatars, the needs-you inbox with approve,
+  deny, do-it and clear, the trail, and costs split heartbeat/task and by
+  model. Its one script is nonce-locked; forms carry a session token.
+- The commons (`THICKET_COMMONS_CHANNEL`): sprigs hand off to each other
+  by @mention. Every handoff is logged to the trail.
+- Event triggers: `create_trigger` watches a read-only integration tool
+  for new items (with an optional filter); webhooks can filter bodies.
+  Event jobs are held at a spend cap.
+
+## Unreleased: stability (schema v10)
+
+- Permission levels per sprig and tool: `read`, `draft`, `ask`, `act`,
+  enforced in code on every call and re-checked on approval.
+  `set_tool_level` replaces `set_tool_approval`; existing rules carry over
+  (`always` → `ask`, `never` → `act`).
+- "Needs you" inbox: failed, interrupted and undelivered jobs and tasks,
+  and drafted actions, are kept until resolved (`needs_you` in chat,
+  `thicket inbox`). Repeated failures bump one item; nothing is dropped
+  when the chat report is de-duplicated.
+- Restarts: job runs and delegated tasks in progress when Thicket stopped
+  are failed cleanly at startup, put in the inbox and reported once.
+  Delegated tasks are now stored (`tasks`).
+- Spend is tagged heartbeat or task. `thicket costs [--week|--month|--days
+  N] [--json]` shows it by sprig, model and day. At a spend cap,
+  heartbeats are skipped (recorded, not failed) instead of failing.
+- Integration calls that only read are retried twice with backoff after a
+  dropped connection (was once, immediately).
+- `thicket doctor`: database, secrets, model server, chat tokens, each MCP
+  server, and the running server's live connections. `/health` lists each
+  integration as an optional check that never fails it.
+- Voice tests: reference exchanges in `characters/<id>/voice_tests/`, five
+  bundled for Juni. `thicket voice-check SPRIG [--record]` replays them and
+  has the cheap model flag drift in tone, length, catchphrases and role.
+  Exported and restored with backups.
+- `thicket migrate` lists applied migrations. A test keeps schema changes
+  in numbered migration files.
+- Tests for levels, the heartbeat-to-task handoff, the inbox, restarts,
+  memory remember/list/forget, the budget guard, doctor, costs and voice
+  checks. All model calls are faked.
+
 ## Unreleased: v0.1.0 (day one)
 
 First version.

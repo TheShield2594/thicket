@@ -64,3 +64,50 @@ func TestRoutesDontShadowEachOther(t *testing.T) {
 		}
 	}
 }
+
+// An optional check (an integration) failing is reported but doesn't make
+// /health fail; a required one does.
+func TestHealthOptionalChecks(t *testing.T) {
+	checks := map[string]Check{"database": {OK: true}, "mcp.ha": {OK: false, Detail: "error: refused", Optional: true}}
+	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return checks }, Routes{}).Handler)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"optional":true`) || !strings.Contains(string(b), `"status":"ok"`) {
+		t.Fatalf("optional failure: %d %s", resp.StatusCode, b)
+	}
+	checks["database"] = Check{OK: false}
+	resp, _ = http.Get(srv.URL + "/health")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("required failure: %d", resp.StatusCode)
+	}
+}
+
+func TestAvatarRoute(t *testing.T) {
+	var gotState string
+	av := func(_ context.Context, id, state string) (string, bool) {
+		gotState = state
+		return `<svg xmlns="http://www.w3.org/2000/svg"/>`, id == "juniper"
+	}
+	srv := httptest.NewServer(New("", "test", t.TempDir(), func(context.Context) map[string]Check { return nil }, Routes{Avatar: av}).Handler)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/avatars/juniper.svg?state=working")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/svg+xml" || gotState != "working" ||
+		!strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("avatar: %d %v", resp.StatusCode, resp.Header)
+	}
+	resp, _ = http.Get(srv.URL + "/avatars/nobody.svg")
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown sprig: %d", resp.StatusCode)
+	}
+}

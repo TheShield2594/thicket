@@ -115,6 +115,8 @@ var (
 	ErrBusy    = errors.New("the job is still running from the last call")
 	ErrTooSoon = fmt.Errorf("called again within %s of the last run", WebhookMinGap)
 	ErrTooMany = fmt.Errorf("already ran %d times in the last 24 hours", WebhookDailyRuns)
+	// ErrHeld means the run was held back on purpose (spend cap).
+	ErrHeld = errors.New("held back: the spend cap is reached")
 )
 
 type Scheduler struct {
@@ -129,7 +131,9 @@ type Scheduler struct {
 	running  map[int64]bool
 	admitted map[int64]time.Time // job id -> when Fire last started it
 	lastTick time.Time
-	wg       sync.WaitGroup
+	// recovered is set once stale runs have been dealt with.
+	recovered bool
+	wg        sync.WaitGroup
 }
 
 func New(db *store.Store, exec Executor, log *slog.Logger) *Scheduler {
@@ -148,11 +152,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.base = ctx
 	s.mu.Unlock()
-	if n, err := s.DB.FailStaleRuns(ctx); err != nil {
-		s.Log.Error("fail stale runs", "err", err)
-	} else if n > 0 {
-		s.Log.Warn("marked interrupted job runs as failed", "count", n)
-	}
+	s.RecoverStale(ctx)
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	s.Tick(ctx)
@@ -165,6 +165,71 @@ func (s *Scheduler) Run(ctx context.Context) {
 			s.Tick(ctx)
 		}
 	}
+}
+
+// ErrInterrupted is the error of a run Thicket stopped during. Those runs
+// are failed cleanly at the next start (not retried: a half-done run may
+// already have acted) and reported through JobFinished.
+var ErrInterrupted = errors.New(store.StaleRunError)
+
+// RecoverStale reports and fails runs a stop or crash left running. Call
+// it once at startup, before anything (the clock, a webhook, the API) can
+// start a run; Run calls it if nobody has. A run is reported before it's
+// marked failed, so a crash in between repeats the report rather than
+// losing it. If the job can't be looked up for now, the run is left as it
+// is and retried at the next start; if the job was deleted, it's just
+// failed.
+func (s *Scheduler) RecoverStale(ctx context.Context) {
+	s.mu.Lock()
+	done := s.recovered
+	s.recovered = true
+	s.mu.Unlock()
+	if done {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	runs, err := s.DB.StaleRuns(ctx)
+	if err != nil {
+		s.Log.Error("list stale runs", "err", err)
+		return
+	}
+	for _, r := range runs {
+		j, err := s.DB.JobByID(ctx, r.JobID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			s.Log.Error("look up job of an interrupted run; will retry at the next start", "job", r.JobID, "err", err)
+			continue
+		default:
+			s.Log.Warn("job run interrupted by a restart", "job", j.ID, "run", r.ID)
+			if rep, ok := s.Exec.(InterruptReporter); ok {
+				// The run stays pending until its report is safely stored.
+				if err := rep.ReportInterruptedRun(ctx, *j); err != nil {
+					s.Log.Error("report an interrupted run; will retry at the next start", "job", j.ID, "err", err)
+					continue
+				}
+			} else {
+				s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
+			}
+		}
+		if err := s.DB.FailRun(ctx, r.ID); err != nil {
+			s.Log.Error("fail stale run", "run", r.ID, "err", err)
+		}
+	}
+}
+
+// InterruptReporter is optionally implemented by an Executor to report a
+// run a restart cut short, returning an error if the report couldn't be
+// stored (the run is then left for the next start).
+type InterruptReporter interface {
+	ReportInterruptedRun(ctx context.Context, job store.Job) error
+}
+
+// Pauser is optionally implemented by an Executor to hold back scheduled
+// runs (when the spend cap is reached). A paused job isn't run or counted
+// as failed: its turn passes and it runs again at its next time.
+type Pauser interface {
+	PausedReason(ctx context.Context, job store.Job) string
 }
 
 // Tick runs every job that is due. Exposed for tests.
@@ -193,6 +258,14 @@ func (s *Scheduler) Tick(ctx context.Context) {
 		due, missed := Due(j, sched, now, loc)
 		if !due {
 			continue
+		}
+		if p, ok := s.Exec.(Pauser); ok {
+			if why := p.PausedReason(ctx, j); why != "" {
+				// Move last_run_at on so the skipped turn isn't counted as
+				// missed later, and say so in the run history.
+				_ = s.DB.RecordSkippedRun(ctx, j.ID, now, why)
+				continue
+			}
 		}
 		s.mu.Lock()
 		if s.running[j.ID] {
@@ -225,6 +298,9 @@ func (s *Scheduler) Tick(ctx context.Context) {
 func (s *Scheduler) Fire(j store.Job) error {
 	if !j.Enabled {
 		return ErrPaused
+	}
+	if p, ok := s.Exec.(Pauser); ok && p.PausedReason(s.baseCtx(), j) != "" {
+		return ErrHeld
 	}
 	now := s.Now()
 	s.mu.Lock()
@@ -269,6 +345,15 @@ func (s *Scheduler) Fire(j store.Job) error {
 		s.runOne(ctx, j, now, time.Time{})
 	}()
 	return nil
+}
+
+func (s *Scheduler) baseCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.base == nil {
+		return context.Background()
+	}
+	return s.base
 }
 
 // Wait blocks until running jobs finish. For tests.

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-//go:embed defaults/*.md
+//go:embed defaults/*.md defaults/*/voice_tests/*.yaml defaults/*/avatar.json
 var defaultsFS embed.FS
 
 // HashStore remembers the hash of each file Thicket wrote, so a later
@@ -67,6 +67,15 @@ func (r *Registry) EnsureDefaults(ctx context.Context) error {
 		return err
 	}
 	for _, e := range entries {
+		if e.IsDir() {
+			if err := r.ensureDefaultVoiceTests(e.Name()); err != nil {
+				return err
+			}
+			if err := r.ensureDefaultFile(e.Name(), "avatar.json"); err != nil {
+				return err
+			}
+			continue
+		}
 		dest := filepath.Join(r.dir, e.Name())
 		if _, err := os.Stat(dest); err == nil {
 			continue
@@ -83,6 +92,65 @@ func (r *Registry) EnsureDefaults(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ensureDefaultVoiceTests writes a bundled sprig's voice tests if it has
+// no voice_tests folder yet. An existing folder is left alone.
+func (r *Registry) ensureDefaultVoiceTests(id string) error {
+	dir := VoiceTestDir(r.dir, id)
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	files, err := defaultsFS.ReadDir("defaults/" + id + "/voice_tests")
+	if err != nil {
+		return nil // no bundled tests for this one
+	}
+	// Written to a temporary folder and renamed into place once complete,
+	// so a failure never leaves a half-filled folder that later starts
+	// would take as finished.
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), ".voice_tests-")
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		b, err := defaultsFS.ReadFile("defaults/" + id + "/voice_tests/" + f.Name())
+		if err == nil {
+			err = os.WriteFile(filepath.Join(tmp, f.Name()), b, 0o644)
+		}
+		if err != nil {
+			os.RemoveAll(tmp)
+			return err
+		}
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	return nil
+}
+
+// ensureDefaultFile copies a bundled sprig's file into its folder if it
+// isn't there yet.
+func (r *Registry) ensureDefaultFile(id, name string) error {
+	dest := filepath.Join(r.dir, id, name)
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+	b, err := defaultsFS.ReadFile("defaults/" + id + "/" + name)
+	if err != nil {
+		return nil // not bundled
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, b, 0o644)
 }
 
 // Load (re)reads every *.md file in the directory. Invalid files are

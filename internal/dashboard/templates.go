@@ -19,7 +19,16 @@ ul.plain{list-style:none;padding:0;margin:0}ul.plain li{padding:6px 0;border-top
 .ok{color:var(--accent)}.empty,.warn{color:var(--warn)}.error,.missed,.bad{color:var(--bad)}
 .bar{background:var(--bar);height:10px;border-radius:5px}td.barcell{vertical-align:middle}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.stat b{display:block;font-size:20px}
-button{font:inherit;background:none;border:1px solid var(--line);border-radius:8px;padding:4px 10px;color:var(--text);cursor:pointer}
+button{font:inherit;background:none;border:1px solid var(--line);border-radius:8px;padding:4px 12px;color:var(--text);cursor:pointer;min-height:32px}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+form.inline{display:inline}
+.roster{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.sprigcard{display:flex;gap:10px;align-items:flex-start}.sprigcard svg{width:72px;height:72px;flex:none}
+.state{font-size:12px;color:var(--muted)}.state b{color:var(--text);font-weight:600}
+.flash{border-color:var(--accent)}.problem{border-color:var(--bad);color:var(--bad)}
+.item{padding:10px 0;border-top:1px solid var(--line)}.item:first-of-type{border-top:0}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;background:var(--bg);border-radius:6px;padding:6px 8px;margin:6px 0;max-height:180px;overflow:auto}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
 </style>`
 
 var signInTmpl = template.Must(template.New("signin").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -30,17 +39,37 @@ var signInTmpl = template.Must(template.New("signin").Parse(`<!doctype html><htm
 </section></main></body></html>`))
 
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Thicket</title>` + style + `</head>
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="thicket-csrf" content="{{.CSRF}}"><title>Thicket</title>` + style + `<style>{{.AvatarCSS}}</style></head>
 <body><main>
 <header><h1>🌱 Thicket</h1>
 <span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} · <a href="/">Open the chat app</a></span></header>
-<nav><a href="#sprigs">Sprigs</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a>{{if .Admin}}<a href="#spending">Spending</a><a href="#health">Health</a><a href="#activity">Activity</a>{{end}}</nav>
-<p class="muted small">Read-only. To change anything, ask a sprig. Thinking with {{.Model}}.</p>
+<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a>{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
+{{if .Flash}}<section class="flash" role="status">{{.Flash}}</section>{{end}}
+{{if .Problem}}<section class="problem" role="alert">{{.Problem}}</section>{{end}}
+<p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>
 
-<section id="sprigs"><h2>Sprigs</h2><ul class="plain">
-{{range .Sprigs}}<li><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}} <span class="muted">{{.Role}}</span><br>
-{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</li>{{end}}
-</ul></section>
+<section id="sprigs"><h2>Sprigs</h2><div class="roster">
+{{range .Sprigs}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}
+<div class="state" id="st-{{.ID}}"><b>{{.State}}</b></div><div class="muted small">{{.Role}}</div>
+<div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}
+</div></section>
+
+<section id="inbox"><h2>Needs you</h2>
+{{range .Approvals}}<div class="item"><b>{{.Sprig}}</b> wants to: <b>{{.Tool}}</b> <span class="muted small">{{.At}}</span>
+<pre>{{.Args}}</pre><div class="actions">
+<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="approval"><input type="hidden" name="id" value="{{.ID}}"><button class="primary" name="action" value="approve">Approve</button></form>
+<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="approval"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="deny">Deny</button></form>
+</div></div>{{end}}
+{{range .Inbox}}<div class="item"><span class="tag {{if eq .Kind "failed" "interrupted"}}bad{{end}}">{{.Kind}}</span><b>{{.Title}}</b>{{if gt .Count 1}} <span class="tag">×{{.Count}}</span>{{end}} <span class="muted small">{{.Sprig}} · {{.At}}</span>
+{{if .Detail}}<pre>{{.Detail}}</pre>{{end}}<div class="actions">
+{{if .Draft}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button class="primary" name="action" value="run">Do it</button></form>{{end}}
+<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="resolve">{{if .Draft}}Dismiss{{else}}Clear{{end}}</button></form>
+</div></div>{{end}}
+{{if not (or .Approvals .Inbox)}}<p class="muted">Nothing needs you.</p>{{end}}
+</section>
+
+<section id="trail"><h2>Trail</h2><p class="muted small">What sprigs did{{if not .Admin}} for you{{end}}, newest first.</p>
+<table>{{range .Trail}}<tr><td class="small muted" style="white-space:nowrap">{{.At}}</td><td>{{if .Sprig}}<span class="tag">{{.Sprig}}</span>{{end}}<span class="tag">{{.Kind}}</span></td><td class="{{.Level}}">{{.Summary}}</td></tr>{{else}}<tr><td class="muted">Nothing yet.</td></tr>{{end}}</table></section>
 
 <section id="memories"><h2>What they remember about you <span class="muted small">({{.MemCount}})</span></h2>
 {{range .MemGroup}}<h3>{{.Title}}</h3><ul class="plain">{{range .Memories}}
@@ -58,16 +87,32 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 {{range .Skills}}<li><b>{{.Name}}</b> <span class="tag">{{.ID}} v{{.Version}}</span><br><span class="muted">{{.Description}}</span></li>{{else}}<li class="muted">None saved yet.</li>{{end}}
 </ul></section>
 
-{{if .Admin}}{{with .Spend}}<section id="spending"><h2>Spending</h2>
+{{if .Admin}}{{with .Spend}}<section id="costs"><h2>Costs</h2>
 <div class="grid"><div class="stat"><span class="muted small">Today (UTC)</span><b>{{.Today}}</b><span class="muted small">{{.DailyCap}}</span></div>
 <div class="stat"><span class="muted small">This month</span><b>{{.Month}}</b><span class="muted small">{{.MonthlyCap}}</span></div></div>
-<h3>This month by sprig</h3><table>{{range .BySprig}}<tr><td>{{.Label}}</td><td class="barcell" style="width:45%">{{if .Pct}}<div class="bar" style="width:{{.Pct}}%"></div>{{end}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">Nothing spent yet.</td></tr>{{end}}</table>
+<h3>This month by sprig</h3><table><tr><th>Sprig</th><th>Heartbeat</th><th>Task</th><th>Total</th></tr>{{range $.Costs}}<tr><td>{{.Label}}</td><td>{{.Heartbeat}}</td><td>{{.Task}}</td><td><b>{{.Total}}</b></td></tr>{{else}}<tr><td class="muted" colspan="4">Nothing spent yet.</td></tr>{{end}}</table>
+<p class="muted small">Heartbeat: jobs, triggers, check-ins and memory review. Task: chats and work you asked for.</p>
+<h3>This month by model</h3><table><tr><th>Model</th><th>Calls</th><th>Cost</th></tr>{{range $.Models}}<tr><td>{{.Label}}</td><td>{{.Calls}}</td><td>{{.Total}}</td></tr>{{else}}<tr><td class="muted" colspan="3">None yet.</td></tr>{{end}}</table>
 <h3>Last 14 days</h3><table>{{range .ByDay}}<tr><td>{{.Label}}</td><td class="barcell" style="width:55%">{{if .Pct}}<div class="bar" style="width:{{.Pct}}%"></div>{{end}}</td><td>{{.Value}}</td></tr>{{end}}</table>
 </section>{{end}}
 
 <section id="health"><h2>Health</h2><table>{{range .Health}}<tr><td>{{.Name}}</td><td class="{{if .OK}}ok{{else}}bad{{end}}">{{if .OK}}ok{{else}}problem{{end}}</td><td class="muted small">{{.Detail}}</td></tr>{{end}}</table>
 <p class="muted small">Thicket {{.Version}}</p></section>
-
-<section id="activity"><h2>Recent activity</h2><table>{{range .Activity}}<tr><td class="small muted" style="white-space:nowrap">{{.At}}</td><td class="{{.Level}}">{{.Summary}}</td></tr>{{else}}<tr><td class="muted">Nothing yet.</td></tr>{{end}}</table></section>
 {{end}}
-</main></body></html>`))
+</main>
+<script nonce="{{.Nonce}}">
+(function(){
+  function tick(){
+    fetch('/dashboard/state.json',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null}).then(function(st){
+      if(!st)return;
+      Object.keys(st).forEach(function(id){
+        var s=st[id], av=document.getElementById('av-'+id), lb=document.getElementById('st-'+id);
+        if(av){av.setAttribute('class','sprig is-'+s);var t=av.querySelector('title');if(t)t.textContent=t.textContent.replace(/ is \w+$/,' is '+s);}
+        if(lb&&lb.firstChild)lb.firstChild.textContent=s;
+      });
+    }).catch(function(){});
+  }
+  setInterval(tick,5000);
+})();
+</script>
+</body></html>`))

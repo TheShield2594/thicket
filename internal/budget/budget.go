@@ -115,6 +115,37 @@ func (g *Guard) Status(ctx context.Context) (string, error) {
 	return s, nil
 }
 
+// HeartbeatPause returns why background work (scheduled jobs, check-ins,
+// follow-ups) for this sprig should be held back, or "" to go ahead. At a
+// cap, heartbeats aren't started at all, so they don't fail and pile up
+// error reports; the 100% alert already told the admins. character may be
+// empty.
+func (g *Guard) HeartbeatPause(ctx context.Context, character string) string {
+	if g == nil {
+		return ""
+	}
+	cs, err := g.checks(ctx, llm.Meta{Character: character})
+	if err != nil {
+		return "" // the call itself will be checked again, failing closed
+	}
+	for _, c := range cs {
+		if c.limit > 0 && c.spent >= c.limit {
+			g.capAlert(ctx, c, c.spent) // admins hear even if no chat call ever hits the cap
+			return fmt.Sprintf("the %s spend cap ($%.2f) is reached", c.name, c.limit)
+		}
+	}
+	return ""
+}
+
+// capAlert is the 100% alert; its key makes it once per cap and period.
+func (g *Guard) capAlert(ctx context.Context, c capCheck, spent float64) {
+	g.alert(ctx, Alert{
+		Key:     "budget:" + c.name + ":" + c.period + ":100",
+		Level:   "error",
+		Message: fmt.Sprintf("We've hit the %s spend cap ($%.2f of $%.2f). I'm pausing model calls until it resets, or you can raise it (tell me the new cap).", c.name, spent, c.limit),
+	})
+}
+
 func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	m := llm.MetaFrom(ctx)
 	if err := g.flushPending(ctx); err != nil {
@@ -128,11 +159,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 	}
 	for _, c := range cs {
 		if c.limit > 0 && c.spent >= c.limit {
-			g.alert(ctx, Alert{
-				Key:     "budget:" + c.name + ":" + c.period + ":100",
-				Level:   "error",
-				Message: fmt.Sprintf("We've hit the %s spend cap ($%.2f of $%.2f). I'm pausing model calls until it resets, or you can raise it (tell me the new cap).", c.name, c.spent, c.limit),
-			})
+			g.capAlert(ctx, c, c.spent)
 			return nil, &llm.BudgetError{Reason: fmt.Sprintf("%s cap $%.2f reached", c.name, c.limit)}
 		}
 	}
@@ -141,7 +168,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		return nil, err
 	}
 	u := store.Usage{
-		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
+		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose, Origin: llm.OriginOf(m),
 		Model: resp.Model, PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, CostUSD: resp.Usage.Cost,
 	}
 	// The call is paid for even if the caller has gone away: record it
@@ -154,6 +181,10 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 	}
 	for _, c := range cs {
 		after := c.spent + resp.Usage.Cost
+		if c.limit > 0 && after >= c.limit && c.spent < c.limit {
+			g.capAlert(ctx, c, after) // this call crossed the cap
+			continue
+		}
 		if c.limit > 0 && after >= 0.8*c.limit && c.spent < 0.8*c.limit {
 			g.alert(ctx, Alert{
 				Key:     "budget:" + c.name + ":" + c.period + ":80",

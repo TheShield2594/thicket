@@ -108,7 +108,7 @@ func TestAPIMessages(t *testing.T) {
 	}
 
 	// Approvals work across requests in one conversation.
-	a.DB.SetToolPolicy(ctx, "remember", "always")
+	a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk)
 	r = apiCall(t, srv, token, "POST", "/api/v1/messages", map[string]string{"text": "remember my dog is Biscuit", "sprig": "juniper", "conversation": "dog"})
 	if len(r.Replies) != 2 || !strings.Contains(r.Replies[1].Text, "I need your OK") {
 		t.Fatalf("approval prompt: %+v", r)

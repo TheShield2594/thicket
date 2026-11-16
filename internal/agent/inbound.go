@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -110,63 +109,6 @@ var (
 	approveRe = regexp.MustCompile(`(?i)^\s*(approve|approved|yes|y|yep|yeah|ok|okay|go ahead|do it|confirm)[\s.!]*$`)
 	denyRe    = regexp.MustCompile(`(?i)^\s*(deny|denied|no|n|nope|cancel|stop|don'?t)[\s.!]*$`)
 )
-
-// handleApprovalReply resolves a pending risky action.
-func (e *Engine) handleApprovalReply(ctx context.Context, in channel.Incoming, user *store.User) (bool, error) {
-	approve, deny := approveRe.MatchString(in.Text), denyRe.MatchString(in.Text)
-	if !approve && !deny {
-		return false, nil
-	}
-	a, err := e.DB.LatestPendingApproval(ctx, user.ID, in.ChatRef(), approvalMaxAge)
-	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	status := "approved"
-	if deny {
-		status = "denied"
-	}
-	if ok, err := e.DB.DecideApproval(ctx, a.ID, status); err != nil || !ok {
-		return false, err
-	}
-	char, ok := e.Chars.Get(a.Character)
-	if !ok {
-		char, _ = e.Chars.Host()
-	}
-	conv, err := e.DB.OpenConversation(ctx, user.ID, in.ChatRef(), e.Cfg.IdleAfter)
-	if err != nil {
-		return true, err
-	}
-	_ = e.DB.AddMessage(ctx, conv.ID, "user", "", in.Text)
-	e.logActivity(ctx, "info", "approval", char.ID, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), a.Args)
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM}
-	if deny {
-		return true, e.respond(ctx, t, fmt.Sprintf("The user said no to running %s. Acknowledge briefly and don't try it again unless they ask.", a.Tool))
-	}
-	tool := e.toolsFor(ctx, t)[a.Tool]
-	var result string
-	if tool == nil {
-		result = "Error: that tool is no longer available to you."
-	} else {
-		out, err := tool.Run(ctx, t, json.RawMessage(a.Args))
-		if err != nil {
-			out = "Error: " + err.Error()
-			e.logActivity(ctx, "warn", "tool", char.ID, user.ID, "approved tool "+a.Tool+" failed", err.Error())
-		} else {
-			e.logActivity(ctx, "info", "tool", char.ID, user.ID, "ran approved tool "+a.Tool, e.Secrets.Redact(truncate(out, 500)))
-		}
-		// Redact before anything else sees it: the model, the DB, the chat.
-		out = e.Secrets.Redact(out)
-		result = out
-		if tool.Untrusted {
-			result = wrapUntrusted(a.Tool, out)
-		}
-	}
-	_ = e.DB.SetApprovalResult(ctx, a.ID, truncate(result, 2000))
-	return true, e.respond(ctx, t, fmt.Sprintf("The user approved running %s. Result:\n%s\nTell them how it went, honestly.", a.Tool, result))
-}
 
 // bootstrapGreeting handles messages before any model key exists. It is
 // scripted: there's no model to talk with yet.

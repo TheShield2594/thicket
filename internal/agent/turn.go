@@ -54,7 +54,8 @@ type turn struct {
 
 type post struct {
 	text     string
-	approval *store.Approval // registered only once the prompt is delivered
+	approval *store.Approval      // registered only once the prompt is delivered
+	as       *character.Character // who posts it (default: the turn's sprig)
 }
 
 func (t *turn) jobMode() bool { return t.job != nil }
@@ -62,6 +63,7 @@ func (t *turn) jobMode() bool { return t.job != nil }
 // runTurn builds the prompt, runs the model/tool loop and returns the
 // final reply text (already checked for character consistency).
 func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, error) {
+	defer e.mark(t.char.ID, false)()
 	msgs, err := e.buildMessages(ctx, t, event)
 	if err != nil {
 		return "", err
@@ -186,7 +188,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		skills: skills,
 		char:   t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
-		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
+		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
 	if summary != "" {
@@ -299,10 +301,12 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if !json.Valid(args) {
 		return "Error: tool arguments were not valid JSON."
 	}
-	if e.needsApproval(ctx, tool) {
-		return e.requestApproval(ctx, t, tool, args)
+	if msg, ok := e.gate(ctx, t, tool, args); !ok {
+		return msg
 	}
+	done := e.mark(t.char.ID, true)
 	out, err := tool.Run(ctx, t, args)
+	done()
 	level, summary := "info", "called "+name
 	if err != nil {
 		level, summary = "warn", "tool "+name+" failed"
@@ -322,20 +326,6 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
-}
-
-func (e *Engine) needsApproval(ctx context.Context, tool *Tool) bool {
-	pol, err := e.DB.ToolPolicy(ctx, tool.Name)
-	if err != nil {
-		return true // fail closed
-	}
-	switch pol {
-	case "always":
-		return true
-	case "never":
-		return false
-	}
-	return tool.Risky
 }
 
 // deliverApproval shows the prompt and only then registers the approval.
@@ -366,13 +356,7 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		}
 		chatRef = ref
 	}
-	pretty := string(args)
-	var v any
-	if json.Unmarshal(args, &v) == nil {
-		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
-			pretty = string(b)
-		}
-	}
+	pretty := prettyArgs(args)
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
 	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
 	if t.chatRef != "" {

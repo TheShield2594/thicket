@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/theshield2594/thicket/internal/avatar"
 	"sort"
 	"strings"
 	"time"
@@ -29,7 +30,8 @@ type Tool struct {
 	AdminOnly bool // the user must be an owner/admin
 	JobOnly   bool
 	ChatOnly  bool
-	Risky     bool // needs approval unless a policy says otherwise
+	Risky     bool // needs approval unless a level says otherwise
+	Writes    bool // changes something, but acts by default (see levels.go)
 	Untrusted bool // output is outside content: wrap it as data
 	Run       func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
 }
@@ -212,22 +214,46 @@ func (e *Engine) builtinTools() []*Tool {
 				return "Onboarding complete.", nil
 			},
 		},
+		{
+			Name:        "request_access",
+			Description: "Ask the user for more trust with ONE tool you already have: a higher level (read < draft < ask < act). Juni shows them your track record with it and they decide. Ask only when the current level is really getting in the way, and say why.",
+			Params:      `{"type":"object","properties":{"tool":{"type":"string","description":"exact tool name"},"level":{"type":"string","enum":["draft","ask","act"]},"reason":{"type":"string","description":"why, in a sentence the user will read"}},"required":["tool","level","reason"]}`,
+			Run:         e.toolRequestAccess,
+		},
+		{
+			Name:        "needs_you",
+			Description: "The user's 'needs you' inbox: failed or interrupted jobs and tasks, results that couldn't be delivered, drafted actions, and approvals still waiting. action 'list' (default) shows them; 'resolve' closes one by id once the user has dealt with it.",
+			Params:      `{"type":"object","properties":{"action":{"type":"string","enum":["list","resolve"]},"id":{"type":"integer"}}}`,
+			Scope:       "host",
+			Run:         e.toolNeedsYou,
+		},
 		// --- schedule ---
 		{
 			Name:        "schedule_job",
 			Description: "Create a recurring job, e.g. a morning summary. schedule is cron (minute hour day month weekday) in the user's timezone, e.g. '30 7 * * 1-5' for weekdays at 7:30. Minimum interval 15 minutes. The owner sprig does the task and messages the user.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it runs"},"owner":{"type":"string","description":"character id that runs it (default: you)"}},"required":["name","schedule","task"]}`,
 			Scope:       "schedule",
+			Writes:      true,
 			ChatOnly:    true,
 			Run:         e.toolScheduleJob,
 		},
 		{
 			Name:        "create_webhook",
 			Description: "Create a job that runs when something outside Thicket calls a private URL (Home Assistant, CI, a script, another service), instead of on a schedule. Whatever the caller POSTs is given to the owner sprig as input. Thicket DMs the URL to the user; you never see it.",
-			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"require calls signed the way that service signs webhooks (recommended when the sender is GitHub, Gitea/Forgejo or GitLab)"}},"required":["name","task"]}`,
+			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"instructions for the sprig each time it's called, e.g. 'tell me what the CI failure was about'"},"owner":{"type":"string","description":"character id that runs it (default: you)"},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"require calls signed the way that service signs webhooks (recommended when the sender is GitHub, Gitea/Forgejo or GitLab)"},"match":{"type":"string","description":"only run when the body contains this (case-insensitive), or matches /a regex/; e.g. unhealthy"}},"required":["name","task"]}`,
 			Scope:       "schedule",
+			Writes:      true,
 			ChatOnly:    true,
 			Run:         e.toolCreateWebhook,
+		},
+		{
+			Name:        "create_trigger",
+			Description: "Create a job that runs when something new shows up in an integration, instead of on a schedule: Thicket checks a read-only integration tool every few minutes and runs the task with the new items (e.g. new email from someone, a calendar event added, a container turning unhealthy). The first check only notes what's already there.",
+			Params:      `{"type":"object","properties":{"name":{"type":"string"},"task":{"type":"string","description":"what to do with the new items, e.g. 'summarise it and tell me'"},"integration":{"type":"string","description":"integration (MCP server) name"},"tool":{"type":"string","description":"the integration's tool to check (must only read), as the integration names it"},"args":{"type":"object","description":"arguments for that tool, e.g. a search query"},"every_minutes":{"type":"integer","description":"how often to check (5-1440, default 15)"},"match":{"type":"string","description":"only new items containing this (case-insensitive) or matching /a regex/"},"owner":{"type":"string","description":"sprig that runs it (default: you)"}},"required":["name","task","integration","tool"]}`,
+			Scope:       "schedule",
+			Writes:      true,
+			ChatOnly:    true,
+			Run:         e.toolCreateTrigger,
 		},
 		{
 			Name:        "list_jobs",
@@ -248,6 +274,7 @@ func (e *Engine) builtinTools() []*Tool {
 			Description: "Pause, resume or delete a scheduled or webhook job. new_url gives a webhook job a fresh URL (and signing secret), DMed to the user, and stops the old ones, e.g. if they leaked. set_signature makes a webhook job require calls signed the way GitHub, Gitea/Forgejo or GitLab sign them (or none).",
 			Params:      `{"type":"object","properties":{"job_id":{"type":"integer"},"action":{"type":"string","enum":["pause","resume","delete","new_url","set_signature"]},"signature":{"type":"string","enum":["none","github","gitea","gitlab"],"description":"for set_signature"}},"required":["job_id","action"]}`,
 			Scope:       "schedule",
+			Writes:      true,
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
 		},
@@ -302,7 +329,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "create_character",
-			Description: "Create the sprig from the most recent preview, once the user is happy with it.",
+			Description: "Once the user is happy with the most recent preview: show them every file the new sprig will get (as a diff) and ask for their OK. Nothing is created until they approve.",
 			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"id of the previewed sprig"}},"required":["id"]}`,
 			Scope:       "characters",
 			ChatOnly:    true,
@@ -378,13 +405,13 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRemoveIntegration,
 		},
 		{
-			Name:        "set_tool_approval",
-			Description: "Configure whether a tool needs the user's approval: 'always', 'never', or 'default' (integration tools that change things need approval by default).",
-			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"mode":{"type":"string","enum":["always","never","default"]}},"required":["tool","mode"]}`,
+			Name:        "set_tool_level",
+			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act).",
+			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"level":{"type":"string","enum":["read","draft","ask","act","default"]},"sprig":{"type":"string","description":"sprig id or name; omit for every sprig"}},"required":["tool","level"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
-			Run:         e.toolSetApproval,
+			Run:         e.toolSetLevel,
 		},
 		{
 			Name:        "invite_user",
@@ -684,7 +711,11 @@ func (e *Engine) toolListJobs(ctx context.Context, t *turn, _ json.RawMessage) (
 			last = fmt.Sprintf("last run %s: %s", runs[0].StartedAt.In(loc).Format("Mon 2 Jan 15:04"), runs[0].Status)
 		}
 		if j.Kind == store.JobWebhook {
-			fmt.Fprintf(&b, "#%d %q by %s, webhook (%s), %s\n", j.ID, j.Name, e.charName(j.Character), state, last)
+			how := "webhook"
+			if tr, err := e.DB.TriggerFor(ctx, j.ID); err == nil {
+				how = describeTrigger(tr)
+			}
+			fmt.Fprintf(&b, "#%d %q by %s, %s (%s), %s\n", j.ID, j.Name, e.charName(j.Character), how, state, last)
 			continue
 		}
 		next := ""
@@ -794,7 +825,9 @@ const draftSchema = `{"type":"object","properties":{
 "avatar":{"type":"string","description":"https URL of an avatar image, if the user has one"},
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
-"check_ins":{"type":"boolean"}
+"check_ins":{"type":"boolean"},
+"routines":{"type":"array","description":"what they do on a schedule, from the interview","items":{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string","description":"cron, 5 fields, in the user's timezone, e.g. 0 8 * * 1-5"},"task":{"type":"string"}},"required":["name","schedule","task"]}},
+"look":{"type":"object","description":"their drawn avatar; anything left out is picked for them","properties":{"body":{"type":"string","enum":["round","tall","pear","bean"]},"hat":{"type":"string","enum":["sprout","curl","clover","fern","none"]},"hat_color":{"type":"string"},"accessory":{"type":"string","enum":["none","watering-can","glasses","scarf","book","lantern"]},"expression":{"type":"string","enum":["happy","calm","curious","sleepy","determined"]}}}
 },"required":["id","name","role","traits","voice_style"]}`
 
 type draftArgs struct {
@@ -814,6 +847,14 @@ type draftArgs struct {
 	Color         string            `json:"color"`
 	Background    string            `json:"background"`
 	CheckIns      bool              `json:"check_ins"`
+	Routines      []routineArg      `json:"routines"`
+	Look          avatar.Params     `json:"look"`
+}
+
+type routineArg struct {
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Task     string `json:"task"`
 }
 
 func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
@@ -874,35 +915,20 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", fmt.Sprintf("Preview of new sprig %s introduced itself: %s", c.DisplayName(), intro))
 	}
-	e.drafts.Store(t.user.ID, c)
+	look := a.Look.Merge(avatar.Default(c.ID, c.Color))
+	if err := look.Validate(); err != nil {
+		return "", errors.New("the look needs fixing: " + err.Error())
+	}
+	for _, r := range a.Routines {
+		if _, err := scheduler.Parse(r.Schedule); err != nil {
+			return "", fmt.Errorf("routine %q: %w", r.Name, err)
+		}
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Task) == "" {
+			return "", errors.New("each routine needs a name and a task")
+		}
+	}
+	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines})
 	return fmt.Sprintf("The preview of %s has been posted in the chat (it said: %q). Ask the user what they think and whether anything feels off. Don't repeat the intro.", c.DisplayName(), intro), nil
-}
-
-func (e *Engine) toolCreateCharacter(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-	a, err := decode[struct {
-		ID string `json:"id"`
-	}](args)
-	if err != nil {
-		return "", err
-	}
-	v, ok := e.drafts.Load(t.user.ID)
-	if !ok {
-		return "", errors.New("there's no preview to create; call preview_character first so the user can see the sprig")
-	}
-	c := v.(*character.Character)
-	if c.ID != strings.ToLower(a.ID) {
-		return "", fmt.Errorf("the latest preview is %q, not %q", c.ID, a.ID)
-	}
-	path, err := e.Chars.Write(ctx, c)
-	if errors.Is(err, character.ErrUserEdited) {
-		return "", fmt.Errorf("a file for %q already exists and was edited by hand; I saved my version to %s instead of overwriting it", c.ID, path)
-	}
-	if err != nil {
-		return "", err
-	}
-	e.drafts.Delete(t.user.ID)
-	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, fmt.Sprintf("new sprig %s sprouted", c.DisplayName()), path)
-	return fmt.Sprintf("%s has been created (%s). They can now be addressed by name, e.g. \"%s, ...\".", c.DisplayName(), path, c.DisplayName()), nil
 }
 
 func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
@@ -1121,27 +1147,6 @@ func (e *Engine) toolRemoveIntegration(ctx context.Context, t *turn, args json.R
 	}
 	e.logActivity(ctx, "info", "tool", t.char.ID, t.user.ID, "integration "+a.Name+" removed", "")
 	return "Removed " + a.Name + ". Character files still list its scope; that's harmless.", nil
-}
-
-func (e *Engine) toolSetApproval(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-	a, err := decode[struct {
-		Tool string `json:"tool"`
-		Mode string `json:"mode"`
-	}](args)
-	if err != nil {
-		return "", err
-	}
-	mode := a.Mode
-	if mode == "default" {
-		mode = ""
-	} else if mode != "always" && mode != "never" {
-		return "", fmt.Errorf("mode must be always, never or default")
-	}
-	if err := e.DB.SetToolPolicy(ctx, a.Tool, mode); err != nil {
-		return "", err
-	}
-	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, "approval policy for "+a.Tool+" set to "+a.Mode, "")
-	return fmt.Sprintf("Approval for %s is now %s.", a.Tool, a.Mode), nil
 }
 
 func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) (string, error) {

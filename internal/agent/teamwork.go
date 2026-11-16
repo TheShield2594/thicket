@@ -34,7 +34,7 @@ type consult struct {
 }
 
 // teamTools are what an asked sprig can't use: no chains of sprigs.
-var teamTools = map[string]bool{"ask_sprig": true, "handoff": true, "delegate_task": true}
+var teamTools = map[string]bool{"ask_sprig": true, "handoff": true, "delegate_task": true, "request_access": true}
 
 func (e *Engine) findSprig(name string) (*character.Character, error) {
 	if c, ok := e.Chars.Get(strings.ToLower(strings.TrimSpace(name))); ok {
@@ -77,7 +77,7 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 	// (approvals it raises go out with this reply, or by DM in a job).
 	sub := &turn{user: t.user, char: target, chatRef: t.chatRef, isDM: t.isDM,
 		consult: &consult{from: t.char, question: q}, query: q, depth: t.depth}
-	sctx := llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult"})
+	sctx := llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
 	answer, err := e.runTurn(sctx, sub, "")
 	// Approval prompts the asked sprig raised go out with this reply.
 	t.afterReply = append(t.afterReply, sub.afterReply...)
@@ -147,6 +147,14 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 	e.taskMu.Unlock()
 	from := t.char
 	name := fmt.Sprintf("%s's task: %s", target.DisplayName(), truncate(task, 60))
+	// Stored first, so a restart mid-task is reported, not lost.
+	taskID, err := e.DB.StartTask(ctx, store.Task{UserID: t.user.ID, From: from.ID, Character: target.ID, Prompt: task})
+	if err != nil {
+		e.taskMu.Lock()
+		e.taskUse[t.user.ID]--
+		e.taskMu.Unlock()
+		return "", fmt.Errorf("couldn't record the task: %w", err)
+	}
 	e.tasks.Add(1)
 	go func() {
 		defer e.tasks.Done()
@@ -155,7 +163,7 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 			e.taskUse[t.user.ID]--
 			e.taskMu.Unlock()
 		}()
-		e.runTask(context.WithoutCancel(ctx), t.user, from, target, task, name)
+		e.runTask(context.WithoutCancel(ctx), taskID, t.user, from, target, task, name)
 	}()
 	e.logActivity(ctx, "info", "sprig", from.ID, t.user.ID, fmt.Sprintf("%s gave %s a background task", from.DisplayName(), target.DisplayName()), task)
 	who := target.DisplayName() + " is"
@@ -173,7 +181,7 @@ func (e *Engine) SetLifetime(ctx context.Context) {
 }
 
 // runTask does delegated work like a one-off job and delivers the result.
-func (e *Engine) runTask(ctx context.Context, user *store.User, from, target *character.Character, task, name string) {
+func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, from, target *character.Character, task, name string) {
 	e.lifeMu.Lock()
 	life := e.lifetime
 	e.lifeMu.Unlock()
@@ -191,22 +199,73 @@ func (e *Engine) runTask(ctx context.Context, user *store.User, from, target *ch
 	t := &turn{user: user, char: target, job: job, query: task, taskFrom: from}
 	out, err := e.runTurn(llm.WithMeta(ctx, llm.Meta{UserID: user.ID, Character: target.ID, Purpose: "task"}), t, "")
 	bg := context.WithoutCancel(ctx)
+	ref := fmt.Sprintf("task:%d", taskID)
 	switch {
 	case life != nil && life.Err() != nil:
-		return // Thicket is shutting down
+		return // shutting down: left running, reported as interrupted at the next start
 	case flight.stopped.Load():
+		_ = e.DB.FinishTask(bg, taskID, "stopped", "")
 		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": stopped by the user", "")
 		return
 	case err != nil:
+		_ = e.DB.FinishTask(bg, taskID, "error", err.Error())
 		e.logActivity(bg, "error", "sprig", target.ID, user.ID, name+": failed", err.Error())
+		e.deadLetter(bg, store.InboxItem{UserID: user.ID, Character: target.ID, Kind: store.InboxFailed, Ref: ref,
+			Title: fmt.Sprintf("%s couldn't finish a task from %s", target.DisplayName(), from.DisplayName()), Detail: "Task: " + task + "\n\nError: " + err.Error()})
 		out = fmt.Sprintf("⚠️ I couldn't finish the task %s gave me (%s): %s", from.DisplayName(), truncate(task, 120), shortErr(err))
 	case t.nothingToReport || strings.TrimSpace(out) == "":
+		_ = e.DB.FinishTask(bg, taskID, "empty", "")
 		out = fmt.Sprintf("I finished the task %s gave me (%s): nothing worth reporting.", from.DisplayName(), truncate(task, 120))
 	default:
+		_ = e.DB.FinishTask(bg, taskID, "ok", "")
 		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": done", "")
 	}
 	if err := e.sendToUser(bg, user, target, out); err != nil {
 		e.Log.Error("deliver task result", "err", err)
+		e.deadLetter(bg, store.InboxItem{UserID: user.ID, Character: target.ID, Kind: store.InboxUndelivered, Ref: ref,
+			Title: fmt.Sprintf("%s finished a task, but the message couldn't be delivered", target.DisplayName()), Detail: out})
+	}
+}
+
+// RecoverInterrupted fails the delegated tasks a stop or crash cut short
+// and puts each in the inbox. Call it at startup, before any new task can
+// start. They're failed cleanly rather than resumed: a half-done task may
+// already have acted, and running it again could do things twice. Pass
+// the result to ReportInterrupted once the chat apps are connected.
+func (e *Engine) RecoverInterrupted(ctx context.Context) []store.Task {
+	ctx = context.WithoutCancel(ctx) // a stop during startup mustn't cut recovery short
+	tasks, err := e.DB.InterruptRunningTasks(ctx, func(tk store.Task) store.InboxItem {
+		return store.InboxItem{UserID: tk.UserID, Character: tk.Character, Kind: store.InboxInterrupted, Ref: fmt.Sprintf("task:%d", tk.ID),
+			Title:  fmt.Sprintf("%s's task was interrupted by a restart", e.charName(tk.Character)),
+			Detail: e.Secrets.Redact(truncate("Task: "+tk.Prompt, 4000))}
+	})
+	if err != nil {
+		e.Log.Error("recover interrupted tasks; will retry at the next start", "err", err)
+		return nil
+	}
+	for _, tk := range tasks {
+		e.logActivity(ctx, "warn", "sprig", tk.Character, tk.UserID, fmt.Sprintf("task #%d interrupted by a restart", tk.ID), tk.Prompt)
+	}
+	return tasks
+}
+
+// ReportInterrupted has each interrupted task's sprig tell its user.
+func (e *Engine) ReportInterrupted(ctx context.Context, tasks []store.Task) {
+	for _, tk := range tasks {
+		user, err := e.DB.UserByID(ctx, tk.UserID)
+		if err != nil {
+			continue
+		}
+		char, ok := e.Chars.Get(tk.Character)
+		if !ok {
+			if char, ok = e.Chars.Host(); !ok {
+				continue
+			}
+		}
+		msg := fmt.Sprintf("⚠️ Thicket restarted while I was working on a task from %s (%s), so it didn't finish. Ask me again if you still want it.", e.charName(tk.From), truncate(tk.Prompt, 120))
+		if err := e.sendToUser(ctx, user, char, msg); err != nil {
+			e.Log.Error("report interrupted task", "task", tk.ID, "err", err) // it's in the inbox regardless
+		}
 	}
 }
 

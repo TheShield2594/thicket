@@ -18,6 +18,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/api"
+	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
@@ -196,11 +197,13 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 				"My memory review keeps failing ("+shortErr(err)+"). Nothing is lost, but I'm not learning from recent chats until it's fixed.")
 		}}
 	a.Scheduler = scheduler.New(db, a.Engine, log)
+	a.Engine.Fire = a.Scheduler.Fire
 	// The local API is an internal channel: replies to its messages come
 	// back through it. It isn't listed in /health like the chat apps.
 	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
+		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft,
 		SessionTTL: web.SessionTTL,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
@@ -214,9 +217,22 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
 			Hooks: a.Webhook, MaxHookBody: agent.MaxWebhookPayload,
 			API: a.API.Handler(), Dashboard: a.Dashboard.Handler(), App: a.Web.Handler(),
+			Avatar: a.Avatar,
 		})
 	}
 	return a, nil
+}
+
+// Avatar draws a sprig's avatar; state "" means what it's doing now.
+func (a *App) Avatar(ctx context.Context, id, state string) (string, bool) {
+	c, ok := a.Chars.Get(id)
+	if !ok {
+		return "", false
+	}
+	if state == "" {
+		state = a.Engine.SprigStates(ctx)[c.ID]
+	}
+	return avatar.Render(avatar.Load(a.Chars.Dir(), c.ID, c.Color), state), true
 }
 
 func shortErr(err error) string {
@@ -259,6 +275,15 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		detail += fmt.Sprintf(", %d file(s) with problems", n)
 	}
 	out["characters"] = server.Check{OK: ok && host != nil, Detail: detail}
+	// /health is public: connection errors can quote URLs and tokens, so
+	// only the state is shown. `thicket doctor` gives the details.
+	for name, st := range a.MCP.Status() {
+		c := server.Check{OK: !strings.HasPrefix(st, "error"), Detail: st, Optional: true}
+		if !c.OK {
+			c.Detail = "not connected (run thicket doctor for details)"
+		}
+		out["mcp."+name] = c
+	}
 	return out
 }
 
@@ -286,6 +311,10 @@ func (a *App) Run(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.Engine.SetLifetime(ctx) // background tasks end with Thicket
+	// Before anything can start a new task: fail the ones a stop or crash
+	// cut short (reported once the chat apps are up).
+	interrupted := a.Engine.RecoverInterrupted(ctx)
+	a.Scheduler.RecoverStale(ctx)
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
 	mcpDone := make(chan struct{})
@@ -329,6 +358,7 @@ func (a *App) Run(parent context.Context) error {
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })
 	goRun("memory", func() { a.Reviewer.Run(ctx) })
 	goRun("initiative", func() { a.Engine.RunInitiative(ctx) })
+	goRun("triggers", func() { a.Engine.RunTriggers(ctx) })
 	goRun("characters", func() {
 		a.Chars.Watch(ctx, 10*time.Second, func(errs []character.LoadError) {
 			for _, e := range errs {
@@ -337,7 +367,7 @@ func (a *App) Run(parent context.Context) error {
 		})
 	})
 	goRun("maintenance", func() { a.maintenance(ctx) })
-	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone) })
+	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone, interrupted) })
 	goRun("first-run-link", func() { a.firstRunLink(ctx) })
 
 	a.Log.Info("thicket started", "version", a.Version, "characters", len(a.Chars.All()))
@@ -360,7 +390,7 @@ func (a *App) Run(parent context.Context) error {
 
 // reportStartup tells the owner about problems found at startup, once a
 // channel is connected.
-func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
+func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}, interrupted []store.Task) {
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		ok := true
@@ -376,6 +406,7 @@ func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+	a.Engine.ReportInterrupted(ctx, interrupted)
 	select { // MCP failures are part of the report
 	case <-mcpDone:
 	case <-ctx.Done():
@@ -471,6 +502,18 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 	case err != nil:
 		return http.StatusUnauthorized, err.Error()
 	}
+	// A filter looks at the body as sent, before headers are added. Only
+	// "no filter" lets a call through unfiltered; a failed lookup doesn't.
+	tr, err := a.DB.TriggerFor(ctx, j.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		a.Log.Error("webhook trigger lookup", "job", j.ID, "err", err)
+		a.Engine.ReleaseDelivery(ctx, *j, header) // let the sender's retry through
+		return http.StatusServiceUnavailable, "try again shortly"
+	case tr.Source == store.TriggerWebhook && !agent.Matches(tr.Match, string(body)):
+		return http.StatusOK, "ignored: the body doesn't match this job's filter"
+	}
 	payload := string(body)
 	if !utf8.ValidString(payload) {
 		payload = fmt.Sprintf("(%d bytes of binary data, not shown)", len(body))
@@ -496,6 +539,8 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 		return http.StatusAccepted, "started"
 	case errors.Is(err, scheduler.ErrPaused):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, scheduler.ErrHeld):
+		return http.StatusServiceUnavailable, err.Error()
 	case errors.Is(err, scheduler.ErrBusy), errors.Is(err, scheduler.ErrTooSoon), errors.Is(err, scheduler.ErrTooMany):
 		a.Engine.WebhookRefused(ctx, *j, err)
 		return http.StatusTooManyRequests, err.Error()

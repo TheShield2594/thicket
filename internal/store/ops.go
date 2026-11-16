@@ -35,8 +35,18 @@ func (s *Store) RecentActivity(ctx context.Context, limit int, minLevel string) 
 	case "error":
 		levels = []any{"error", "error", "error"}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
+	return s.activity(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
 		WHERE level IN (?, ?, ?) ORDER BY id DESC LIMIT ?`, append(levels, limit)...)
+}
+
+// UserActivity is the trail of what sprigs did for one user, newest first.
+func (s *Store) UserActivity(ctx context.Context, userID int64, limit int) ([]Activity, error) {
+	return s.activity(ctx, `SELECT id, at, level, kind, character, COALESCE(user_id, 0), summary, detail FROM activity
+		WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+}
+
+func (s *Store) activity(ctx context.Context, q string, args ...any) ([]Activity, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +76,7 @@ type Usage struct {
 	Character        string
 	JobID            int64
 	Purpose          string
+	Origin           string // heartbeat | task
 	Model            string
 	PromptTokens     int
 	CompletionTokens int
@@ -73,8 +84,8 @@ type Usage struct {
 }
 
 func (s *Store) RecordUsage(ctx context.Context, u Usage) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO usage (at, user_id, character, job_id, purpose, model, prompt_tokens, completion_tokens, cost_usd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.unix(), nullInt(u.UserID), u.Character, nullInt(u.JobID), u.Purpose, u.Model,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO usage (at, user_id, character, job_id, purpose, origin, model, prompt_tokens, completion_tokens, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.unix(), nullInt(u.UserID), u.Character, nullInt(u.JobID), u.Purpose, u.Origin, u.Model,
 		u.PromptTokens, u.CompletionTokens, u.CostUSD)
 	return err
 }
@@ -253,28 +264,6 @@ func nonNilMap(v map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	return v
-}
-
-// --- tool approval policies ---
-
-// ToolPolicy returns "always", "never" or "" (use the tool's default).
-func (s *Store) ToolPolicy(ctx context.Context, tool string) (string, error) {
-	var v string
-	err := s.db.QueryRowContext(ctx, "SELECT approval FROM tool_policies WHERE tool = ?", tool).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return v, err
-}
-
-func (s *Store) SetToolPolicy(ctx context.Context, tool, approval string) error {
-	if approval == "" {
-		_, err := s.db.ExecContext(ctx, "DELETE FROM tool_policies WHERE tool = ?", tool)
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tool_policies (tool, approval, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(tool) DO UPDATE SET approval = excluded.approval, updated_at = excluded.updated_at`, tool, approval, s.unix())
-	return err
 }
 
 // --- approvals for risky actions ---

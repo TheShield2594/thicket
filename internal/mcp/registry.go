@@ -100,6 +100,9 @@ type Registry struct {
 	DB      *store.Store
 	Secrets Expander
 	Log     *slog.Logger
+	// RetryBackoff is the first wait before retrying a read-only call
+	// (doubles each time); 0 means 500ms.
+	RetryBackoff time.Duration
 
 	mu    sync.Mutex
 	conns map[string]*conn
@@ -249,6 +252,20 @@ func (r *Registry) Status() map[string]string {
 // after a transport failure: only for read-only tools, since a dropped
 // connection doesn't mean the server didn't act.
 func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
+	return r.call(ctx, server, tool, args, retrySafe, false)
+}
+
+// CallReadOnly calls a tool only if the very connection used lists it as
+// read-only (for automatic callers, like trigger polls, that must never
+// run a tool that changes things). It's retried like any read-only call.
+func (r *Registry) CallReadOnly(ctx context.Context, server, tool string, args json.RawMessage) (*CallResult, error) {
+	return r.call(ctx, server, tool, args, true, true)
+}
+
+// ErrNotReadOnly means a tool isn't (or is no longer) listed as read-only.
+var ErrNotReadOnly = errors.New("is not listed as read-only")
+
+func (r *Registry) call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe, onlyReadOnly bool) (*CallResult, error) {
 	r.mu.Lock()
 	c := acquireLocked(r.conns[server])
 	r.mu.Unlock()
@@ -258,6 +275,10 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 			return nil, err
 		}
 	}
+	if onlyReadOnly && !listsReadOnly(c.tools, tool) {
+		r.release(c)
+		return nil, fmt.Errorf("%s → %s %w", server, tool, ErrNotReadOnly)
+	}
 	res, err := r.callOn(ctx, c, tool, args)
 	var rpcErr *RPCError
 	if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
@@ -266,12 +287,50 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 	if !retrySafe {
 		return nil, fmt.Errorf("the connection to %s failed mid-call (%v), so I can't tell whether it took effect; check before trying again", server, err)
 	}
-	c2, rerr := r.reconnect(ctx, server)
-	if rerr != nil {
-		return nil, err
+	// Read-only: reconnect and try again, with backoff, a few times.
+	backoff := r.RetryBackoff
+	if backoff == 0 {
+		backoff = 500 * time.Millisecond
 	}
-	return r.callOn(ctx, c2, tool, args)
+	for attempt := 0; attempt < callRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		c2, rerr := r.reconnect(ctx, server)
+		if rerr != nil {
+			err = rerr
+			continue
+		}
+		// The server may have changed on reconnect: replay only if this
+		// connection still lists the tool as read-only.
+		if !listsReadOnly(c2.tools, tool) {
+			r.release(c2)
+			return nil, fmt.Errorf("the connection to %s dropped mid-call, and after reconnecting %s is no longer listed as read-only, so I didn't retry it", server, tool)
+		}
+		res, err = r.callOn(ctx, c2, tool, args)
+		if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
+			return res, err
+		}
+	}
+	return nil, err
 }
+
+// listsReadOnly reports whether tools has name, marked read-only.
+func listsReadOnly(tools []Tool, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return t.ReadOnly()
+		}
+	}
+	return false
+}
+
+// callRetries is how many times a read-only call is retried after a
+// transport failure.
+const callRetries = 2
 
 // callOn runs one call on a held connection and releases it afterwards.
 func (r *Registry) callOn(ctx context.Context, c *conn, tool string, args json.RawMessage) (*CallResult, error) {

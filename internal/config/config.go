@@ -35,6 +35,9 @@ type Config struct {
 	TelegramToken       string
 	TelegramOwnerID     string
 	TelegramListenChats []string
+	// CommonsRef is the shared channel where sprigs hand work to each
+	// other by @mention, as "<app>:<chat id>" (a bare id means Discord).
+	CommonsRef string
 
 	OpenRouterKey string
 	// ModelURL is the OpenAI-compatible API models are called through:
@@ -78,6 +81,7 @@ func Load() (*Config, error) {
 		TelegramToken:         env("TELEGRAM_TOKEN", ""),
 		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
 		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
+		CommonsRef:            commonsRef(env("THICKET_COMMONS_CHANNEL", "")),
 	}
 	c.CharactersDir = env("THICKET_CHARACTERS_DIR", filepath.Join(c.DataDir, "characters"))
 
@@ -91,6 +95,7 @@ func Load() (*Config, error) {
 	if c.IdleAfter, err = envDuration("THICKET_IDLE_AFTER", 20*time.Minute); err != nil {
 		return nil, err
 	}
+	c.CommonsListen()
 	if c.MessageRetention, err = envDuration("THICKET_MESSAGE_RETENTION", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
@@ -207,4 +212,29 @@ func envDuration(k string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration like 20m, got %q", k, v)
 	}
 	return d, nil
+}
+
+// commonsRef normalises THICKET_COMMONS_CHANNEL to a chat reference, and
+// makes sure Thicket listens there.
+func commonsRef(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if !strings.Contains(v, ":") {
+		v = "discord:" + v
+	}
+	return v
+}
+
+// CommonsListen adds the commons channel to the chats the adapters answer
+// everything in.
+func (c *Config) CommonsListen() {
+	app, id, _ := strings.Cut(c.CommonsRef, ":")
+	switch app {
+	case "discord":
+		c.DiscordListenChannels = append(c.DiscordListenChannels, id)
+	case "telegram":
+		c.TelegramListenChats = append(c.TelegramListenChats, id)
+	}
 }
