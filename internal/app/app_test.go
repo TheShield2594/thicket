@@ -30,6 +30,8 @@ type fakeChannel struct {
 	mu      sync.Mutex
 	sent    []sent
 	deleted []string
+	// failIf makes Send fail for matching text (simulates a dropped post).
+	failIf func(text string) bool
 }
 
 func (f *fakeChannel) Name() string { return "discord" }
@@ -40,6 +42,9 @@ func (f *fakeChannel) Run(ctx context.Context, h channel.Handler) error {
 func (f *fakeChannel) Send(_ context.Context, chatID string, p channel.Persona, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failIf != nil && f.failIf(text) {
+		return fmt.Errorf("send failed")
+	}
 	f.sent = append(f.sent, sent{chatID, p.Name, text})
 	return nil
 }
@@ -371,4 +376,32 @@ func assertNoLeak(t *testing.T, a *App, secret string) {
 func hasActivity(acts interface{}, substr string) bool {
 	b, _ := json.Marshal(acts)
 	return strings.Contains(string(b), substr)
+}
+
+func TestUndeliveredApprovalCannotBeApproved(t *testing.T) {
+	a, fc, _, ctx := setup(t)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm("hi"))
+	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("ef56", 16)))
+	fc.take()
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	a.DB.SetToolPolicy(ctx, "remember", "always")
+
+	// The approval prompt fails to send.
+	fc.mu.Lock()
+	fc.failIf = func(s string) bool { return strings.Contains(s, "I need your OK") }
+	fc.mu.Unlock()
+	e.HandleIncoming(ctx, dm("remember my dog is called Biscuit"))
+	fc.mu.Lock()
+	fc.failIf = nil
+	fc.mu.Unlock()
+	fc.take()
+	if _, err := a.DB.LatestPendingApproval(ctx, owner.ID, "discord:dm-owner", time.Hour); err == nil {
+		t.Fatal("an approval the user never saw was registered")
+	}
+	// A later bare "ok" must not run anything.
+	e.HandleIncoming(ctx, dm("ok"))
+	if mems, _ := a.DB.AllMemories(ctx, owner.ID); len(mems) != 0 {
+		t.Fatalf("unseen approval was executed: %+v", mems)
+	}
 }

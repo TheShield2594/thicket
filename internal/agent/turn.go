@@ -36,8 +36,8 @@ type turn struct {
 }
 
 type post struct {
-	text       string
-	approvalID int64
+	text     string
+	approval *store.Approval // registered only once the prompt is delivered
 }
 
 func (t *turn) jobMode() bool { return t.job != nil }
@@ -227,6 +227,24 @@ func (e *Engine) needsApproval(ctx context.Context, tool *Tool) bool {
 	return tool.Risky
 }
 
+// deliverApproval shows the prompt and only then registers the approval.
+// An approval that exists is one the user has seen, so a stray "ok" can
+// never run an action whose details weren't shown, whatever failed.
+func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a *store.Approval, msg string) error {
+	if err := e.send(ctx, a.ChatRef, c, msg); err != nil {
+		return err
+	}
+	// Register even if the caller's context ended right after delivery.
+	id, err := e.DB.CreateApproval(context.WithoutCancel(ctx), *a)
+	if err != nil {
+		e.Log.Error("register approval", "err", err)
+		_ = e.send(context.WithoutCancel(ctx), a.ChatRef, c, "Sorry, I couldn't register that request, so approving it won't do anything. Please ask me again.")
+		return err
+	}
+	e.logActivity(ctx, "info", "approval", c.ID, a.UserID, fmt.Sprintf("approval #%d shown for %s", id, a.Tool), "")
+	return nil
+}
+
 func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
 	chatRef := t.chatRef
 	if chatRef == "" {
@@ -237,10 +255,6 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		}
 		chatRef = ref
 	}
-	id, err := e.DB.CreateApproval(ctx, store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)})
-	if err != nil {
-		return "Error: couldn't create the approval request: " + err.Error()
-	}
 	pretty := string(args)
 	var v any
 	if json.Unmarshal(args, &v) == nil {
@@ -249,15 +263,14 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		}
 	}
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
-	if t.chatRef == "" {
-		if err := e.send(ctx, chatRef, t.char, msg); err != nil {
-			_, _ = e.DB.DecideApproval(ctx, id, "expired")
-			return "Error: couldn't ask the user for approval: " + err.Error()
-		}
-	} else {
-		t.afterReply = append(t.afterReply, post{text: msg, approvalID: id})
+	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
+	if t.chatRef != "" {
+		// Posted after the reply; registered by respond once delivered.
+		t.afterReply = append(t.afterReply, post{text: msg, approval: a})
+	} else if err := e.deliverApproval(ctx, t.char, a, msg); err != nil {
+		return "Error: couldn't ask the user for approval: " + err.Error()
 	}
-	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, fmt.Sprintf("approval #%d requested for %s", id, tool.Name), string(args))
+	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, "approval requested for "+tool.Name, string(args))
 	return "PENDING: this action needs the user's approval. A request with the exact details has been shown to them. Tell them briefly what you want to do and that you're waiting for their OK. Do not say it's done."
 }
 

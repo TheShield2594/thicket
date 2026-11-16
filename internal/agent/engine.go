@@ -173,14 +173,17 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 			_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", t.char.ID, reply)
 		}
 	}
-	// Approval prompts go out even if the reply failed. An approval whose
-	// prompt the user never saw is withdrawn, so a stray "ok" can't run it.
+	// Approval prompts go out even if the reply failed. An approval is
+	// registered only after its prompt was delivered (deliverApproval).
 	for _, p := range t.afterReply {
-		if err := e.send(ctx, t.chatRef, t.char, p.text); err != nil {
+		var err error
+		if p.approval != nil {
+			err = e.deliverApproval(ctx, t.char, p.approval, p.text)
+		} else {
+			err = e.send(ctx, t.chatRef, t.char, p.text)
+		}
+		if err != nil {
 			e.Log.Error("post after reply", "err", err)
-			if p.approvalID != 0 {
-				_, _ = e.DB.DecideApproval(ctx, p.approvalID, "expired")
-			}
 		}
 	}
 	if sendErr != nil {
