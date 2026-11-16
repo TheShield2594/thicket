@@ -31,7 +31,6 @@ const (
 	maxToolCallsPerTurn  = 8
 	maxModelCallsPerTurn = 6
 	maxHandoffDepth      = 2
-	historyMessages      = 30
 	userMsgsPerMinute    = 20
 	approvalMaxAge       = 30 * time.Minute
 	secretCaptureMaxAge  = 15 * time.Minute
@@ -64,9 +63,12 @@ type Engine struct {
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
-	linkMu    sync.Mutex
-	links     map[string]linkCode    // code -> pending link
-	linkFails map[string][]time.Time // channel:user -> failed attempts
+	// compactBackoff: conversation id -> time before which summarising
+	// isn't retried (it failed).
+	compactBackoff sync.Map
+	linkMu         sync.Mutex
+	links          map[string]linkCode    // code -> pending link
+	linkFails      map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -238,6 +240,11 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	// again" should still know the document.
 	if len(t.pdfs) > 0 && t.conv != nil {
 		e.keepDocuments(ctx, t)
+	}
+	// The user has their reply: now's the time to compact a long
+	// conversation, before the next message (or a handoff) needs it.
+	if t.conv != nil {
+		e.maybeCompact(ctx, t)
 	}
 	if sendErr != nil {
 		return sendErr

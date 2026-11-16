@@ -50,9 +50,12 @@ internal/api         local HTTP API: an internal "api" channel plus token auth
      skips documents. A model that refuses images or PDFs gets the turn
      again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
-   rules) plus recent history from this conversation only. A conversation
-   ends after `THICKET_IDLE_AFTER` of quiet, so old chats don't bleed into
-   new tasks.
+   skills, rules), then this conversation's summary if it has one, then
+   its newest messages up to the history budget (`history_tokens`;
+   automatic: 12,000 tokens on OpenRouter, 3,000 on a local model). A
+   conversation ends after `THICKET_IDLE_AFTER` of quiet, so old chats
+   don't bleed into new tasks. If the model says its context is full, the
+   turn is retried once with half the history, and admins are told.
 4. The tool loop: tools are offered by scope and role, and checked again in
    code when called. Risky tools create an approval instead of running.
    Integration output is wrapped as untrusted data. Hard caps: 8 tool calls
@@ -60,8 +63,13 @@ internal/api         local HTTP API: an internal "api" channel plus token auth
 5. Consistency: banned phrases are checked in code; then (if enabled) the
    cheap model compares the reply with the identity. One rewrite on
    failure.
-6. The reply is posted as the sprig. A handoff runs the next sprig's turn
-   (at most 2 deep).
+6. The reply is posted as the sprig. Then, if the conversation's
+   unsummarised messages are over budget, the cheap model folds the
+   oldest into the running summary (`conversations.summary`, up to
+   `summary_upto`) until half the budget remains, keeping the last 4
+   messages verbatim. Raw messages stay for memory review. A failed
+   summary just lets old messages drop out, and isn't retried for 10
+   minutes. A handoff then runs the next sprig's turn (at most 2 deep).
 
 ## Memory
 

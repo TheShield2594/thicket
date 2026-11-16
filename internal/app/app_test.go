@@ -93,6 +93,11 @@ type fakeModel struct {
 	// rejectTools answers requests with tools the way Ollama does for a
 	// model without tool support.
 	rejectTools bool
+	// compactFail makes summarising fail; contextLimit makes requests
+	// whose messages exceed it fail like a full context window.
+	compactFail  bool
+	contextLimit int
+	compactions  int
 }
 
 // annotations builds OpenRouter-style parse annotations for the files in
@@ -151,7 +156,26 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	m.mu.Lock()
 	noTools := m.rejectTools
+	compactFail, limit := m.compactFail, m.contextLimit
+	if strings.HasPrefix(req.Messages[0].Content, "You keep the running summary") {
+		m.compactions++
+	}
 	m.mu.Unlock()
+	if strings.HasPrefix(req.Messages[0].Content, "You keep the running summary") {
+		if compactFail {
+			return nil, &llm.APIError{Status: 502, Message: "upstream down"}
+		}
+		return text("SUMMARY-NOTES: the user listed topics, starting with topic-01."), nil
+	}
+	if limit > 0 {
+		n := 0
+		for _, msg := range req.Messages[1:] { // the system prompt is fixed
+			n += len(msg.Content)
+		}
+		if n > limit {
+			return nil, &llm.APIError{Status: 400, Message: "This model's maximum context length is 8192 tokens"}
+		}
+	}
 	if noTools && req.Tools != nil {
 		return nil, &llm.APIError{Status: 400, Message: "registry.ollama.ai/library/tiny:1b does not support tools"}
 	}

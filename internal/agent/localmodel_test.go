@@ -2,7 +2,10 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/theshield2594/thicket/internal/store"
 )
 
 func TestLocalCandidates(t *testing.T) {
@@ -20,5 +23,22 @@ func TestLocalCandidates(t *testing.T) {
 		if got := localCandidates(in); !reflect.DeepEqual(got, want) {
 			t.Errorf("%q:\n got %v\nwant %v", in, got, want)
 		}
+	}
+}
+
+func TestFitHistory(t *testing.T) {
+	msg := func(n int) store.Message { return store.Message{Role: "user", Content: strings.Repeat("x", n)} }
+	h := []store.Message{msg(1000), msg(1000), msg(1000), msg(50)}
+	got, dropped := fitHistory(h, 2000) // sizes count 40 characters of framing each
+	if len(got) != 2 || !dropped || got[1].Content != h[3].Content {
+		t.Fatalf("kept %d, dropped=%v", len(got), dropped)
+	}
+	// The newest message always goes in, even alone over budget.
+	got, dropped = fitHistory([]store.Message{msg(500), msg(9000)}, 2000)
+	if len(got) != 1 || !dropped {
+		t.Fatalf("newest over budget: kept %d", len(got))
+	}
+	if got, dropped := fitHistory(h, 100000); len(got) != 4 || dropped {
+		t.Fatal("everything fits")
 	}
 }

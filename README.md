@@ -127,6 +127,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
 | `THICKET_PUBLIC_URL` | | public https URL, so avatar images in the characters folder can be served and webhook URLs are complete |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
+| `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
 | `THICKET_HTTP_ADDR` | `:8080` | `/health`, `/avatars/`, `/hooks/` and `/api/` |

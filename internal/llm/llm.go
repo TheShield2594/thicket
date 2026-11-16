@@ -100,6 +100,22 @@ func HasFiles(msgs []Message) bool {
 // HasMedia reports whether any message carries images or files.
 func HasMedia(msgs []Message) bool { return HasImages(msgs) || HasFiles(msgs) }
 
+// ContextExceeded reports whether err says the prompt didn't fit the
+// model's context window.
+func ContextExceeded(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) || (ae.Status != 400 && ae.Status != 413 && ae.Status != 422 && ae.Status != 500) {
+		return false
+	}
+	m := strings.ToLower(ae.Message)
+	for _, s := range []string{"context length", "context window", "maximum context", "context_length", "too many tokens", "prompt is too long", "exceeds the context", "input is too long"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ToolsRejected reports whether err looks like the model refusing tool
 // definitions (common with small local models).
 func ToolsRejected(err error) bool {

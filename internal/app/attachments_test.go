@@ -38,7 +38,7 @@ func lastChatReq(fm *fakeModel) llm.Request {
 	defer fm.mu.Unlock()
 	for i := len(fm.reqs) - 1; i >= 0; i-- {
 		sys := fm.reqs[i].Messages[0].Content
-		if !strings.Contains(sys, "You check whether a chat reply") && sys != "Reply with OK." {
+		if !strings.Contains(sys, "You check whether a chat reply") && sys != "Reply with OK." && !strings.HasPrefix(sys, "You keep the running summary") {
 			return fm.reqs[i]
 		}
 	}

@@ -40,6 +40,13 @@ First version.
   chat-changeable `model_url` setting. Models without tool support still
   answer (without tools, with a notice); PDFs are declined on local
   servers. The compose file maps `host.docker.internal` to the host.
+- Context compaction: replies include the conversation's newest messages
+  up to a token budget (`history_tokens`, automatic by default) instead of
+  a fixed 30 messages. When a conversation outgrows it, the oldest
+  messages are folded into a running summary after the reply goes out,
+  and later replies see the summary plus the recent messages. A model
+  whose context is still too small gets the turn again with half the
+  history. Schema v7 adds `conversations.summary` and `summary_upto`.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

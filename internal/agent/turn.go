@@ -34,6 +34,9 @@ type turn struct {
 	pdfs   []llm.File
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
 	annotations []json.RawMessage
+	// budgetChars overrides the history budget (after the model said its
+	// context was full).
+	budgetChars int
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -76,6 +79,24 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 			req.Messages = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] Tool limit for this turn reached. Wrap up now: tell the user where things stand."})
 		}
 		resp, err := e.LLM.Chat(ctx, req)
+		if err != nil && i == 0 && llm.ContextExceeded(err) && ctx.Err() == nil {
+			// The model's context is smaller than the budget assumed:
+			// retry with half the history that was sent (compaction then
+			// catches up).
+			budget := e.historyBudget(ctx, t)
+			sent := 0
+			for _, m := range msgs[1:] {
+				sent += len(m.Content)
+			}
+			t.budgetChars = max(min(sent, budget)/2, minHistoryChars)
+			e.Notify(ctx, "context:"+req.Model, 24*time.Hour, "warn", fmt.Sprintf("The model ran out of context, so I'm sending it less of the conversation (about %d tokens instead of %d). "+
+				"If this keeps happening, ask me to set history_tokens lower.", t.budgetChars/4, budget/4))
+			if msgs, err = e.buildMessages(ctx, t, event); err != nil {
+				return "", err
+			}
+			req.Messages = msgs
+			resp, err = e.LLM.Chat(ctx, req)
+		}
 		if err != nil && llm.HasMedia(req.Messages) && llm.MediaRejected(err) && ctx.Err() == nil {
 			// The model (and its fallback) won't take the images or PDFs:
 			// carry on without them rather than fail the whole reply.
@@ -131,10 +152,13 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		return nil, err
 	}
 	var history []store.Message
+	summary := ""
 	if t.conv != nil {
-		if history, err = e.DB.RecentMessages(ctx, t.conv.ID, historyMessages); err != nil {
+		if history, err = e.DB.MessagesAfter(ctx, t.conv.ID, t.conv.SummaryUpto, historyLoadLimit); err != nil {
 			return nil, err
 		}
+		history, _ = fitHistory(history, e.historyBudget(ctx, t))
+		summary = t.conv.Summary
 	}
 	query := t.query + " " + event
 	for i := len(history) - 1; i >= 0 && i >= len(history)-4; i-- {
@@ -158,6 +182,9 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
+	if summary != "" {
+		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
+	}
 	for i, h := range history {
 		newest := i == len(history)-1
 		content := h.Content
