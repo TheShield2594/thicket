@@ -14,7 +14,11 @@ import (
 
 func skillCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: thicket skill list | export ID [-o FILE] | import FILE")
+		return errors.New(skillUsage)
+	}
+	// check reads files only, so it works without a data directory.
+	if args[0] == "check" {
+		return skillCheck(args[1:])
 	}
 	cfg := loadConfig()
 	db, err := openStore(cfg)
@@ -94,7 +98,94 @@ func skillCmd(args []string) error {
 			return err
 		}
 		fmt.Printf("imported skill %s as version %d\n", k.ID, v)
+		printHints(k)
 		return nil
+	case "starter":
+		return skillStarter(ctx, db, args[1:])
 	}
 	return fmt.Errorf("unknown skill command %q", args[0])
+}
+
+const skillUsage = "usage: thicket skill list | export ID [-o FILE] | import FILE | check FILE... | starter [ID... | all]"
+
+func printHints(k store.Skill) {
+	for _, h := range agent.SkillHints(k) {
+		fmt.Printf("  suggestion: %s\n", h)
+	}
+}
+
+// skillCheck validates skill files without saving them, so people can
+// write one by hand and see what's wrong before importing it.
+func skillCheck(files []string) error {
+	if len(files) == 0 {
+		return errors.New("usage: thicket skill check FILE...")
+	}
+	bad := 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		k, err := agent.ParseSkill(b)
+		if err != nil {
+			fmt.Printf("%s: %v\n", f, err)
+			bad++
+			continue
+		}
+		fmt.Printf("%s: ok (%s)\n", f, k.ID)
+		printHints(k)
+	}
+	if bad > 0 {
+		return fmt.Errorf("%d of %d files can't be imported", bad, len(files))
+	}
+	return nil
+}
+
+// skillStarter lists the bundled example skills, or adds the named ones.
+// A skill whose id is already in the library is left alone, so your own
+// edits are never replaced by the example.
+func skillStarter(ctx context.Context, db *store.Store, ids []string) error {
+	pack, err := agent.StarterSkills()
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		fmt.Println("Starter skills (add with: thicket skill starter ID... or all):")
+		for _, k := range pack {
+			fmt.Printf("  %-20s %s\n", k.ID, k.Description)
+		}
+		return nil
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[strings.ToLower(id)] = true
+	}
+	all := want["all"]
+	known := map[string]bool{"all": true}
+	for _, k := range pack {
+		known[k.ID] = true
+	}
+	for id := range want {
+		if !known[id] {
+			return fmt.Errorf("no starter skill %q; run `thicket skill starter` to list them", id)
+		}
+	}
+	for _, k := range pack {
+		if !all && !want[k.ID] {
+			continue
+		}
+		if cur, err := db.SkillByID(ctx, k.ID, 0); err == nil {
+			fmt.Printf("skipped %s: you already have it (version %d)\n", k.ID, cur.Version)
+			continue
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		k.Author, k.Note = "import", "starter pack"
+		v, err := db.SaveSkill(ctx, k, 0)
+		if err != nil {
+			return fmt.Errorf("%s: %w", k.ID, err)
+		}
+		fmt.Printf("added %s (version %d)\n", k.ID, v)
+	}
+	return nil
 }

@@ -113,6 +113,7 @@ func skillIndex(skills []store.Skill) string {
 }
 
 const skillOfferGuide = `When you've just worked through a multi-step procedure the user will probably want again (or they correct how you do a recurring task), offer to save it as a skill so every sprig does it the same way next time. Save only once they agree, with save_skill. To change a skill, read_skill it first and pass its version as base_version.
+Writing one: the description is one sentence saying when to use it ("Use when the user asks for…"), since that's all sprigs see until they read it. Steps, in this order: an optional "Needs:" line naming the tools or integrations it relies on and what to do without them; numbered steps, one action each, in plain words, naming tools in backticks; "Done when:" one line on what finished looks like; "Watch out:" a short list of mistakes to avoid and things that need the user's OK. Write it from what actually worked in this conversation, in your own words, generally enough that any sprig can follow it. Show the user the draft before saving.
 `
 
 func (e *Engine) toolReadSkill(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
@@ -166,7 +167,11 @@ func (e *Engine) toolSaveSkill(ctx context.Context, t *turn, args json.RawMessag
 		verb = "created"
 	}
 	e.logActivity(ctx, "info", "skill", t.char.ID, t.user.ID, fmt.Sprintf("skill %s %s (v%d)", k.ID, verb, v), k.Note)
-	return fmt.Sprintf("Skill %s %s: version %d. Every sprig can use it now.", k.ID, verb, v), nil
+	msg := fmt.Sprintf("Skill %s %s: version %d. Every sprig can use it now.", k.ID, verb, v)
+	if h := SkillHints(k); len(h) > 0 {
+		msg += " Suggestions for a later revision (offer them to the user, don't save again unasked): " + strings.Join(h, "; ") + "."
+	}
+	return msg, nil
 }
 
 func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
@@ -258,6 +263,11 @@ func ParseSkill(b []byte) (store.Skill, error) {
 	var f skillFront
 	if err := yaml.Unmarshal([]byte(front), &f); err != nil {
 		return store.Skill{}, fmt.Errorf("frontmatter: %w", err)
+	}
+	if strings.TrimSpace(f.ID) == "" {
+		// Usually a skill written for another agent (name and description,
+		// but no id): its steps need rewriting for Thicket's tools anyway.
+		return store.Skill{}, errors.New("the frontmatter needs an id (e.g. id: morning-briefing) as well as name and description; a skill written for another agent needs converting first, see docs/skills.md")
 	}
 	k := store.Skill{ID: strings.TrimSpace(f.ID), Name: strings.TrimSpace(f.Name), Description: strings.TrimSpace(f.Description), Body: strings.TrimSpace(body)}
 	return k, ValidateSkill(k)

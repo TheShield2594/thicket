@@ -154,7 +154,8 @@ cookies (`Secure` over HTTPS).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
-  as a skill, a versioned procedure every sprig follows from then on. See
+  as a skill, a versioned procedure every sprig follows from then on. Or
+  start from the examples (`thicket skill starter`) or write your own. See
   [Skills](docs/skills.md).
 - Script it: `thicket ask --sprig pip "what's on tomorrow?"` prints the
   reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API

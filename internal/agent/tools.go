@@ -305,7 +305,7 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "save_skill",
 			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
-			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it"},"steps":{"type":"string"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
+			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
 			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolSaveSkill,

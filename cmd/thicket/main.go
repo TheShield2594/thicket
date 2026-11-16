@@ -50,6 +50,8 @@ Usage:
   thicket skill list                  list saved skills (procedures sprigs follow)
   thicket skill export ID [-o FILE]   write a skill as Markdown, to share
   thicket skill import FILE           add a skill, or a new version of one with the same id
+  thicket skill check FILE...         check skill files without importing them
+  thicket skill starter [ID...|all]   list the example skills, or add them
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket migrate                     apply pending database migrations (startup does this too) and list them
