@@ -145,14 +145,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 
 	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))
-	var images []llm.Image
+	var media loaded
 	if len(in.Attachments) > 0 {
 		if ch := e.channels[in.Channel]; ch != nil {
 			ch.Typing(ctx, in.ChatID)
 		}
-		loaded, imgs := e.loadAttachments(ctx, in.Attachments)
-		images = imgs
-		typed += attachmentNotes(in.Attachments) + loaded
+		media = e.loadAttachments(ctx, in.Attachments)
+		typed += attachmentNotes(in.Attachments) + media.text
 	}
 	in.Text = strings.TrimSpace(typed)
 
@@ -176,7 +175,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: images}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs}
 	return e.respond(ctx, t, "")
 }
 

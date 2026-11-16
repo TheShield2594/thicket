@@ -27,9 +27,10 @@ type turn struct {
 	job     *store.Job
 	depth   int
 	query   string // text used to pick relevant memories
-	// images arrived with the user's newest message; they go to the
-	// model with it, this turn only.
+	// images and pdfs arrived with the user's newest message; they go to
+	// the model with it, this turn only.
 	images []llm.Image
+	pdfs   []llm.File
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -58,22 +59,26 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 		defs = nil
 	}
 	model := t.char.Model
+	pdfEngine := e.Settings.String(ctx, "pdf_engine")
+	if pdfEngine == "auto" {
+		pdfEngine = ""
+	}
 
 	var reply string
 	for i := 0; ; i++ {
-		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200}
+		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine}
 		if i >= maxModelCallsPerTurn-1 || t.toolCalls >= maxToolCallsPerTurn {
 			// Out of budget for tools: force a final answer.
 			req.Tools = nil
 			req.Messages = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] Tool limit for this turn reached. Wrap up now: tell the user where things stand."})
 		}
 		resp, err := e.LLM.Chat(ctx, req)
-		if err != nil && llm.HasImages(req.Messages) && llm.ImageRejected(err) && ctx.Err() == nil {
-			// The model (and its fallback) won't take images: carry on
-			// without them rather than fail the whole reply.
-			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "model refused image input; replying without the images", shortErr(err))
-			msgs = withoutImages(msgs)
-			req.Messages = withoutImages(req.Messages)
+		if err != nil && llm.HasMedia(req.Messages) && llm.MediaRejected(err) && ctx.Err() == nil {
+			// The model (and its fallback) won't take the images or PDFs:
+			// carry on without them rather than fail the whole reply.
+			e.logActivity(ctx, "warn", "model", t.char.ID, t.user.ID, "model refused the attached images or PDFs; replying without them", shortErr(err))
+			msgs = withoutMedia(msgs)
+			req.Messages = withoutMedia(req.Messages)
 			resp, err = e.LLM.Chat(ctx, req)
 		}
 		if err != nil {
@@ -84,7 +89,8 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 			reply = m.Content
 			break
 		}
-		msgs = append(msgs, llm.Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls})
+		// Annotations carry parsed PDFs, so later calls skip re-parsing.
+		msgs = append(msgs, llm.Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls, Annotations: m.Annotations})
 		for _, call := range m.ToolCalls {
 			result := e.executeTool(ctx, t, tools, call)
 			msgs = append(msgs, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
@@ -144,7 +150,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		case h.Role == "user":
 			m := llm.Message{Role: "user", Content: content}
 			if newest {
-				m.Images = t.images
+				m.Images, m.Files = t.images, t.pdfs
 			}
 			msgs = append(msgs, m)
 		case h.Role == "assistant" && h.Character == t.char.ID:

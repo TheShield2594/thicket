@@ -254,7 +254,7 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days. Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,

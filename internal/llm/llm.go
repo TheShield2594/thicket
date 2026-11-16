@@ -15,10 +15,15 @@ type Message struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
-	// Images go with a user message to vision models. When set, the
-	// message is sent as content parts: Content first, then each image.
+	// Annotations are OpenRouter's parsed copies of PDFs, returned on an
+	// assistant message. Sending them back on that message in the next
+	// call of the same turn skips parsing the PDF again.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	// Images and Files go with a user message. When set, the message is
+	// sent as content parts: Content first, then images, then files.
 	// They are never stored, only sent with the turn they arrived in.
 	Images []Image `json:"-"`
+	Files  []File  `json:"-"`
 }
 
 // Image is a picture for a vision model, as an https or data: URL.
@@ -26,20 +31,33 @@ type Image struct {
 	URL string
 }
 
+// File is a document (a PDF) as a data: URL. OpenRouter reads it natively
+// or parses it, depending on the model and Request.PDFEngine.
+type File struct {
+	Name string
+	URL  string
+}
+
 type contentPart struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *imageURL `json:"image_url,omitempty"`
+	File     *filePart `json:"file,omitempty"`
 }
 
 type imageURL struct {
 	URL string `json:"url"`
 }
 
-// MarshalJSON sends plain string content unless the message has images.
+type filePart struct {
+	Filename string `json:"filename"`
+	FileData string `json:"file_data"`
+}
+
+// MarshalJSON sends plain string content unless the message has media.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type plain Message
-	if len(m.Images) == 0 {
+	if len(m.Images) == 0 && len(m.Files) == 0 {
 		return json.Marshal(plain(m))
 	}
 	parts := []contentPart{}
@@ -48,6 +66,9 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	}
 	for _, img := range m.Images {
 		parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: img.URL}})
+	}
+	for _, f := range m.Files {
+		parts = append(parts, contentPart{Type: "file", File: &filePart{Filename: f.Name, FileData: f.URL}})
 	}
 	return json.Marshal(struct {
 		plain
@@ -65,10 +86,23 @@ func HasImages(msgs []Message) bool {
 	return false
 }
 
-// ImageRejected reports whether err looks like the model refusing image
-// input (OpenRouter answers 404 "no endpoints that support image input",
-// providers 400/415/422), as opposed to an outage or a bad key.
-func ImageRejected(err error) bool {
+// HasFiles reports whether any message carries files.
+func HasFiles(msgs []Message) bool {
+	for _, m := range msgs {
+		if len(m.Files) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMedia reports whether any message carries images or files.
+func HasMedia(msgs []Message) bool { return HasImages(msgs) || HasFiles(msgs) }
+
+// MediaRejected reports whether err looks like the model refusing image
+// or file input (OpenRouter answers 404 "no endpoints that support image
+// input", providers 400/415/422), as opposed to an outage or a bad key.
+func MediaRejected(err error) bool {
 	var ae *APIError
 	if !errors.As(err, &ae) {
 		return false
@@ -112,6 +146,10 @@ type Request struct {
 	JSON        bool // ask for a JSON object response
 	// NoFallback disables falling back to the secondary model.
 	NoFallback bool
+	// PDFEngine picks how OpenRouter reads PDFs: "native", "cloudflare-ai"
+	// or "mistral-ocr". Empty lets OpenRouter choose (native if the model
+	// reads files, else OCR). Only sent when a message carries a file.
+	PDFEngine string
 }
 
 type Usage struct {

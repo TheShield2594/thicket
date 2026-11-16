@@ -96,7 +96,7 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	m.reqs = append(m.reqs, req)
 	reject := m.rejectImages
 	m.mu.Unlock()
-	if reject && llm.HasImages(req.Messages) {
+	if reject && llm.HasMedia(req.Messages) {
 		return nil, &llm.APIError{Status: 404, Message: "No endpoints found that support image input"}
 	}
 	if hook != nil {

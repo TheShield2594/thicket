@@ -17,6 +17,10 @@ First version.
   marked as untrusted content. If the model refuses images, the sprig
   still replies and says it couldn't see them. Other files are passed on
   by name only.
+- PDFs: up to 2 per message (10 MB, 50 pages each), sent to the model with
+  that message only. A new `pdf_engine` setting (auto, native,
+  cloudflare-ai, mistral-ocr) picks how OpenRouter reads them; within a
+  turn, parsed PDFs are reused instead of parsed again.
 - Character system: one Markdown file per sprig with YAML frontmatter;
   validation, hot reload, never overwrites hand edits. Juniper ("Juni")
   ships as the host.

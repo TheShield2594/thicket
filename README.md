@@ -68,11 +68,17 @@ exactly what's missing, and `GET /health` reports each part.
 - Ask Juni to bring someone on: "I need help keeping on top of my
   calendar". She interviews you, the new sprig introduces itself as a
   preview, you tweak it, and the character file is written for you.
-- Send pictures and text files. Sprigs look at images (the chat model
-  needs vision, as the defaults have) and read text files such as notes,
-  CSVs or logs. Images aren't kept after the reply; text files stay in
-  the conversation like any message. Other files (PDFs, for example) are
-  passed on by name only.
+- Send pictures, PDFs and text files. Sprigs look at images (the chat
+  model needs vision, as the defaults have), read PDFs (up to 2 per
+  message, 10 MB and 50 pages each) and text files such as notes, CSVs or
+  logs. Images and PDFs are read for that reply only, so send them again
+  to ask more later; text files stay in the conversation like any
+  message. Other files (Word documents, for example) are passed on by
+  name only.
+- PDFs are read by the model itself when it can, otherwise by OpenRouter's
+  OCR ($2 per 1,000 pages). Ask Juni to set `pdf_engine` to
+  `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
+  `native`; the default is `auto`.
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**.

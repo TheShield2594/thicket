@@ -27,13 +27,14 @@ func NewOpenRouter(baseURL string, key func(ctx context.Context) (string, error)
 }
 
 type orRequest struct {
-	Model          string         `json:"model"`
-	Messages       []Message      `json:"messages"`
-	Tools          []ToolDef      `json:"tools,omitempty"`
-	Temperature    *float64       `json:"temperature,omitempty"`
-	MaxTokens      int            `json:"max_tokens,omitempty"`
-	ResponseFormat map[string]any `json:"response_format,omitempty"`
-	Usage          map[string]any `json:"usage"`
+	Model          string           `json:"model"`
+	Messages       []Message        `json:"messages"`
+	Tools          []ToolDef        `json:"tools,omitempty"`
+	Temperature    *float64         `json:"temperature,omitempty"`
+	MaxTokens      int              `json:"max_tokens,omitempty"`
+	ResponseFormat map[string]any   `json:"response_format,omitempty"`
+	Usage          map[string]any   `json:"usage"`
+	Plugins        []map[string]any `json:"plugins,omitempty"`
 }
 
 type orResponse struct {
@@ -61,6 +62,9 @@ func (o *OpenRouter) Chat(ctx context.Context, req Request) (*Response, error) {
 	}
 	if req.JSON {
 		body.ResponseFormat = map[string]any{"type": "json_object"}
+	}
+	if req.PDFEngine != "" && HasFiles(req.Messages) {
+		body.Plugins = []map[string]any{{"id": "file-parser", "pdf": map[string]any{"engine": req.PDFEngine}}}
 	}
 	b, err := json.Marshal(body)
 	if err != nil {

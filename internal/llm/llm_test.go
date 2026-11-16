@@ -27,4 +27,21 @@ func TestMessageJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"ok"}`), &m); err != nil || m.Content != "ok" {
 		t.Fatalf("decode: %+v %v", m, err)
 	}
+
+	b, err = json.Marshal(Message{Role: "user", Content: "read", Files: []File{{Name: "a.pdf", URL: "data:application/pdf;base64,JVBE"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"role":"user","content":[{"type":"text","text":"read"},{"type":"file","file":{"filename":"a.pdf","file_data":"data:application/pdf;base64,JVBE"}}]}`
+	if string(b) != want {
+		t.Fatalf("file:\n got %s\nwant %s", b, want)
+	}
+	// Annotations round-trip from a response back into the next request.
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"","annotations":[{"type":"file","file":{"hash":"h"}}]}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.Marshal(m)
+	if !strings.Contains(string(b), `"annotations":[{"type":"file","file":{"hash":"h"}}]`) {
+		t.Fatalf("annotations lost: %s", b)
+	}
 }

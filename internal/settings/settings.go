@@ -5,6 +5,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,12 @@ var Known = []Key{
 	{"budget.monthly_usd", "monthly spend cap in USD (0 = no cap)", "float"},
 	{"consistency_check", "run the personality check on replies (true/false)", "bool"},
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
+	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
+}
+
+// choices lists the allowed values of "choice" settings.
+var choices = map[string][]string{
+	"pdf_engine": {"auto", "native", "cloudflare-ai", "mistral-ocr"},
 }
 
 func lookup(name string) (Key, bool) {
@@ -60,6 +67,7 @@ func (s *Settings) defaults() map[string]string {
 		"budget.monthly_usd": strconv.FormatFloat(s.cfg.MonthlyBudgetUSD, 'f', -1, 64),
 		"consistency_check":  "true",
 		"checkin_days":       "3",
+		"pdf_engine":         "auto",
 	}
 }
 
@@ -121,6 +129,11 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 			return fmt.Errorf("%s needs true or false", name)
 		}
 		value = strconv.FormatBool(b)
+	case "choice":
+		value = strings.ToLower(value)
+		if !slices.Contains(choices[name], value) {
+			return fmt.Errorf("%s must be one of: %s", name, strings.Join(choices[name], ", "))
+		}
 	case "string":
 		if len(value) > 120 || strings.ContainsAny(value, " \n\t") {
 			return fmt.Errorf("%s doesn't look like a model id", name)
