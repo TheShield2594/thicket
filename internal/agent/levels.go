@@ -117,7 +117,7 @@ func (e *Engine) toolSetLevel(ctx context.Context, t *turn, args json.RawMessage
 	}
 	who, label := store.AllSprigs, "every sprig"
 	if s := strings.TrimSpace(a.Sprig); s != "" && s != store.AllSprigs {
-		c, err := e.findSprig(s)
+		c, err := e.findSprig(nil, s) // admins set levels on any sprig
 		if err != nil {
 			return "", err
 		}

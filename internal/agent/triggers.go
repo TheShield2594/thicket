@@ -324,7 +324,7 @@ func (e *Engine) toolCreateTrigger(ctx context.Context, t *turn, args json.RawMe
 	}
 	owner := t.char
 	if a.Owner != "" && a.Owner != t.char.ID {
-		if owner, err = e.findSprig(a.Owner); err != nil {
+		if owner, err = e.findSprig(t, a.Owner); err != nil {
 			return "", err
 		}
 	}

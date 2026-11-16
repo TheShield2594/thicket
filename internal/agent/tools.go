@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -608,11 +609,9 @@ func (e *Engine) toolHandoff(ctx context.Context, t *turn, args json.RawMessage)
 	if err != nil {
 		return "", err
 	}
-	target, ok := e.Chars.Get(a.To)
-	if !ok {
-		if target, ok = e.Chars.FindByName(a.To); !ok {
-			return "", fmt.Errorf("there's no sprig called %q", a.To)
-		}
+	target, err := e.findSprig(t, a.To)
+	if err != nil {
+		return "", err
 	}
 	if target.ID == t.char.ID {
 		return "", errors.New("you can't hand off to yourself")
@@ -670,7 +669,7 @@ func (e *Engine) toolScheduleJob(ctx context.Context, t *turn, args json.RawMess
 	owner := t.char
 	if a.Owner != "" && a.Owner != t.char.ID {
 		c, ok := e.Chars.Get(a.Owner)
-		if !ok {
+		if !ok || !c.UsableBy(t.user.ID) {
 			return "", fmt.Errorf("there's no sprig with id %q", a.Owner)
 		}
 		owner = c
@@ -819,6 +818,7 @@ func (e *Engine) toolUpdateJob(ctx context.Context, t *turn, args json.RawMessag
 
 const draftSchema = `{"type":"object","properties":{
 "id":{"type":"string","description":"short lowercase id, e.g. pip"},
+"private":{"type":"boolean","description":"true makes the sprig the user's own: only they can talk to it. Default: shared with everyone in this Thicket"},
 "name":{"type":"string"},
 "nickname":{"type":"string"},
 "role":{"type":"string","description":"one sentence: who they are and what they're for"},
@@ -857,6 +857,7 @@ type draftArgs struct {
 	CheckIns      bool              `json:"check_ins"`
 	Routines      []routineArg      `json:"routines"`
 	Look          avatar.Params     `json:"look"`
+	Private       bool              `json:"private"`
 }
 
 type routineArg struct {
@@ -880,6 +881,9 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		Initiative:    character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00"},
 		CreatedBy:     t.char.ID,
 		Body:          strings.TrimSpace(a.Background),
+	}
+	if a.Private {
+		c.BelongsTo = t.user.ID
 	}
 	if c.Avatar != "" && !strings.HasPrefix(c.Avatar, "https://") {
 		c.Avatar = ""
@@ -1022,6 +1026,12 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 			name = "(background: memory review)"
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
+	}
+	if mix, err := e.DB.PromptMixSince(ctx, month); err == nil {
+		if line := budget.MixLine(mix); line != "" {
+			fmt.Fprintf(&b, "%s Settings now: history_tokens=%d (0 = automatic), document_chars=%d.\n", line,
+				e.Settings.Int(ctx, "history_tokens"), e.Settings.Int(ctx, "document_chars"))
+		}
 	}
 	return b.String(), nil
 }

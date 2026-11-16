@@ -12,6 +12,9 @@ services:
     restart: unless-stopped
     environment:
       # Optional chat apps. Leave both empty to use only the web app.
+      # Tokens and keys set here are stored encrypted on first start; after
+      # that you can delete them from this file (or never put them here:
+      # `docker compose exec thicket thicket secrets set discord_token`).
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
       # Optional. Your user id on either app; otherwise the first person to DM the bot becomes the owner.
@@ -22,8 +25,18 @@ services:
       THICKET_PUBLIC_URL: ${THICKET_PUBLIC_URL:-}
       # Optional. Keeps the encryption key outside the volume. Any long random string.
       THICKET_SECRET_KEY: ${THICKET_SECRET_KEY:-}
+      # Or, with Docker secrets (see the commented `secrets:` blocks below):
+      # THICKET_SECRET_KEY_FILE: /run/secrets/thicket_secret_key
       # Optional. You can also paste the key to Juni in a DM instead.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Optional single sign-on (Authentik, Authelia, Keycloak...). Needs THICKET_PUBLIC_URL;
+      # register <public url>/auth/oidc/callback with the provider. See README "Signing in".
+      THICKET_OIDC_ISSUER: ${THICKET_OIDC_ISSUER:-}
+      THICKET_OIDC_CLIENT_ID: ${THICKET_OIDC_CLIENT_ID:-}
+      THICKET_OIDC_CLIENT_SECRET: ${THICKET_OIDC_CLIENT_SECRET:-}
+      THICKET_OIDC_NAME: ${THICKET_OIDC_NAME:-}
+      THICKET_OIDC_MEMBER_GROUP: ${THICKET_OIDC_MEMBER_GROUP:-}
+      THICKET_OIDC_ADMIN_GROUP: ${THICKET_OIDC_ADMIN_GROUP:-}
       # Optional. A local OpenAI-compatible model server instead of OpenRouter
       # (see docs/local-models.md), e.g. http://host.docker.internal:11434/v1 for Ollama.
       # You can also just send Juni the address in a DM.
@@ -57,6 +70,12 @@ services:
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
     ports:
       - "127.0.0.1:8080:8080"
+    # secrets:
+    #   - thicket_secret_key
 
 volumes:
   thicket-data:
+
+# secrets:
+#   thicket_secret_key:
+#     file: ./thicket_secret_key.txt   # any long random string, kept off the volume

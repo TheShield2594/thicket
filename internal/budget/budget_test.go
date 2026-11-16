@@ -102,3 +102,43 @@ func TestUsageIsTaggedHeartbeatOrTask(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptMixIsRecordedAndNamedInTheWarning(t *testing.T) {
+	g, db, alerts := guard(t, 3) // 10 tokens in, 2 out, $3 a call
+	ctx := llm.WithMeta(context.Background(), llm.Meta{Character: "juniper", Purpose: "chat"})
+	// 1,000 characters of prompt: 600 earlier conversation, 200 PDF text.
+	req := llm.Request{Messages: []llm.Message{{Role: "user", Content: strings.Repeat("x", 1000)}},
+		Mix: &llm.PromptMix{HistoryChars: 600, DocumentChars: 200}}
+	for i := 0; i < 3; i++ { // $9 of $10: the 80% warning
+		if _, err := g.Chat(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mix, err := db.PromptMixSince(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Input is 10 of 10 + 4×2 weighted tokens: 10/18 of the cost; history
+	// is 60% of that.
+	if mix.Calls != 3 || mix.CostUSD != 9 || mix.HistoryTokens != 18 || mix.DocTokens != 6 {
+		t.Fatalf("mix: %+v", mix)
+	}
+	if h := mix.HistoryShare(); h < 0.33 || h > 0.34 {
+		t.Fatalf("history share %.3f, want 0.333", h)
+	}
+	if d := mix.DocShare(); d < 0.11 || d > 0.12 {
+		t.Fatalf("document share %.3f, want 0.111", d)
+	}
+	if len(*alerts) != 1 || !strings.Contains((*alerts)[0].Message, "history_tokens (now automatic)") ||
+		!strings.Contains((*alerts)[0].Message, "document_chars (now 20000)") {
+		t.Fatalf("80%% warning doesn't name the settings: %+v", *alerts)
+	}
+	// Calls that weren't measured (memory review, say) don't count.
+	g.Chat(llm.WithMeta(context.Background(), llm.Meta{Purpose: "memory"}), llm.Request{})
+	if m2, _ := db.PromptMixSince(ctx, time.Now().Add(-time.Hour)); m2.Calls != 3 {
+		t.Fatalf("unmeasured call counted: %+v", m2)
+	}
+	if line := MixLine(mix); !strings.Contains(line, "33%") || !strings.Contains(line, "11%") {
+		t.Fatalf("mix line: %s", line)
+	}
+}

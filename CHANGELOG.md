@@ -4,6 +4,47 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
+
+- Pin and delete messages. Reply "pin this" (or say "pin that") to keep a
+  message in every reply's context for the rest of the conversation, even
+  after compaction; "what's pinned?", "unpin this", "unpin all". Reply
+  "forget this" to take a message out of the stored conversation (a
+  sprig's is deleted from the chat too); "delete that" deletes the sprig's
+  last message. Messages deleted in Discord or the web app leave the
+  conversation as well. The web app gets pin and delete buttons. These
+  commands are handled in code and never stored. New `message_refs` table
+  maps chat-app message ids to stored messages; `messages.pinned`.
+- See what history costs. Each chat call records how much of its prompt
+  was earlier conversation and kept PDF text (`usage.prompt_chars`,
+  `history_chars`, `document_chars`). `thicket costs`, the dashboard and
+  the spend tool show the estimated share and dollars ("about 41% of chat
+  spend went on re-sending earlier conversation"), and the 80% budget
+  warning names `history_tokens` or `document_chars` when lowering it
+  would help. New `document_chars` setting (default 20,000, 0 = keep no
+  PDF text) replaces the fixed cap.
+- Secrets in the encrypted store. `DISCORD_TOKEN`, `TELEGRAM_TOKEN`,
+  `OPENROUTER_API_KEY` and `THICKET_MODEL_API_KEY` from the environment are
+  stored on start (the environment still wins at startup) and the chat
+  apps run on the stored tokens, so a compose file needs no tokens.
+  `THICKET_SECRET_KEY_FILE` reads the master key from a file (Docker
+  secrets). New `thicket secrets list|set|delete|rotate-key`. Every text
+  sink (trail, conversations, inbox, run history, memories, web
+  transcripts, prompts, replies, chat sends, `/health`) now passes through
+  the redactor, and a pasted known secret is intercepted like a
+  credential-shaped one. A test plants each secret and checks every sink.
+- Sign in with a password or single sign-on. Local accounts (argon2id),
+  made with `thicket user add` or an invite link from the owner (dashboard
+  or `thicket user invite`); one-time links still work. Optional OpenID
+  Connect (`THICKET_OIDC_*`: issuer, client id and secret stored
+  encrypted), matching people by subject, verified email or invite, with
+  optional member and admin groups. Sessions have a 90-day hard end, list
+  and sign out from the dashboard and the web app, and a password change
+  signs out other sessions; wrong passwords lock a username for 15
+  minutes. Sprigs can belong to one person (`belongs_to`): members see the
+  shared sprigs and their own, in the web app, dashboard, API and chat.
+  New `thicket user list|add|passwd|email|invite`. Schema v14.
+
 ## Unreleased: sprigs that feel alive (schema v11)
 
 - Skills: a starter pack of six example skills (morning briefing, weekly

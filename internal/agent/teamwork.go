@@ -36,14 +36,16 @@ type consult struct {
 // teamTools are what an asked sprig can't use: no chains of sprigs.
 var teamTools = map[string]bool{"ask_sprig": true, "handoff": true, "delegate_task": true, "request_access": true}
 
-func (e *Engine) findSprig(name string) (*character.Character, error) {
-	if c, ok := e.Chars.Get(strings.ToLower(strings.TrimSpace(name))); ok {
-		return c, nil
+// findSprig finds a sprig the turn's user may talk to.
+func (e *Engine) findSprig(t *turn, name string) (*character.Character, error) {
+	c, ok := e.Chars.Get(strings.ToLower(strings.TrimSpace(name)))
+	if !ok {
+		c, ok = e.Chars.FindByName(name)
 	}
-	if c, ok := e.Chars.FindByName(name); ok {
-		return c, nil
+	if !ok || (t != nil && t.user != nil && !c.UsableBy(t.user.ID)) {
+		return nil, fmt.Errorf("there's no sprig called %q", name)
 	}
-	return nil, fmt.Errorf("there's no sprig called %q", name)
+	return c, nil
 }
 
 func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
@@ -57,7 +59,7 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 	if t.consult != nil {
 		return "", errors.New("you're answering another sprig, so you can't ask others in turn: answer with what you know")
 	}
-	target, err := e.findSprig(a.To)
+	target, err := e.findSprig(t, a.To)
 	if err != nil {
 		return "", err
 	}
@@ -125,7 +127,7 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 	}
 	target := t.char
 	if a.To != "" {
-		if target, err = e.findSprig(a.To); err != nil {
+		if target, err = e.findSprig(t, a.To); err != nil {
 			return "", err
 		}
 	}

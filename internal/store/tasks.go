@@ -21,7 +21,7 @@ type Task struct {
 
 func (s *Store) StartTask(ctx context.Context, t Task) (int64, error) {
 	res, err := s.db.ExecContext(ctx, "INSERT INTO tasks (user_id, from_char, character, prompt, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)",
-		t.UserID, t.From, t.Character, t.Prompt, s.unix())
+		t.UserID, t.From, t.Character, s.clean(t.Prompt), s.unix())
 	if err != nil {
 		return 0, err
 	}
@@ -29,7 +29,7 @@ func (s *Store) StartTask(ctx context.Context, t Task) (int64, error) {
 }
 
 func (s *Store) FinishTask(ctx context.Context, id int64, status, errText string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE tasks SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status = 'running'", status, errText, s.unix(), id)
+	_, err := s.db.ExecContext(ctx, "UPDATE tasks SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status = 'running'", status, s.clean(errText), s.unix(), id)
 	return err
 }
 
@@ -75,7 +75,7 @@ func (s *Store) InterruptRunningTasks(ctx context.Context, report func(Task) Inb
 		}
 		it := report(t)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO inbox (user_id, character, kind, ref, title, detail, action, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, it.Title, it.Detail, it.Action, now, now); err != nil {
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, it.UserID, it.Character, it.Kind, it.Ref, s.clean(it.Title), s.clean(it.Detail), it.Action, now, now); err != nil {
 			return nil, err
 		}
 	}

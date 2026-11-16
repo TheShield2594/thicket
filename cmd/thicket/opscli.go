@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/app"
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/doctor"
 	"github.com/theshield2594/thicket/internal/llm"
@@ -81,6 +82,10 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 		return err
 	}
 	monthCap := st.Float(ctx, "budget.monthly_usd")
+	mix, err := db.PromptMixSince(ctx, since)
+	if err != nil {
+		return err
+	}
 
 	if asJSON {
 		enc := json.NewEncoder(out)
@@ -88,6 +93,9 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 		return enc.Encode(map[string]any{
 			"since": since, "total": total, "by_sprig_and_origin": bySprig, "by_model": byModel, "by_day": byDay,
 			"month_spent_usd": monthSpent, "month_cap_usd": monthCap,
+			"chat_prompt_mix": map[string]any{"calls": mix.Calls, "cost_usd": mix.CostUSD, "prompt_tokens": mix.PromptTokens,
+				"history_tokens_est": mix.HistoryTokens, "document_tokens_est": mix.DocTokens,
+				"history_usd_est": mix.HistoryUSD, "document_usd_est": mix.DocUSD},
 		})
 	}
 
@@ -162,9 +170,22 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 		fmt.Fprintf(tw, "%s\t%d\t$%.4f\t\n", r.Keys[0], r.Calls, r.CostUSD)
 	}
 	tw.Flush()
+	if line := budget.MixLine(mix); line != "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, line)
+		fmt.Fprintf(out, "history_tokens is %s; document_chars is %d. To make each reply cheaper, ask Juni to lower either (\"set history_tokens to 6000\").\n",
+			historySetting(ctx, st), st.Int(ctx, "document_chars"))
+	}
 	fmt.Fprintln(out, "\nheartbeat = jobs, check-ins, follow-ups and memory review; task = chats and work you asked for.")
 	fmt.Fprintln(out, "Costs are what OpenRouter reported per call; local model servers count as $0.")
 	return nil
+}
+
+func historySetting(ctx context.Context, st *settings.Settings) string {
+	if n := st.Int(ctx, "history_tokens"); n > 0 {
+		return fmt.Sprintf("%d tokens", n)
+	}
+	return "automatic (12,000 tokens on OpenRouter, 3,000 on a local model)"
 }
 
 func orNone(s string) string {

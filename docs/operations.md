@@ -53,6 +53,27 @@ when the work starts, so a consistency check inside a scheduled job counts
 as heartbeat. Costs are what OpenRouter reported for each call; local model
 servers count as $0.
 
+Every chat reply re-sends part of the conversation: up to `history_tokens`
+of earlier messages (plus the summary and pins) and any PDF text kept for
+follow-ups (`document_chars`). The report says what share of chat spend
+that was, for example:
+
+```
+Of $4.10 chat spend (212 model calls measured), about 41% (≈$1.68) went on
+re-sending earlier conversation (history_tokens) and 9% (≈$0.37) on PDF
+text kept for follow-ups (document_chars).
+```
+
+The dashboard's Costs section shows the same for the month, and so does
+asking Juni "what have we spent?". These are estimates: Thicket measures
+each prompt's make-up in characters, and the provider reports one cost
+per call, which is split between prompt and reply assuming an output
+token costs 4 times an input token. Calls from before this was measured
+aren't counted. If history is most of it, ask Juni to lower
+`history_tokens` (say, to 6000); if documents are, lower `document_chars`
+or set it to 0 to keep none. The 80% budget warning names whichever
+setting is worth lowering.
+
 ### Spend caps
 
 `THICKET_DAILY_BUDGET_USD` (default 2) and `THICKET_MONTHLY_BUDGET_USD`
@@ -148,6 +169,60 @@ Juni ships with five. For your own sprigs, write prompts only and run
 `thicket voice-check pip --record` once when you're happy with how Pip
 sounds: replies are saved as the references for tests that have none.
 Voice tests are included in `thicket export` and restored with it.
+
+## People and sign-in
+
+```
+thicket user list                          # id, name, role, how each signs in
+thicket user add kim --name Kim            # a web login; password from stdin or typed twice
+thicket user add sam --user 3              # give user 3 (from Discord, say) a login
+thicket user passwd kim                    # new password; signs out kim's sessions
+thicket user email 3 sam@example.com       # match single sign-on to user 3
+thicket user invite --role member --ttl 72h
+```
+
+`thicket web link` still prints a one-time sign-in link. Sessions are
+listed, and can be signed out, on the dashboard and in the web app.
+
+## Secrets
+
+Keys and tokens live in the database, encrypted with AES-256-GCM under a
+master key: `THICKET_SECRET_KEY`, else the file `THICKET_SECRET_KEY_FILE`
+names (for Docker secrets), else `/data/secret.key`, created on first run.
+Keep the master key off the volume if you can: then a copy of the
+volume alone doesn't reveal the secrets.
+
+`DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `OPENROUTER_API_KEY`,
+`THICKET_MODEL_API_KEY` and `THICKET_OIDC_ISSUER`, `_CLIENT_ID` and
+`_CLIENT_SECRET` given in the environment are stored on start, and
+the log says each can now be removed from your compose file. Thicket
+reads them from the store from then on. If one is still in the
+environment at startup, its value wins and replaces the stored one (so
+an orchestrator that rotates it keeps working).
+
+```
+thicket secrets list                 # names and where each comes from; never values
+thicket secrets set discord_token    # reads the value from stdin
+thicket secrets delete github_token
+thicket secrets rotate-key           # new master key, every secret re-encrypted
+```
+
+In Docker, `set` reads from a pipe or prompts:
+`docker compose exec -T thicket thicket secrets set telegram_token < token.txt`.
+New chat tokens take effect at the next restart.
+
+`rotate-key` writes the new key first, re-encrypts every secret in one
+transaction, then swaps the key files (`secret.key.old` keeps the old one
+until you delete it). Restart Thicket straight after: until then the
+running server holds the old key and can't read secrets. When the key
+comes from `THICKET_SECRET_KEY` or `THICKET_SECRET_KEY_FILE`, Thicket can't
+change it, so pass `--out FILE`, put the new key where the old one was,
+and restart.
+
+Values never reach logs, the trail, the inbox, conversations, prompts, API
+responses, the web app or the dashboard: every one of those passes
+through the redactor, which knows each stored value and credential-shaped
+strings, and a test plants each known secret and checks every sink.
 
 ## `thicket migrate`
 

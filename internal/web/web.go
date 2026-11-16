@@ -3,9 +3,10 @@
 //
 // Each sprig gets its own thread per user ("<user id>.<character id>"),
 // and "<user id>.all" is a shared room where any sprig can be addressed by
-// name, like a Discord DM. Sign-in is by one-time link only: from the CLI
-// (`thicket web link`), the startup log on a fresh install, or a sprig in a
-// Discord DM.
+// name, like a Discord DM. Sign-in is by username and password, single
+// sign-on (OIDC), an invite, or a one-time link: from the CLI (`thicket web
+// link`), the startup log on a fresh install, or a sprig in a Discord DM
+// (see accounts.go). Each person sees the shared sprigs and their own.
 package web
 
 import (
@@ -68,9 +69,16 @@ type Adapter struct {
 	Status func(ctx context.Context, admin bool) Status
 	// SecureCookies forces the Secure flag (set when PublicURL is https).
 	SecureCookies bool
+	// Pin pins or unpins the conversation message behind a web message,
+	// returning what to tell the user (the engine's PinWebMessage).
+	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)
+	// OIDC is the single sign-on provider, if one is configured.
+	OIDC *OIDCLogin
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration
+
+	onDelete func(ctx context.Context, d channel.Deletion)
 
 	running atomic.Bool
 	mu      sync.RWMutex
@@ -83,6 +91,7 @@ type Adapter struct {
 	stopped  chan struct{}
 	stopOnce sync.Once
 
+	users        userThrottle
 	loginMu      sync.Mutex
 	loginFails   int // failed redemptions in this window
 	loginPending int // admitted attempts still being redeemed
@@ -153,17 +162,27 @@ func parseChat(chatID string) (int64, string, bool) {
 }
 
 func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, text string) error {
+	_, err := a.SendIDs(ctx, chatID, p, text)
+	return err
+}
+
+// SendIDs posts a sprig's message and returns its id.
+func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
 	uid, _, ok := parseChat(chatID)
 	if !ok {
-		return fmt.Errorf("web: bad chat id %q", chatID)
+		return nil, fmt.Errorf("web: bad chat id %q", chatID)
 	}
 	m, err := a.DB.AddWebMessage(ctx, uid, store.WebMessage{ChatID: chatID, Role: "assistant", Character: p.ID, Content: text})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	a.publish(uid, Event{Type: "message", Chat: chatID, Message: &m})
-	return nil
+	return []string{strconv.FormatInt(m.ID, 10)}, nil
 }
+
+// OnDelete registers what to call when someone deletes a message in the
+// app. Call it before Run.
+func (a *Adapter) OnDelete(f func(ctx context.Context, d channel.Deletion)) { a.onDelete = f }
 
 func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Persona, text string) (string, error) {
 	u, err := a.DB.UserByExternal(ctx, ChannelName, userID)
@@ -249,6 +268,7 @@ func (a *Adapter) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /{$}", index)
 	mux.HandleFunc("GET /login", index)
+	mux.HandleFunc("GET /invite", index)
 	mux.HandleFunc("GET /c/{chat}", index)
 	mux.HandleFunc("GET /app/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -265,11 +285,21 @@ func (a *Adapter) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /api/login", a.login)
+	mux.HandleFunc("GET /api/auth", a.authOptions)
+	mux.HandleFunc("POST /api/invite/check", a.inviteInfo)
+	mux.HandleFunc("POST /api/invite", a.redeemInvite)
+	mux.HandleFunc("POST /api/oidc/start", a.oidcStart)
+	mux.HandleFunc("GET /auth/oidc/callback", a.oidcCallback)
+	mux.HandleFunc("GET /api/account", a.auth(a.account))
+	mux.HandleFunc("POST /api/account/password", a.auth(a.changePassword))
+	mux.HandleFunc("DELETE /api/account/sessions/{id}", a.auth(a.revokeSession))
 	mux.HandleFunc("POST /api/logout", a.auth(a.logout))
 	mux.HandleFunc("GET /api/me", a.auth(a.me))
 	mux.HandleFunc("GET /api/sprigs/{id}", a.auth(a.sprig))
 	mux.HandleFunc("GET /api/chats/{chat}/messages", a.auth(a.messages))
 	mux.HandleFunc("POST /api/chats/{chat}/messages", a.auth(a.post))
+	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
+	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
 	return securityHeaders(mux)
 }
@@ -339,10 +369,16 @@ func (a *Adapter) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Token string `json:"token"`
+		Token    string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || body.Token == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || (body.Token == "" && body.Username == "") {
 		writeErr(w, http.StatusBadRequest, "missing token")
+		return
+	}
+	if body.Token == "" {
+		a.passwordLogin(w, r, strings.TrimSpace(body.Username), body.Password)
 		return
 	}
 	ctx := r.Context()
@@ -369,15 +405,10 @@ func (a *Adapter) login(w http.ResponseWriter, r *http.Request) {
 		}
 		uid = u.ID
 	}
-	token, err := a.DB.CreateWebSession(ctx, uid, r.UserAgent(), SessionTTL)
-	if err != nil {
+	if err := a.startSession(w, r, uid, "link"); err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", MaxAge: int(SessionTTL.Seconds()),
-		HttpOnly: true, Secure: a.secure(r), SameSite: http.SameSiteLaxMode})
-	a.Log.Info("web sign-in", "user", uid)
-	_ = a.DB.LogActivity(ctx, store.Activity{Level: "info", Kind: "system", UserID: uid, Summary: "signed in to the web app"})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -453,7 +484,7 @@ func abilities(c *character.Character) []string {
 func (a *Adapter) sprigViews(ctx context.Context, u *store.User) []sprigView {
 	counts, _ := a.DB.CountMemories(ctx, u.ID)
 	var out []sprigView
-	for _, c := range a.Chars.All() {
+	for _, c := range a.Chars.For(u.ID) { // shared sprigs and their own
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), FullName: c.Name, Role: c.Role, Color: c.Color, Avatar: a.avatarURL(c),
 			Host: c.Host, Traits: c.Personality.Traits, Abilities: abilities(c), Memories: counts[c.ID],
 			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours}
@@ -504,7 +535,7 @@ type routineView struct {
 func (a *Adapter) sprig(w http.ResponseWriter, r *http.Request, u *store.User) {
 	ctx := r.Context()
 	c, ok := a.Chars.Get(r.PathValue("id"))
-	if !ok {
+	if !ok || !c.UsableBy(u.ID) {
 		writeErr(w, http.StatusNotFound, "no such sprig")
 		return
 	}
@@ -536,8 +567,8 @@ func (a *Adapter) chatFor(u *store.User, chatID string) (string, bool) {
 	if sprig == roomID {
 		return "", true
 	}
-	_, exists := a.Chars.Get(sprig)
-	return sprig, exists
+	c, exists := a.Chars.Get(sprig)
+	return sprig, exists && c.UsableBy(u.ID)
 }
 
 func (a *Adapter) messages(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -598,6 +629,67 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig}
 	go h(runCtx, in) // the turn outlives this request
 	writeJSON(w, http.StatusOK, map[string]any{"message": m})
+}
+
+// deleteMessage deletes a message from a chat and from the conversation
+// sprigs see.
+func (a *Adapter) deleteMessage(w http.ResponseWriter, r *http.Request, u *store.User) {
+	chatID := r.PathValue("chat")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	done, err := a.DB.DeleteWebMessage(r.Context(), chatID, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !done {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	a.publish(u.ID, Event{Type: "deleted", Chat: chatID, ID: id})
+	if a.onDelete != nil {
+		a.onDelete(r.Context(), channel.Deletion{Channel: ChannelName, ChatID: chatID, MessageIDs: []string{strconv.FormatInt(id, 10)}})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// pinMessage pins or unpins a message for the rest of its conversation.
+func (a *Adapter) pinMessage(w http.ResponseWriter, r *http.Request, u *store.User) {
+	chatID := r.PathValue("chat")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	var body struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if a.Pin == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pinning isn't available")
+		return
+	}
+	if _, err := a.DB.WebMessageByID(r.Context(), chatID, id); err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	note, err := a.Pin(r.Context(), u.ID, ChannelName+":"+chatID, strconv.FormatInt(id, 10), body.Pinned)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "couldn't change the pin")
+		return
+	}
+	m, err := a.DB.WebMessageByID(r.Context(), chatID, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pinned": m.Pinned, "note": note})
 }
 
 func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -40,6 +40,8 @@ type turn struct {
 	budgetChars int
 	// userMsgID is the stored message this turn answers (0 if none).
 	userMsgID int64
+	// mix is what the last prompt built was made of (for spend reports).
+	mix llm.PromptMix
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -81,7 +83,8 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 
 	var reply string
 	for i := 0; ; i++ {
-		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine}
+		mix := t.mix
+		req := llm.Request{Model: model, Messages: msgs, Tools: defs, MaxTokens: 1200, PDFEngine: pdfEngine, Mix: &mix}
 		if i >= maxModelCallsPerTurn-1 || t.toolCalls >= maxToolCallsPerTurn {
 			// Out of budget for tools: force a final answer.
 			req.Tools = nil
@@ -104,6 +107,7 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 				return "", err
 			}
 			req.Messages = msgs
+			mix = t.mix
 			resp, err = e.LLM.Chat(ctx, req)
 		}
 		if err != nil && llm.HasMedia(req.Messages) && llm.MediaRejected(err) && ctx.Err() == nil {
@@ -161,12 +165,21 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		return nil, err
 	}
 	var history []store.Message
-	summary := ""
+	summary, pinned := "", ""
 	if t.conv != nil {
 		if history, err = e.DB.MessagesAfter(ctx, t.conv.ID, t.conv.SummaryUpto, historyLoadLimit); err != nil {
 			return nil, err
 		}
-		history, _ = fitHistory(history, e.historyBudget(ctx, t), t.userMsgID)
+		pins, err := e.DB.PinnedMessages(ctx, t.conv.ID)
+		if err != nil {
+			return nil, err
+		}
+		// Pinned messages that would fall out of the history are shown on
+		// their own, and take their room from the history budget.
+		budget := e.historyBudget(ctx, t)
+		pinned = e.pinnedBlock(pins, nil)
+		history, _ = fitHistory(history, max(budget-len(pinned), minHistoryChars), t.userMsgID)
+		pinned = e.pinnedBlock(pins, history)
 		summary = t.conv.Summary
 	}
 	query := t.query + " " + event
@@ -186,13 +199,19 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	sys := buildSystemPrompt(promptInput{
 		skills: skills,
-		char:   t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
+		char:   t.char, user: t.user, roster: e.Chars.For(t.user.ID), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
 	})
 	msgs := []llm.Message{{Role: "system", Content: sys}}
+	t.mix = llm.PromptMix{}
 	if summary != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
+		t.mix.HistoryChars += len(msgs[len(msgs)-1].Content)
+	}
+	if pinned != "" {
+		msgs = append(msgs, llm.Message{Role: "user", Content: pinned})
+		t.mix.HistoryChars += len(pinned)
 	}
 	for i, h := range history {
 		// The message this turn answers, tracked by id: a notice added to
@@ -232,6 +251,16 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 			msgs = append(msgs, llm.Message{Role: "user", Content: documentMessage(h.Content)})
 		case h.Role == "event":
 			msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + content})
+		default:
+			continue
+		}
+		// What this turn answers isn't history; everything before it is
+		// re-sent with each reply.
+		switch n := len(msgs[len(msgs)-1].Content); {
+		case h.Role == "document":
+			t.mix.DocumentChars += n
+		case !origin:
+			t.mix.HistoryChars += n
 		}
 	}
 	if t.jobMode() {
@@ -315,6 +344,8 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 		t.done = append(t.done, tool.Label())
 	}
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, e.Secrets.Redact(truncate(string(args), 500)+" → "+truncate(out, 500)))
+	// Tool output goes back to the model: no secret values in it.
+	out = e.Secrets.Redact(out)
 	if tool.Untrusted {
 		return wrapUntrusted(name, out)
 	}

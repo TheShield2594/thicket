@@ -26,7 +26,8 @@ func TestCostsReport(t *testing.T) {
 	}
 	defer db.Close()
 	for _, u := range []store.Usage{
-		{Character: "juniper", Origin: llm.OriginTask, Purpose: "chat", Model: "anthropic/claude-sonnet-5.5", PromptTokens: 12000, CompletionTokens: 800, CostUSD: 0.5},
+		{Character: "juniper", Origin: llm.OriginTask, Purpose: "chat", Model: "anthropic/claude-sonnet-5.5", PromptTokens: 12000, CompletionTokens: 800, CostUSD: 0.5,
+			PromptChars: 40000, HistoryChars: 30000, DocumentChars: 4000},
 		{Character: "juniper", Origin: llm.OriginHeartbeat, Purpose: "job", Model: "anthropic/claude-sonnet-5.5", CostUSD: 0.25},
 		{Character: "pip", Origin: llm.OriginHeartbeat, Purpose: "proactive", Model: "anthropic/claude-haiku-5.5", CostUSD: 1},
 	} {
@@ -39,7 +40,8 @@ func TestCostsReport(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{"$1.7500 over 3 calls", "12k tokens in", "of the $2.00 cap (88%): over 80%",
-		"pip  $1.0000  $0.0000  $1.0000", "juniper  $0.2500  $0.5000  $0.7500", "anthropic/claude-haiku-5.5"} {
+		"pip  $1.0000  $0.0000  $1.0000", "juniper  $0.2500  $0.5000  $0.7500", "anthropic/claude-haiku-5.5",
+		"Of $0.50 chat spend (1 model call measured), about 59% (≈$0.30) went on re-sending earlier conversation", "history_tokens is automatic"} {
 		if !strings.Contains(strings.Join(strings.Fields(s), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Errorf("missing %q in:\n%s", want, s)
 		}

@@ -34,6 +34,23 @@ type Adapter struct {
 	hooks    map[string]*discordgo.Webhook // parent channel id -> webhook
 	noHooks  map[string]time.Time          // channels where we lack permission, until when
 	chanInfo map[string]*discordgo.Channel
+	onDelete func(ctx context.Context, d channel.Deletion)
+}
+
+// OnDelete registers what to call when someone deletes messages. Call it
+// before Run.
+func (a *Adapter) OnDelete(f func(ctx context.Context, d channel.Deletion)) { a.onDelete = f }
+
+// ownHook reports whether a webhook id is one of ours (a sprig's post).
+func (a *Adapter) ownHook(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, h := range a.hooks {
+		if h.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func New(token string, listenChannels []string, log *slog.Logger) *Adapter {
@@ -85,6 +102,16 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		for _, att := range m.Attachments {
 			atts = append(atts, channel.Attachment{Name: att.Filename, URL: att.URL, ContentType: att.ContentType, Size: att.Size})
 		}
+		replyTo := ""
+		if m.MessageReference != nil && m.MessageReference.MessageID != "" &&
+			(m.MessageReference.Type == discordgo.MessageReferenceTypeDefault) {
+			replyTo = m.MessageReference.MessageID
+		}
+		// Replying to a sprig counts as speaking to it, as on Telegram.
+		if r := m.ReferencedMessage; r != nil && r.Author != nil && s.State != nil && s.State.User != nil &&
+			(r.Author.ID == s.State.User.ID || (r.WebhookID != "" && a.ownHook(r.WebhookID))) {
+			mentioned = true
+		}
 		name := m.Author.GlobalName
 		if name == "" {
 			name = m.Author.Username
@@ -93,9 +120,19 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 			Channel: "discord", ChatID: m.ChannelID, MessageID: m.ID,
 			UserID: m.Author.ID, UserName: name, Text: strings.TrimSpace(text),
 			IsDM: m.GuildID == "", Mentioned: mentioned, Listening: a.listen[m.ChannelID],
-			Attachments: atts,
+			Attachments: atts, ReplyTo: replyTo,
 		}
 		go h(ctx, in)
+	})
+	s.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageDelete) {
+		if a.onDelete != nil && m.Message != nil {
+			go a.onDelete(ctx, channel.Deletion{Channel: "discord", ChatID: m.ChannelID, MessageIDs: []string{m.ID}})
+		}
+	})
+	s.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageDeleteBulk) {
+		if a.onDelete != nil && len(m.Messages) > 0 {
+			go a.onDelete(ctx, channel.Deletion{Channel: "discord", ChatID: m.ChannelID, MessageIDs: m.Messages})
+		}
 	})
 	if err := s.Open(); err != nil {
 		return fmt.Errorf("%w (check DISCORD_TOKEN and that the Message Content intent is enabled)", err)
@@ -109,38 +146,50 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 var allowedMentions = &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers}}
 
 func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, text string) error {
+	_, err := a.SendIDs(ctx, chatID, p, text)
+	return err
+}
+
+// SendIDs posts text as a persona and returns the ids of the messages it
+// became.
+func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
 	if a.s == nil {
-		return fmt.Errorf("discord is not connected")
+		return nil, fmt.Errorf("discord is not connected")
 	}
 	ch := a.channel(chatID)
 	if ch != nil && ch.Type != discordgo.ChannelTypeDM && ch.Type != discordgo.ChannelTypeGroupDM {
 		// Only the part the webhook didn't deliver falls back to a bot
 		// message, so nothing is posted twice.
-		rest, err := a.sendWebhook(ch, p, text)
+		ids, rest, err := a.sendWebhook(ch, p, text)
 		if err == nil {
-			return nil
+			return ids, nil
 		}
 		a.log.Warn("webhook send failed, falling back to bot message", "channel", chatID, "err", err)
 		for _, part := range split(rest, 1900) {
-			if _, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{
+			m, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{
 				Content: "**" + p.Name + ":** " + part, AllowedMentions: allowedMentions,
-			}); err != nil {
-				return err
+			})
+			if err != nil {
+				return ids, err
 			}
+			ids = append(ids, m.ID)
 		}
-		return nil
+		return ids, nil
 	}
+	var ids []string
 	for _, part := range split(text, 4000) {
 		emb := &discordgo.MessageEmbed{
 			Author:      &discordgo.MessageEmbedAuthor{Name: p.Name, IconURL: p.AvatarURL},
 			Description: part,
 			Color:       p.Color,
 		}
-		if _, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{emb}, AllowedMentions: allowedMentions}); err != nil {
-			return err
+		m, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{emb}, AllowedMentions: allowedMentions})
+		if err != nil {
+			return ids, err
 		}
+		ids = append(ids, m.ID)
 	}
-	return nil
+	return ids, nil
 }
 
 func (a *Adapter) channel(id string) *discordgo.Channel {
@@ -165,33 +214,40 @@ func (a *Adapter) channel(id string) *discordgo.Channel {
 	return c
 }
 
-// sendWebhook posts text in chunks through the channel's webhook. On
-// failure it returns the text not yet delivered.
-func (a *Adapter) sendWebhook(ch *discordgo.Channel, p channel.Persona, text string) (string, error) {
+// sendWebhook posts text in chunks through the channel's webhook,
+// returning the posted message ids. On failure it also returns the text
+// not yet delivered.
+func (a *Adapter) sendWebhook(ch *discordgo.Channel, p channel.Persona, text string) ([]string, string, error) {
 	parent, thread := ch.ID, ""
 	if ch.IsThread() {
 		parent, thread = ch.ParentID, ch.ID
 	}
 	hook, err := a.webhook(parent)
 	if err != nil {
-		return text, err
+		return nil, text, err
 	}
 	parts := split(text, 1990)
+	var ids []string
 	for i, part := range parts {
 		params := &discordgo.WebhookParams{Content: part, Username: p.Name, AvatarURL: p.AvatarURL, AllowedMentions: allowedMentions}
+		var m *discordgo.Message
+		// wait=true: Discord returns the message, so it can be deleted later.
 		if thread != "" {
-			_, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, false, thread, params)
+			m, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, true, thread, params)
 		} else {
-			_, err = a.s.WebhookExecute(hook.ID, hook.Token, false, params)
+			m, err = a.s.WebhookExecute(hook.ID, hook.Token, true, params)
 		}
 		if err != nil {
 			a.mu.Lock()
 			delete(a.hooks, parent) // maybe deleted by a user; recreate next time
 			a.mu.Unlock()
-			return strings.Join(parts[i:], "\n"), err
+			return ids, strings.Join(parts[i:], "\n"), err
+		}
+		if m != nil {
+			ids = append(ids, m.ID)
 		}
 	}
-	return "", nil
+	return ids, "", nil
 }
 
 // noHookRetry is how long a missing-permission result is trusted before
@@ -254,6 +310,16 @@ func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Perso
 func (a *Adapter) Delete(ctx context.Context, chatID, messageID string) error {
 	if a.s == nil {
 		return fmt.Errorf("discord is not connected")
+	}
+	// A sprig's post in a server channel came through our webhook, which
+	// can delete it without the Manage Messages permission.
+	if ch := a.channel(chatID); ch != nil && !ch.IsThread() && ch.Type != discordgo.ChannelTypeDM && ch.Type != discordgo.ChannelTypeGroupDM {
+		a.mu.Lock()
+		hook := a.hooks[ch.ID]
+		a.mu.Unlock()
+		if hook != nil && a.s.WebhookMessageDelete(hook.ID, hook.Token, messageID) == nil {
+			return nil
+		}
 	}
 	return a.s.ChannelMessageDelete(chatID, messageID)
 }

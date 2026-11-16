@@ -34,8 +34,12 @@ var Known = []Key{
 	{"model_url", "where models run: OpenRouter's API, or a local OpenAI-compatible server such as http://192.168.1.20:11434/v1 (Ollama)", "url"},
 	{"web_search", "how sprigs with the web scope search: auto, openrouter (OpenRouter's web search, about $0.02 a search), searxng (your own SearXNG at search_url), or off", "choice"},
 	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
+	{"document_chars", "how much of a PDF's text is kept for follow-up questions, in characters (0 = none, at most 100000); it's re-sent with every later reply in the conversation", "int"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
 }
+
+// intMax caps "int" settings that have an upper limit.
+var intMax = map[string]int{"document_chars": 100000}
 
 // choices lists the allowed values of "choice" settings.
 var choices = map[string][]string{
@@ -77,6 +81,7 @@ func (s *Settings) defaults() map[string]string {
 		"web_search":         "auto",
 		"search_url":         s.cfg.SearchURL,
 		"history_tokens":     "0",
+		"document_chars":     "20000",
 		"model_url":          s.cfg.ModelURL,
 	}
 }
@@ -138,6 +143,9 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 {
 			return fmt.Errorf("%s needs a non-negative whole number", name)
+		}
+		if lim, ok := intMax[name]; ok && n > lim {
+			return fmt.Errorf("%s can be at most %d", name, lim)
 		}
 	case "bool":
 		b, err := strconv.ParseBool(value)

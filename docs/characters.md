@@ -80,6 +80,7 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `initiative.quiet_hours` | | `"22:00-08:00"` in your timezone: no proactive messages then. |
 | `model` | | Override the chat model for this sprig (an OpenRouter model id). |
 | `created_by` | | Informational. |
+| `belongs_to` | | A Thicket user id (`thicket user list`): the sprig is that person's own, and only they can talk to it, see it in the web app or its dashboard card, or hand work to it. Leave it off (the default) for a sprig everyone shares. The host is always shared. Ask Juni for a "private" sprig and she sets it to you. |
 
 Unknown fields are an error, so typos don't silently do nothing.
 

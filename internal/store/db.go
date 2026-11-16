@@ -29,6 +29,19 @@ type Store struct {
 	db   *sql.DB
 	path string
 	now  func() time.Time
+	// scrub removes secret values from text before it's written to the
+	// trail, conversations, the inbox and run history (set by the app).
+	scrub func(string) string
+}
+
+// SetScrubber sets what removes secrets from stored text.
+func (s *Store) SetScrubber(f func(string) string) { s.scrub = f }
+
+func (s *Store) clean(text string) string {
+	if s.scrub == nil || text == "" {
+		return text
+	}
+	return s.scrub(text)
 }
 
 // Open opens (creating if needed) the database at path and applies any

@@ -262,7 +262,7 @@ func (e *Engine) CheckIns(ctx context.Context) {
 			continue
 		}
 		var char *character.Character
-		for _, c := range e.Chars.All() {
+		for _, c := range e.Chars.For(u.ID) {
 			if c.Initiative.CheckIns && !e.quiet(c, &u) {
 				char = c
 				break

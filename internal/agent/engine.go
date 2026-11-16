@@ -102,6 +102,9 @@ func (e *Engine) AddChannel(c channel.Channel) {
 		e.channels = map[string]channel.Channel{}
 	}
 	e.channels[c.Name()] = c
+	if w, ok := c.(channel.DeleteWatcher); ok {
+		w.OnDelete(e.HandleDeleted)
+	}
 }
 
 func (e *Engine) Channels() map[string]channel.Channel { return e.channels }
@@ -160,6 +163,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	user, err := e.resolveUser(ctx, in)
 	if err != nil || user == nil {
 		return err
+	}
+	// Someone else's sprig: as if no sprig was named.
+	if addressed != nil && !addressed.UsableBy(user.ID) {
+		addressed, rest = nil, in.Text
+		if !in.IsDM && !in.Mentioned && !in.Listening {
+			return nil
+		}
 	}
 	_ = e.DB.TouchUser(ctx, user.ID)
 	// Proactive messages go to the app the user last wrote from (never
@@ -230,7 +240,11 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
-	// 3. No model yet: scripted first-run setup.
+	// 3. Pin and delete commands ("pin this", "delete that").
+	if handled, err := e.handleMessageCommand(ctx, in, user, typed, addressed); handled || err != nil {
+		return err
+	}
+	// 4. No model yet: scripted first-run setup.
 	if !e.ModelReady(ctx) {
 		return e.bootstrap(ctx, in, user, host)
 	}
@@ -249,10 +263,10 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	char := host
 	if addressed != nil {
 		char = addressed
-	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" {
+	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user.ID) {
 		char = c // a per-sprig web thread
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
-		if c, ok := e.Chars.Get(id.(string)); ok {
+		if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user.ID) {
 			char = c
 		}
 	}
@@ -265,6 +279,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	msgID, err := e.DB.AddMessageID(ctx, conv.ID, "user", "", in.Text)
 	if err != nil {
 		return err
+	}
+	if in.MessageID != "" {
+		_ = e.DB.AddMessageRefs(ctx, msgID, in.ChatRef(), in.MessageID)
 	}
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
@@ -287,8 +304,11 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	var sendErr error
 	if reply != "" {
-		if sendErr = e.send(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
-			_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", t.char.ID, reply)
+		var ids []string
+		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
+			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
+				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
+			}
 		}
 	}
 	// Approval prompts go out even if the reply failed. An approval is
@@ -327,13 +347,13 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	// In the commons, @mentioning another sprig hands over to it.
 	if t.handoff == nil && reply != "" && e.isCommons(t.chatRef) {
-		if c := e.mentionedSprig(reply, t.char); c != nil {
+		if c := e.mentionedSprig(reply, t.char); c != nil && c.UsableBy(t.user.ID) {
 			t.handoff = &handoffReq{to: c.ID, message: truncate(reply, 500)}
 		}
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
-		if !ok {
+		if !ok || !target.UsableBy(t.user.ID) {
 			return nil
 		}
 		e.logActivity(ctx, "info", "handoff", t.char.ID, t.user.ID, fmt.Sprintf("%s handed off to %s", t.char.DisplayName(), target.DisplayName()), h.message)
@@ -505,7 +525,22 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 	if ch == nil {
 		return fmt.Errorf("no channel %q", name)
 	}
-	return ch.Send(ctx, id, e.persona(c), text)
+	return ch.Send(ctx, id, e.persona(c), e.Secrets.Redact(text))
+}
+
+// sendIDs is send, also returning the chat app's ids for what was posted
+// (none if the channel can't say).
+func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Character, text string) ([]string, error) {
+	name, id := splitRef(chatRef)
+	ch := e.channels[name]
+	if ch == nil {
+		return nil, fmt.Errorf("no channel %q", name)
+	}
+	text = e.Secrets.Redact(text)
+	if p, ok := ch.(channel.Poster); ok {
+		return p.SendIDs(ctx, id, e.persona(c), text)
+	}
+	return nil, ch.Send(ctx, id, e.persona(c), text)
 }
 
 // sendToUser posts proactively in the user's DMs and records it in that
@@ -525,6 +560,7 @@ func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
 	}
+	text = e.Secrets.Redact(text)
 	chatID, err := ch.SendDirect(ctx, u.ExternalID, e.persona(c), text)
 	if err != nil {
 		return err

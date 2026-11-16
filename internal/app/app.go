@@ -18,6 +18,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/api"
+	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
@@ -95,9 +96,6 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	}
 	log := NewLogger(cfg.LogLevel, out, red)
 	a := &App{Cfg: cfg, Version: version, Log: log}
-	if opts.Channels != nil {
-		a.channels = opts.Channels(log)
-	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
@@ -107,8 +105,11 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		return nil, fmt.Errorf("database: %w", err)
 	}
 	a.DB = db
+	// Whatever is written to the trail, conversations, the inbox and run
+	// history passes through the redactor first.
+	db.SetScrubber(red.Redact)
 
-	key, err := secrets.LoadKey(cfg.SecretKey, cfg.DataDir)
+	key, _, err := secrets.ResolveKey(cfg.SecretKey, cfg.SecretKeyFile, cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -116,12 +117,19 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	if err != nil {
 		return nil, err
 	}
-	sec.SetEnvFallback(secrets.OpenRouterKey, cfg.OpenRouterKey)
 	if err := sec.WarmRedactor(ctx); err != nil {
-		a.startErr("Some stored secrets couldn't be decrypted (" + err.Error() + "). Did THICKET_SECRET_KEY or secret.key change?")
+		a.startErr("Some stored secrets couldn't be decrypted (" + err.Error() + "). Did THICKET_SECRET_KEY, THICKET_SECRET_KEY_FILE or secret.key change?")
 		log.Error("secrets", "err", err)
 	}
 	a.Secrets = sec
+	a.importEnvSecrets(ctx)
+	// Chat apps start with the stored tokens (the environment's, if it
+	// still has them, were just stored).
+	cfg.DiscordToken = a.storedToken(ctx, secrets.DiscordToken, cfg.DiscordToken)
+	cfg.TelegramToken = a.storedToken(ctx, secrets.TelegramToken, cfg.TelegramToken)
+	if opts.Channels != nil {
+		a.channels = opts.Channels(log)
+	}
 	a.Settings = settings.New(db, cfg)
 
 	a.Chars = character.NewRegistry(cfg.CharactersDir, db, log)
@@ -139,7 +147,6 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		return nil, errors.New("no host character could be loaded; fix or delete the files in " + cfg.CharactersDir + " (Juniper is recreated if juniper.md is missing)")
 	}
 
-	sec.SetEnvFallback(secrets.ModelAPIKey, cfg.ModelAPIKey)
 	// The address and key are read per call: onboarding can switch to a
 	// local server, and keys added in chat apply at once.
 	or := llm.NewOpenRouter(cfg.ModelURL, func(ctx context.Context, base string) (string, error) {
@@ -174,7 +181,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	if opts.Model != nil {
 		router.Backoff = time.Millisecond
 	}
-	a.Guard = &budget.Guard{Next: router, DB: db, Settings: a.Settings, Log: log,
+	a.Guard = &budget.Guard{Next: redactingModel{next: router, red: red}, DB: db, Settings: a.Settings, Log: log,
 		OnAlert: func(ctx context.Context, al budget.Alert) {
 			a.Engine.Notify(ctx, al.Key, 31*24*time.Hour, al.Level, al.Message)
 		}}
@@ -186,6 +193,8 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
+	a.Web.Pin = a.Engine.PinWebMessage
+	a.Web.OIDC = a.oidcLogin(ctx)
 	a.channels = append(a.channels, a.Web)
 	for _, ch := range a.channels {
 		a.Engine.AddChannel(ch)
@@ -204,7 +213,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
 		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft,
-		SessionTTL: web.SessionTTL,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {
@@ -221,6 +230,83 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		})
 	}
 	return a, nil
+}
+
+// importEnvSecrets stores keys and tokens given in the environment, so
+// they can be taken out of the compose file.
+func (a *App) importEnvSecrets(ctx context.Context) {
+	var items []secrets.EnvSecret
+	envOf := map[string]string{}
+	for _, e := range a.Cfg.EnvSecrets() {
+		items = append(items, secrets.EnvSecret{Name: e.Name, Env: e.Env, Value: e.Value})
+		envOf[e.Name] = e.Env
+	}
+	changed, err := a.Secrets.ImportEnv(ctx, items)
+	if err != nil {
+		a.Log.Error("couldn't store secrets from the environment; using them from there", "err", err)
+	}
+	for _, n := range changed {
+		a.Log.Info("stored "+envOf[n]+" encrypted", "secret", n)
+	}
+	for _, it := range items {
+		if strings.TrimSpace(it.Value) != "" {
+			a.Log.Warn(it.Env+" is stored encrypted; you can remove it from your compose file or environment (Thicket reads it from the store from now on, and a value set there still wins at startup)", "secret", it.Name)
+		}
+	}
+}
+
+// oidcLogin sets up single sign-on if the issuer, client id and secret
+// are stored (from THICKET_OIDC_* or `thicket secrets set oidc_...`).
+func (a *App) oidcLogin(ctx context.Context) *web.OIDCLogin {
+	get := func(n string) string { v, _ := a.Secrets.Get(ctx, n); return strings.TrimSpace(v) }
+	iss, id, secret := strings.TrimRight(get("oidc_issuer"), "/"), get("oidc_client_id"), get("oidc_client_secret")
+	if iss == "" && id == "" && secret == "" {
+		return nil
+	}
+	if iss == "" || id == "" || secret == "" {
+		a.startErr("Single sign-on is half set up: it needs the issuer, client id and client secret (THICKET_OIDC_ISSUER, _CLIENT_ID, _CLIENT_SECRET).")
+		return nil
+	}
+	if !strings.HasPrefix(a.Cfg.PublicURL, "https://") && !strings.HasPrefix(a.Cfg.PublicURL, "http://") {
+		a.startErr("Single sign-on needs THICKET_PUBLIC_URL (the address people open Thicket at), for the provider to send them back to.")
+		return nil
+	}
+	c := a.Cfg
+	gated := c.OIDCAdminGroup != "" || c.OIDCMemberGroup != ""
+	scopes := c.OIDCScopes
+	if len(scopes) == 0 {
+		scopes = []string{"openid", "email", "profile"}
+		if gated {
+			scopes = append(scopes, "groups")
+		}
+	}
+	var wanted []string
+	if gated {
+		wanted = []string{c.OIDCGroupsClaim}
+	}
+	name := c.OIDCName
+	if name == "" {
+		name = "single sign-on"
+	}
+	a.Log.Info("single sign-on is on", "issuer", iss)
+	return &web.OIDCLogin{
+		Provider: auth.NewProvider(auth.OIDCConfig{Issuer: iss, ClientID: id, ClientSecret: secret,
+			RedirectURL: c.PublicURL + "/auth/oidc/callback", Scopes: scopes, Wanted: wanted}),
+		Name: name, GroupsClaim: c.OIDCGroupsClaim, AdminGroup: c.OIDCAdminGroup, MemberGroup: c.OIDCMemberGroup,
+	}
+}
+
+// storedToken reads a chat token from the store, falling back to the
+// environment's value.
+func (a *App) storedToken(ctx context.Context, name, env string) string {
+	v, err := a.Secrets.Get(ctx, name)
+	if err != nil {
+		if !errors.Is(err, secrets.ErrNotFound) {
+			a.startErr("The stored " + name + " can't be read (" + err.Error() + ").")
+		}
+		return env
+	}
+	return v
 }
 
 // Avatar draws a sprig's avatar; state "" means what it's doing now.
@@ -283,6 +369,10 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 			c.Detail = "not connected (run thicket doctor for details)"
 		}
 		out["mcp."+name] = c
+	}
+	for k, c := range out { // /health is public
+		c.Detail = a.Secrets.Redact(c.Detail)
+		out[k] = c
 	}
 	return out
 }

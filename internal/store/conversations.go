@@ -28,6 +28,9 @@ type Message struct {
 	Character      string
 	Content        string
 	CreatedAt      time.Time
+	// Pinned messages stay in every reply's context for the rest of the
+	// conversation, even once older messages are summarised.
+	Pinned bool
 }
 
 // OpenConversation returns the user's current conversation in a chat, or
@@ -65,7 +68,7 @@ func (s *Store) AddMessage(ctx context.Context, convID int64, role, character, c
 func (s *Store) AddMessageID(ctx context.Context, convID int64, role, character, content string) (int64, error) {
 	now := s.unix()
 	res, err := s.db.ExecContext(ctx, "INSERT INTO messages (conversation_id, role, character, content, created_at) VALUES (?, ?, ?, ?, ?)",
-		convID, role, character, content, now)
+		convID, role, character, s.clean(content), now)
 	if err != nil {
 		return 0, err
 	}
@@ -74,11 +77,9 @@ func (s *Store) AddMessageID(ctx context.Context, convID int64, role, character,
 	return id, err
 }
 
-// OldestMessagesAfter returns up to limit messages with an id above
-// afterID, oldest first: a contiguous run right after afterID.
-func (s *Store) OldestMessagesAfter(ctx context.Context, convID, afterID int64, limit int) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, role, character, content, created_at FROM messages
-		WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?`, convID, afterID, limit)
+const messageCols = "id, conversation_id, role, character, content, created_at, pinned"
+
+func scanMessages(rows *sql.Rows, err error) ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +88,7 @@ func (s *Store) OldestMessagesAfter(ctx context.Context, convID, afterID int64, 
 	for rows.Next() {
 		var m Message
 		var at int64
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at, &m.Pinned); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = time.Unix(at, 0)
@@ -96,53 +97,30 @@ func (s *Store) OldestMessagesAfter(ctx context.Context, convID, afterID int64, 
 	return out, rows.Err()
 }
 
+// OldestMessagesAfter returns up to limit messages with an id above
+// afterID, oldest first: a contiguous run right after afterID.
+func (s *Store) OldestMessagesAfter(ctx context.Context, convID, afterID int64, limit int) ([]Message, error) {
+	return scanMessages(s.db.QueryContext(ctx, "SELECT "+messageCols+` FROM messages
+		WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?`, convID, afterID, limit))
+}
+
 // RecentMessages returns up to limit most recent messages, oldest first.
 func (s *Store) RecentMessages(ctx context.Context, convID int64, limit int) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, role, character, content, created_at FROM
-		(SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Message
-	for rows.Next() {
-		var m Message
-		var at int64
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at); err != nil {
-			return nil, err
-		}
-		m.CreatedAt = time.Unix(at, 0)
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return scanMessages(s.db.QueryContext(ctx, "SELECT "+messageCols+` FROM
+		(SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convID, limit))
 }
 
 // MessagesAfter returns up to limit of the newest messages with an id
 // above afterID, oldest first.
 func (s *Store) MessagesAfter(ctx context.Context, convID, afterID int64, limit int) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, role, character, content, created_at FROM
-		(SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convID, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Message
-	for rows.Next() {
-		var m Message
-		var at int64
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at); err != nil {
-			return nil, err
-		}
-		m.CreatedAt = time.Unix(at, 0)
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return scanMessages(s.db.QueryContext(ctx, "SELECT "+messageCols+` FROM
+		(SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convID, afterID, limit))
 }
 
 // SetSummary stores a conversation's new summary, only if nobody else
 // moved it since prevUpto (false otherwise).
 func (s *Store) SetSummary(ctx context.Context, convID int64, summary string, upto, prevUpto int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ? AND summary_upto = ?", summary, upto, convID, prevUpto)
+	res, err := s.db.ExecContext(ctx, "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ? AND summary_upto = ?", s.clean(summary), upto, convID, prevUpto)
 	if err != nil {
 		return false, err
 	}

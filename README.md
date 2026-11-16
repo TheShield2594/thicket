@@ -88,13 +88,40 @@ an app on phones and desktops (Add to Home Screen / Install), works in
 light and dark, and can notify you when a sprig writes while it's in the
 background.
 
-Sign-in is by one-time link; there are no passwords:
+### Signing in
 
-- **From Discord:** DM Juni "send me a web app link". The link is posted by
-  Thicket itself and never passes through the model.
-- **From the server:** `docker compose exec thicket thicket web link`.
-- **Fresh install without Discord:** the link is printed in the container
-  logs on startup. Whoever opens it first becomes the owner.
+Three ways, all ending in the same 30-day session (90 days at most):
+
+- **Username and password.** The owner adds people with
+  `thicket user add kim` (or `--user ID` to give someone already on
+  Discord or Telegram a login), or makes an invite link on the dashboard
+  or with `thicket user invite`: the person opens it and chooses a
+  username and password. Anyone signed in can set or change their own
+  password with the key button by their name; changing it signs out
+  their other sessions. Passwords are hashed with argon2id; five wrong
+  ones lock that username for 15 minutes.
+- **Single sign-on (optional).** Any OpenID Connect provider: Authentik,
+  Authelia, Keycloak, Google. Set `THICKET_OIDC_ISSUER`,
+  `THICKET_OIDC_CLIENT_ID` and `THICKET_OIDC_CLIENT_SECRET` (stored
+  encrypted on start, like the chat tokens) and `THICKET_PUBLIC_URL`, and
+  register `<public url>/auth/oidc/callback` as the redirect URI. People
+  are matched by their account at the provider, else by a verified email
+  you've given them (`thicket user email ID ADDRESS`), else by the invite
+  they came with. Set `THICKET_OIDC_MEMBER_GROUP` and/or
+  `THICKET_OIDC_ADMIN_GROUP` to let anyone in those groups in (their role
+  follows the group; the owner's never changes) and keep everyone else
+  out.
+- **One-time link**, as before:
+  - **From Discord:** DM Juni "send me a web app link". The link is posted by
+    Thicket itself and never passes through the model.
+  - **From the server:** `docker compose exec thicket thicket web link`.
+  - **Fresh install without Discord:** the link is printed in the container
+    logs on startup. Whoever opens it first becomes the owner.
+
+Each person sees the shared sprigs and their own: a sprig with
+`belongs_to` set ([details](docs/characters.md#fields)) is invisible to
+everyone else, in the web app, the dashboard and chat. See and sign out
+your sessions under the key button or on the dashboard.
 
 Your web account *is* your Discord account when you sign in through a
 link from Discord or as the owner, so sprigs remember the same things in
@@ -132,7 +159,7 @@ cookies (`Secure` over HTTPS).
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
   logs. Images are seen for that reply only. A PDF's text (its first
-  20,000 characters) is kept for follow-up questions until the
+  20,000 characters, the `document_chars` setting) is kept for follow-up questions until the
   conversation goes quiet; text files stay in the conversation like any
   message. Other files (Word documents, for example) are passed on by
   name only.
@@ -171,6 +198,19 @@ cookies (`Secure` over HTTPS).
   sprig is working: it stops at once, tells you anything it had already
   done, and sets aside messages you sent in the meantime. With no reply
   running, "stop" stops your running jobs.
+- Pin what matters: reply to a message with **pin this** (or say **pin
+  that** for the latest one) and it stays in every reply's context for the
+  rest of the conversation, even after older messages are summarised (up
+  to 10 pins). **What's pinned?**, **unpin this** and **unpin all** do what
+  they say. Pins end with the conversation; for anything longer, ask a
+  sprig to remember it.
+- Take things back: reply to a message with **forget this** and it's gone
+  from the conversation sprigs see (a sprig's message is deleted from the
+  chat too). **Delete that** deletes the sprig's last message. Deleting
+  your own message in Discord or the web app does the same; Telegram
+  doesn't tell bots about deletions, so reply "forget this" there. Plain
+  "forget that" is still about memories. The web app has pin and delete
+  buttons on every message.
 
 ## Configuration
 
@@ -179,8 +219,8 @@ by asking Juni (as the owner), and the chat value wins.
 
 | Variable | Default | |
 |---|---|---|
-| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only |
-| `TELEGRAM_TOKEN` | | Telegram bot token ([details](docs/telegram.md)) |
+| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only. Stored encrypted on first start, so you can then remove it ([details](docs/operations.md#secrets)) |
+| `TELEGRAM_TOKEN` | | Telegram bot token ([details](docs/telegram.md)); stored like `DISCORD_TOKEN` |
 | `THICKET_OWNER_DISCORD_ID` | first DM | your Discord user id |
 | `THICKET_OWNER_TELEGRAM_ID` | first DM | your numeric Telegram user id |
 | `THICKET_ALLOWED_USERS` | | comma-separated user ids allowed in, plain or as `telegram:ID` / `discord:ID` (or ask Juni to invite someone) |
@@ -198,9 +238,15 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DAILY_BUDGET_USD` *chat* | `2` | daily spend cap (0 = none) |
 | `THICKET_MONTHLY_BUDGET_USD` *chat* | `30` | monthly spend cap (0 = none) |
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
+| `THICKET_OIDC_ISSUER`, `THICKET_OIDC_CLIENT_ID`, `THICKET_OIDC_CLIENT_SECRET` | | single sign-on ([details](#signing-in)); stored encrypted on first start |
+| `THICKET_OIDC_NAME` | `single sign-on` | the button's label, e.g. `Authentik` |
+| `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
+| `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
+| `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
+| `document_chars` *chat only* | `20000` | how much of a PDF's text is kept for follow-up questions (0 = none); it's re-sent with every later reply |
 | `THICKET_MESSAGE_RETENTION` | `720h` (30 days) | how long raw chat history is kept after review |
 | `THICKET_DATA_DIR` | `/data` (Docker) | database, characters, backups |
 | `THICKET_HTTP_ADDR` | `:8080` | the web app, `/dashboard`, `/health`, `/avatars/`, `/hooks/` and `/api/v1/` |

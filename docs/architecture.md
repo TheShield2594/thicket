@@ -51,7 +51,8 @@ internal/avatar      parametric SVG avatars with CSS-animated states
      to the message. After the reply, each PDF's text (from the parse
      annotations, or a parse-only call to the cheap model when the model
      read it natively) is stored as a `document` message, capped at
-     20,000 characters, so follow-up turns can use it. Memory review
+     `document_chars` (default 20,000; 0 keeps none and skips the parse
+     call), so follow-up turns can use it. Memory review
      skips documents. A model that refuses images or PDFs gets the turn
      again without them.
 3. The turn: system prompt (identity, voice, roster, relevant memories,
@@ -75,6 +76,67 @@ internal/avatar      parametric SVG avatars with CSS-animated states
    messages verbatim. Raw messages stay for memory review. A failed
    summary just lets old messages drop out, and isn't retried for 10
    minutes. A handoff then runs the next sprig's turn (at most 2 deep).
+
+## Secrets
+
+`internal/secrets` encrypts values under the master key (`ResolveKey`:
+`THICKET_SECRET_KEY`, `THICKET_SECRET_KEY_FILE`, or `secret.key`). At
+start, `App.importEnvSecrets` stores the environment's chat tokens and
+model keys (`ImportEnv`: the environment wins at startup), and the chat
+adapters are built from the stored tokens. The redactor learns every
+stored value (`WarmRedactor`) and is applied at each sink: the log
+handler, `Store.SetScrubber` (the trail, conversations and summaries, the
+inbox, run and task history, memories, web transcripts), tool output
+going back to the model, `redactingModel` (every prompt, and reply text),
+every chat send, and `/health`. A message holding a known secret value is
+intercepted like a credential-shaped one. `TestPlantedSecretsReachNoSink`
+plants each kind and greps all of them, plus every database column.
+
+## Sign-in
+
+`internal/auth` has argon2id password hashing (19 MiB, 2 passes, at most
+four hashes at once; a missing user still costs a hash) and a small OIDC
+client: discovery (the issuer must match), authorization code with PKCE
+and a nonce, ID tokens checked for signature (RS*, PS*, ES256/384 from
+the JWKS, refetched at most once a minute for a new key id), issuer,
+audience, azp, expiry and nonce. `internal/web/accounts.go` turns
+passwords, invites (`invites`, one-time, hashed) and OIDC callbacks
+(`oidc_states`, bound to the browser by a cookie) into the same
+`web_sessions` row, which now has a public id (for revoking), the
+method and a 90-day hard end. Password sign-in is throttled globally and
+per username. Users are matched to OIDC accounts by `oidc_identities`
+(issuer, subject), then verified email (`users.email`), then the invite;
+group claims gate new users and set roles. A character's `belongs_to`
+limits a sprig to one user: `Registry.For` and `UsableBy` are checked in
+routing, the prompt roster, handoffs, team tools, check-ins, the web
+app, the dashboard and the local API.
+
+## Spend on history
+
+`buildMessages` records the prompt's make-up on the turn
+(`llm.PromptMix`: characters of earlier conversation, including the
+summary and pins, and of kept documents), and `runTurn` attaches it to
+each chat request. The budget guard stores it with the call's usage
+(`usage.prompt_chars`, `history_chars`, `document_chars`).
+`Store.PromptMixSince` turns that into estimated tokens and dollars
+(splitting each call's cost between prompt and reply with
+`OutputPriceRatio` = 4), which `thicket costs`, the dashboard, the spend
+tool and the 80% budget warning report.
+
+## Pins and deletes
+
+Each stored message can carry the chat app's ids for it
+(`message_refs`: user messages from `Incoming.MessageID`, sprig replies
+from `channel.Poster.SendIDs`, which Discord, Telegram and the web app
+implement). That lets a reply (`Incoming.ReplyTo`) or a deletion event
+(`channel.DeleteWatcher`: Discord's `MessageDelete`, the web app's delete
+button) find the stored message. "Pin this", "forget this", "delete that"
+and friends are matched in code (`agent/pins.go`) after secrets and
+approvals, under the chat lock, and never stored or shown to the model.
+`buildMessages` shows pinned messages that fall outside the verbatim
+history as a block after the summary (1,500 characters each, 6,000 in
+all, taken from the history budget). Pins are conversation-scoped: a new
+conversation starts with none.
 
 ## Memory
 
