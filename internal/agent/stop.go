@@ -64,7 +64,8 @@ func (e *Engine) Queued(chatRef string) int { return int(e.waiting(chatRef).Load
 
 // Stop stops the reply in progress in a chat, if the user started it or
 // is an admin. Failing that, it stops the user's running jobs and returns
-// their names.
+// their names. It never blocks or sends anything (the local API calls it
+// while holding its own lock).
 func (e *Engine) Stop(chatRef string, user *store.User) (stoppedReply bool, jobs []string) {
 	if v, ok := e.turnsIn.Load(chatRef); ok {
 		f := v.(*inFlight)

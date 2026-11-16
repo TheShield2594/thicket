@@ -71,8 +71,8 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
 	if j.HookHash != "" {
 		hook = j.HookHash
 	}
-	res, err := s.db.ExecContext(ctx, "INSERT INTO jobs (user_id, character, name, schedule, prompt, enabled, created_at, kind, hook_hash) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-		j.UserID, j.Character, j.Name, j.Schedule, j.Prompt, s.unix(), j.Kind, hook)
+	res, err := s.db.ExecContext(ctx, "INSERT INTO jobs (user_id, character, name, schedule, prompt, enabled, created_at, kind, hook_hash, hook_auth) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+		j.UserID, j.Character, j.Name, j.Schedule, j.Prompt, s.unix(), j.Kind, hook, j.HookAuth)
 	if err != nil {
 		return nil, err
 	}

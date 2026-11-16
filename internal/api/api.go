@@ -362,14 +362,17 @@ func (a *API) stop(w http.ResponseWriter, r *http.Request, c caller) {
 		return
 	}
 	chatID := fmt.Sprintf("t%d.%s", c.token.ID, conv)
+	// The stop and the count it leaves for waiting requests are one step:
+	// a request that takes the conversation as soon as the stopped reply
+	// lets go still sees it. (Engine.Stop doesn't block or call back here.)
+	a.mu.Lock()
 	stopped, jobs := a.Engine.Stop("api:"+chatID, c.user)
 	setAside := 0
 	if stopped {
-		a.mu.Lock()
 		a.stops[chatID]++
 		setAside = a.waiting[chatID]
-		a.mu.Unlock()
 	}
+	a.mu.Unlock()
 	if jobs == nil {
 		jobs = []string{}
 	}

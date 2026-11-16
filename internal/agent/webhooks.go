@@ -95,11 +95,20 @@ func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMe
 	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.Task) == "" || len(a.Task) > 2000 {
 		return "", errors.New("name and task are required (task max 2000 characters)")
 	}
+	style := strings.ToLower(strings.TrimSpace(a.Signature))
+	if style == "none" {
+		style = ""
+	}
+	if _, ok := hookStyles[style]; style != "" && !ok {
+		return "", fmt.Errorf("signature style must be github, gitea (also Forgejo), gitlab or none")
+	}
 	token, hash, err := newHookToken()
 	if err != nil {
 		return "", err
 	}
-	j, err := e.DB.CreateJob(ctx, store.Job{UserID: t.user.ID, Character: owner.ID, Name: a.Name, Prompt: a.Task, Kind: store.JobWebhook, HookHash: hash})
+	// A signed webhook requires signatures from the start: until its secret
+	// is saved, every call is refused (CheckWebhook fails closed).
+	j, err := e.DB.CreateJob(ctx, store.Job{UserID: t.user.ID, Character: owner.ID, Name: a.Name, Prompt: a.Task, Kind: store.JobWebhook, HookHash: hash, HookAuth: style})
 	if err != nil {
 		return "", err
 	}
@@ -108,16 +117,20 @@ func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMe
 		_ = e.DB.DeleteJob(ctx, j.ID) // a URL nobody received is useless
 		return "", fmt.Errorf("couldn't DM the user the webhook URL, so I didn't create it: %w", err)
 	}
-	if a.Signature != "" && a.Signature != "none" {
-		note, err := e.setHookSignature(ctx, t, j, a.Signature)
-		if err != nil {
-			// The user has a URL that was meant to need signatures: don't
-			// leave it accepting unsigned calls.
-			_ = e.DB.DeleteJob(context.WithoutCancel(ctx), j.ID)
-			_ = e.Secrets.Delete(context.WithoutCancel(ctx), hookSecretName(j.ID))
+	if style != "" {
+		if err := e.rotateHookSecret(ctx, t, j, style); err != nil {
+			bg := context.WithoutCancel(ctx)
+			if derr := e.DB.DeleteJob(bg, j.ID); derr != nil {
+				// It still refuses every call (no secret), but don't leave it on.
+				_ = e.DB.SetJobEnabled(bg, j.ID, false)
+				e.logActivity(bg, "error", "job", owner.ID, t.user.ID, fmt.Sprintf("webhook job #%d couldn't be removed after its signature setup failed", j.ID), derr.Error())
+				return "", fmt.Errorf("couldn't set up signatures (%w), and couldn't remove webhook job #%d either, so it's paused; it refuses every call. Delete it, then try again", err, j.ID)
+			}
 			return "", fmt.Errorf("couldn't set up signatures (%w), so I removed webhook job #%d again; its URL won't work. Try again", err, j.ID)
 		}
-		return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL. %s", j.ID, owner.DisplayName(), note), nil
+		e.logActivity(ctx, "info", "job", owner.ID, t.user.ID, fmt.Sprintf("webhook job #%d now requires %s signatures", j.ID, style), "")
+		return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL. It only runs for calls signed the %s way: Thicket DMed the user the secret to paste into %s's webhook settings (you can't see it). Unsigned calls are refused.",
+			j.ID, owner.DisplayName(), hookStyles[style], hookStyles[style]), nil
 	}
 	return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL; you can't see it, and never ask the user to paste it. "+
 		"Tell them it's in their DMs, that a POST with any body (JSON or text, up to %d KB) runs the task with that body as input, "+

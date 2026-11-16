@@ -126,9 +126,21 @@ func TestSignatureSafety(t *testing.T) {
 		t.Fatalf("a failed rotation changed an unreadable secret: %x -> %x", before, after)
 	}
 
-	// A webhook whose signature setup fails isn't left accepting unsigned calls.
+	// A webhook whose signature setup fails isn't left accepting unsigned
+	// calls, including while the setup is still going on.
+	duringSetup := 0
 	fc.mu.Lock()
-	fc.failIf = func(s string) bool { return strings.Contains(s, "Signing secret") }
+	fc.failIf = func(s string) bool {
+		if !strings.Contains(s, "Signing secret") {
+			return false
+		}
+		for _, m := range fc.sent { // fc.mu is held here
+			if tok := tokenRe.FindString(m.text); tok != "" && strings.Contains(m.text, "/hooks/") {
+				duringSetup, _ = a.Webhook(ctx, tok, body, nil)
+			}
+		}
+		return true
+	}
 	fc.mu.Unlock()
 	a.Engine.HandleIncoming(ctx, dm("another signed webhook for CI"))
 	fc.mu.Lock()
@@ -138,8 +150,37 @@ func TestSignatureSafety(t *testing.T) {
 	if t2 == "" {
 		t.Fatal("the URL should have been sent before signatures failed")
 	}
+	if duringSetup != http.StatusUnauthorized {
+		t.Fatalf("an unsigned call while signatures were being set up: %d", duringSetup)
+	}
 	if code, _ := a.Webhook(ctx, t2, body, nil); code != http.StatusNotFound {
 		t.Fatalf("half-set-up signed webhook still runs: %d", code)
+	}
+
+	// If it can't be removed either, it's paused and still refuses calls.
+	if _, err := sqlDB.Exec("CREATE TRIGGER no_job_delete BEFORE DELETE ON jobs BEGIN SELECT RAISE(ABORT, 'locked'); END"); err != nil {
+		t.Fatal(err)
+	}
+	fc.mu.Lock()
+	fc.failIf = func(s string) bool { return strings.Contains(s, "Signing secret") }
+	fc.mu.Unlock()
+	a.Engine.HandleIncoming(ctx, dm("a third signed webhook for CI"))
+	fc.mu.Lock()
+	fc.failIf = nil
+	fc.mu.Unlock()
+	sqlDB.Exec("DROP TRIGGER no_job_delete")
+	t3, _ := takeHook(t, fc)
+	if r := lastToolResult(fm); !strings.Contains(r, "it's paused") {
+		t.Fatalf("a webhook that couldn't be removed: %s", r)
+	}
+	if code, _ := a.Webhook(ctx, t3, body, nil); code == http.StatusAccepted {
+		t.Fatal("a signed webhook left behind accepted an unsigned call")
+	}
+	jobs, _ := a.DB.EnabledJobs(ctx)
+	for _, j := range jobs {
+		if j.HookAuth != "" && j.ID > 1 {
+			t.Fatalf("job #%d was left enabled", j.ID)
+		}
 	}
 }
 
