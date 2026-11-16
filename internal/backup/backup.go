@@ -116,10 +116,10 @@ func addFile(tw *tar.Writer, path, name string, mode int64) error {
 }
 
 // voiceTestPath matches a sprig's voice test in an archive.
-// The file name may be anything Export would include (any *.yaml name),
-// except hidden names, separators and control characters; ".." is refused
+// The file name may be anything Export includes (any *.yaml name, hidden
+// ones too) except separators and control characters; ".." is refused
 // separately.
-var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[^./\\\x00-\x1f][^/\\\x00-\x1f]*\.yaml$`)
+var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[^/\\\x00-\x1f]+\.yaml$`)
 
 // maxEntry bounds any single file in an archive.
 const maxEntry int64 = 64 << 30
@@ -172,7 +172,7 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 		case voiceTestPath.MatchString(filepath.ToSlash(name)) && h.Typeflag == tar.TypeReg:
 			parts := strings.Split(filepath.ToSlash(name), "/")
 			dest = filepath.Join(charsDir, parts[1], "voice_tests", parts[3])
-		case strings.HasPrefix(name, "characters/") && h.Typeflag == tar.TypeReg:
+		case strings.HasPrefix(name, "characters/") && strings.Count(filepath.ToSlash(name), "/") == 1 && h.Typeflag == tar.TypeReg:
 			dest = filepath.Join(charsDir, filepath.Base(name))
 		default:
 			continue

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -23,6 +24,7 @@ func TestExportRestoreRoundTrip(t *testing.T) {
 	os.WriteFile(filepath.Join(chars, "pip", "voice_tests", "01-hello.yaml"), []byte("prompt: hi\nreference: Hello!\n"), 0o644)
 	os.WriteFile(filepath.Join(chars, "pip", "voice_tests", "02.dotted.name.yaml"), []byte("prompt: yo\n"), 0o644)
 	os.WriteFile(filepath.Join(chars, "pip", "voice_tests", "03 with space.yaml"), []byte("prompt: hey\n"), 0o644)
+	os.WriteFile(filepath.Join(chars, "pip", "voice_tests", ".hidden.yaml"), []byte("prompt: psst\n"), 0o644)
 	// Names that once mapped to the same staging file.
 	os.MkdirAll(filepath.Join(chars, "pip__voice_tests__x", "voice_tests"), 0o755)
 	os.WriteFile(filepath.Join(chars, "pip__voice_tests__x", "voice_tests", "01.yaml"), []byte("prompt: a\n"), 0o644)
@@ -54,7 +56,15 @@ func TestExportRestoreRoundTrip(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dchars, "pip", "voice_tests", "01-hello.yaml")); !strings.Contains(string(b), "reference: Hello!") {
 		t.Fatal("voice tests not restored")
 	}
-	for _, f := range []string{"pip/voice_tests/02.dotted.name.yaml", "pip/voice_tests/03 with space.yaml", "pip__voice_tests__x/voice_tests/01.yaml", "pip/voice_tests/x__voice_tests__01.yaml"} {
+	// Every restored voice test is where the loader looks; nothing nested
+	// was flattened into the characters folder.
+	if tests, err := character.LoadVoiceTests(dchars, "pip"); err != nil || len(tests) != 5 {
+		t.Fatalf("voice tests after restore: %d %v", len(tests), err)
+	}
+	if _, err := os.Stat(filepath.Join(dchars, ".hidden.yaml")); err == nil {
+		t.Fatal("a nested file was flattened")
+	}
+	for _, f := range []string{"pip/voice_tests/02.dotted.name.yaml", "pip/voice_tests/03 with space.yaml", "pip/voice_tests/.hidden.yaml", "pip__voice_tests__x/voice_tests/01.yaml", "pip/voice_tests/x__voice_tests__01.yaml"} {
 		if _, err := os.Stat(filepath.Join(dchars, f)); err != nil {
 			t.Fatalf("%s not restored: %v", f, err)
 		}
