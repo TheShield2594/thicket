@@ -17,6 +17,8 @@ type User struct {
 	OnboardedAt time.Time
 	LastSeenAt  time.Time
 	CreatedAt   time.Time
+	// Email matches OIDC sign-ins to this user (verified emails only).
+	Email string
 }
 
 func (u *User) IsAdmin() bool { return u.Role == "owner" || u.Role == "admin" }
@@ -31,13 +33,13 @@ func (u *User) Location() *time.Location {
 	return time.UTC
 }
 
-const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at"
+const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at, email"
 
 func scanUser(r interface{ Scan(...any) error }) (*User, error) {
 	var u User
 	var onb, seen sql.NullInt64
 	var created int64
-	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created); err != nil {
+	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created, &u.Email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}

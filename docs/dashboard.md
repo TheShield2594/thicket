@@ -23,10 +23,16 @@ Everyone else sees only their own memories, jobs, inbox and trail.
 
 ## Signing in
 
-The dashboard uses the web app's sign-in. Open the web app (ask Juni for a
-web app link, or run `thicket web link` on the server), then go to
-`/dashboard`; the page also links back to the app. Signing out of the web
-app signs you out here too.
+The dashboard uses the web app's sign-in: a username and password, single
+sign-on, or a one-time link (see [Signing in](../README.md#signing-in)).
+Sign in to the web app, then go to `/dashboard`; the page also links back
+to the app. Signing out of the web app signs you out here too.
+
+The **Sign-in** section lists where you're signed in (browser, how, last
+active) with a **Sign out** button for each. Admins also see everyone's
+sessions and can sign any of them out, and can make an invite link
+(member or admin, valid 1 to 7 days); the link is shown once, on the page,
+never in a URL.
 
 ## Reaching it
 

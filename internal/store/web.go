@@ -59,14 +59,26 @@ func (s *Store) Owner(ctx context.Context) (*User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, "SELECT "+userCols+" FROM users WHERE role = 'owner' ORDER BY id LIMIT 1"))
 }
 
+// SessionMaxAge is how long a web session can last however active it
+// stays: then the person signs in again.
+const SessionMaxAge = 90 * 24 * time.Hour
+
 func (s *Store) CreateWebSession(ctx context.Context, userID int64, userAgent string, ttl time.Duration) (string, error) {
+	return s.CreateWebSessionVia(ctx, userID, userAgent, ttl, "link")
+}
+
+// CreateWebSessionVia starts a session, noting how the person signed in
+// (link, password, oidc, invite).
+func (s *Store) CreateWebSessionVia(ctx context.Context, userID int64, userAgent string, ttl time.Duration, method string) (string, error) {
 	token, hash := NewToken()
+	pub, _ := NewToken()
 	if len(userAgent) > 200 {
 		userAgent = userAgent[:200]
 	}
 	now := s.unix()
-	_, err := s.db.ExecContext(ctx, "INSERT INTO web_sessions (token_hash, user_id, user_agent, expires_at, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		hash, userID, userAgent, now+int64(ttl.Seconds()), now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO web_sessions (token_hash, user_id, user_agent, expires_at, last_seen_at, created_at, public_id, method, max_expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		hash, userID, userAgent, now+int64(ttl.Seconds()), now, now, pub[:16], method, now+int64(SessionMaxAge.Seconds()))
 	return token, err
 }
 
@@ -74,7 +86,8 @@ func (s *Store) CreateWebSession(ctx context.Context, userID int64, userAgent st
 func (s *Store) WebSessionUser(ctx context.Context, token string, ttl time.Duration) (*User, error) {
 	now := s.unix()
 	var uid int64
-	err := s.db.QueryRowContext(ctx, "SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_at > ?", HashToken(token), now).Scan(&uid)
+	err := s.db.QueryRowContext(ctx, "SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_at > ? AND (max_expires_at = 0 OR max_expires_at > ?)",
+		HashToken(token), now, now).Scan(&uid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -96,7 +109,7 @@ func (s *Store) DeleteWebSession(ctx context.Context, token string) error {
 // than the message retention window.
 func (s *Store) PruneWeb(ctx context.Context, retention time.Duration) error {
 	now := s.unix()
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM web_sessions WHERE expires_at < ?", now); err != nil {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM web_sessions WHERE expires_at < ? OR (max_expires_at > 0 AND max_expires_at < ?)", now, now); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM web_links WHERE expires_at < ?", now); err != nil {

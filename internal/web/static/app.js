@@ -76,6 +76,7 @@ const ICONS = {
   check: '<path d="m5 12 5 5 9-10"/>',
   x: '<path d="M7 7l10 10M17 7 7 17"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2 2M15 8l2 2"/>',
   pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -210,6 +211,7 @@ function md(src) {
 
 async function boot() {
   if (location.pathname === '/login') return showLogin();
+  if (location.pathname === '/invite') return showInvite();
   try {
     await refreshMe();
   } catch (e) {
@@ -230,8 +232,9 @@ function showGate(title, text, ...rest) {
 
 function showLogin() {
   const token = location.hash.slice(1);
+  const problem = new URLSearchParams(location.search).get('error');
   history.replaceState(null, '', '/login'); // keep the token out of history
-  if (!token) return showSignedOut();
+  if (!token) return showSignedOut(problem);
   const err = h('p.err', { role: 'alert' });
   const btn = h('button.btn', {
     onclick: async () => {
@@ -250,11 +253,147 @@ function showLogin() {
   btn.focus();
 }
 
-function showSignedOut() {
-  showGate('Sign in to Thicket', 'Sign-in works with a one-time link. Get one either way:',
-    h('div.steps', {},
-      h('div', {}, h('b', {}, '1'), h('span', {}, 'In a Discord DM, ask Juni for a “web app link”.')),
-      h('div', {}, h('b', {}, '2'), h('span', {}, 'Or on the server run ', h('code', {}, 'thicket web link'), '.'))));
+function field(label, attrs) {
+  const input = h('input.field', attrs);
+  return [h('label.field-label', {}, h('span', {}, label), input), input];
+}
+
+// oidcButton starts single sign-on (with an invite, if there is one).
+function oidcButton(name, invite) {
+  const err = h('p.err', { role: 'alert' });
+  const btn = h('button.btn.secondary', {
+    type: 'button',
+    onclick: async () => {
+      btn.disabled = true; err.textContent = '';
+      try {
+        const r = await api('/api/oidc/start', { method: 'POST', body: { invite: invite || '' } });
+        location.assign(r.url);
+      } catch (e) { err.textContent = e.message; btn.disabled = false; }
+    },
+  }, 'Continue with ' + name);
+  return [btn, err];
+}
+
+async function showSignedOut(problem) {
+  let opts = { password: true };
+  try { opts = await api('/api/auth'); } catch { /* offer the basics */ }
+  const [userLabel, user] = field('Username', { name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true });
+  const [pwLabel, pw] = field('Password', { name: 'password', type: 'password', autocomplete: 'current-password', required: true });
+  const err = h('p.err', { role: 'alert' }, problem || '');
+  const btn = h('button.btn', { type: 'submit' }, 'Sign in');
+  const form = h('form.signin', {
+    onsubmit: async (ev) => {
+      ev.preventDefault();
+      btn.disabled = true; btn.textContent = 'Signing in…'; err.textContent = '';
+      try {
+        await api('/api/login', { method: 'POST', body: { username: user.value.trim(), password: pw.value } });
+        location.replace('/');
+      } catch (e) {
+        err.textContent = e.message; btn.disabled = false; btn.textContent = 'Sign in'; pw.select();
+      }
+    },
+  }, userLabel, pwLabel, btn);
+  showGate('Sign in to Thicket', null,
+    opts.oidc && oidcButton(opts.oidc.name),
+    opts.oidc && h('div.or', {}, 'or'),
+    form, err,
+    h('details.link-help', {}, h('summary', {}, 'No password? Use a one-time link'),
+      h('div.steps', {},
+        h('div', {}, h('b', {}, '1'), h('span', {}, 'In a Discord or Telegram DM, ask Juni for a “web app link”.')),
+        h('div', {}, h('b', {}, '2'), h('span', {}, 'Or on the server run ', h('code', {}, 'thicket web link'), '.')))));
+  (opts.oidc ? null : user)?.focus();
+}
+
+async function showInvite() {
+  const token = location.hash.slice(1);
+  history.replaceState(null, '', '/invite'); // keep the token out of history
+  if (!token) return showSignedOut('That invite link is incomplete. Copy the whole link and try again.');
+  let inv;
+  try {
+    inv = await api('/api/invite/check', { method: 'POST', body: { token } });
+  } catch (e) { return showSignedOut(e.message); }
+  const [userLabel, user] = field('Choose a username', { name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true, minlength: 2, maxlength: 32 });
+  const [pwLabel, pw] = field('Choose a password', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 10 });
+  const [againLabel, again] = field('Type it again', { name: 'again', type: 'password', autocomplete: 'new-password', required: true });
+  const err = h('p.err', { role: 'alert' });
+  const btn = h('button.btn', { type: 'submit' }, 'Create my account');
+  const form = h('form.signin', {
+    onsubmit: async (ev) => {
+      ev.preventDefault();
+      err.textContent = '';
+      if (pw.value !== again.value) { err.textContent = 'The two passwords don’t match.'; return; }
+      btn.disabled = true; btn.textContent = 'Setting up…';
+      try {
+        await api('/api/invite', { method: 'POST', body: { token, username: user.value.trim(), password: pw.value } });
+        location.replace('/');
+      } catch (e) { err.textContent = e.message; btn.disabled = false; btn.textContent = 'Create my account'; }
+    },
+  }, userLabel, pwLabel, h('small.hint', {}, 'At least 10 characters. A few words make a good one.'), againLabel, btn);
+  showGate(inv.name ? `Welcome, ${inv.name}` : 'You’re invited', 'You’ve been invited to this Thicket' + (inv.role === 'admin' ? ' as an admin' : '') + '.',
+    inv.oidc && oidcButton(inv.oidc.name, token), inv.oidc && h('div.or', {}, 'or'), form, err);
+  user.focus();
+}
+
+// ---------- account ----------
+
+async function showAccount() {
+  let acct;
+  try { acct = await api('/api/account'); } catch (e) { return toast('Couldn’t load your account: ' + e.message); }
+  const close = () => sheet.remove();
+  const err = h('p.err', { role: 'alert' });
+  const fields = [];
+  let user;
+  if (!acct.username) {
+    const [l, i] = field('Username', { autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true });
+    fields.push(l); user = i;
+  }
+  let cur;
+  if (acct.has_password) {
+    const [l, i] = field('Current password', { type: 'password', autocomplete: 'current-password', required: true });
+    fields.push(l); cur = i;
+  }
+  const [nl, next] = field(acct.has_password ? 'New password' : 'Password', { type: 'password', autocomplete: 'new-password', required: true, minlength: 10 });
+  fields.push(nl);
+  const btn = h('button.btn', { type: 'submit' }, acct.has_password ? 'Change password' : 'Set password');
+  const form = h('form.signin', {
+    onsubmit: async (ev) => {
+      ev.preventDefault();
+      btn.disabled = true; err.textContent = '';
+      try {
+        const r = await api('/api/account/password', { method: 'POST', body: { username: user?.value.trim() || '', current: cur?.value || '', new: next.value } });
+        close();
+        toast(r.signed_out ? `Password saved. Signed out ${r.signed_out} other session${r.signed_out === 1 ? '' : 's'}.` : 'Password saved.');
+      } catch (e) { err.textContent = e.message; btn.disabled = false; }
+    },
+  }, fields, btn);
+  const rows = acct.sessions.map((s) => h('li.session', {},
+    h('div', {}, h('b', {}, s.device), s.current && h('span.tag', {}, 'this one'),
+      h('small', {}, `${{ link: 'sign-in link', password: 'password', oidc: 'single sign-on', invite: 'invite' }[s.method] || s.method} · active ${relTime(s.last_seen)}`)),
+    !s.current && h('button.chip', {
+      onclick: async (ev) => {
+        try { await api('/api/account/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); ev.target.closest('li').remove(); toast('Signed out'); }
+        catch (e) { toast('Couldn’t sign it out: ' + e.message); }
+      },
+    }, 'Sign out')));
+  const sheet = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Your account', onclick: (ev) => { if (ev.target === sheet) close(); } },
+    h('div.sheet-card', {},
+      h('div.sheet-head', {}, h('h2', {}, 'Your account'), h('button.icon-btn', { 'aria-label': 'Close', onclick: close }, icon('x'))),
+      acct.username ? h('p.muted', {}, 'Username: ', h('b', {}, acct.username)) : h('p.muted', {}, 'Set a username and password to sign in without a link.'),
+      acct.oidc && h('p.muted', {}, 'You can also sign in with single sign-on.'),
+      form, err,
+      h('h3', {}, 'Where you’re signed in'),
+      h('ul.sessions', {}, rows)));
+  sheet.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
+  document.body.append(sheet);
+  (user || cur || next).focus();
+}
+
+function relTime(at) {
+  const s = (Date.now() - new Date(at)) / 1000;
+  if (s < 90) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
 }
 
 async function refreshMe() {
@@ -634,6 +773,7 @@ function renderSidebar() {
         h('span.me-avatar', { 'aria-hidden': 'true' }, initials(u.name || 'You')),
         h('div.who', {}, h('b', {}, u.name || 'You'), h('small', {}, u.role === 'owner' ? 'Owner' : u.role === 'admin' ? 'Admin' : 'Member')),
         h('button.icon-btn', { title: 'Notifications', 'aria-label': 'Toggle notifications', 'aria-pressed': load('thicket.notify', false) ? 'true' : 'false', onclick: toggleNotify }, icon('bell')),
+        h('button.icon-btn', { title: 'Account: password and sessions', 'aria-label': 'Account', onclick: showAccount }, icon('key')),
         h('button.icon-btn', { title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, icon('out')))));
   if (refocus !== null) { search.focus(); search.setSelectionRange(refocus, refocus); }
 }

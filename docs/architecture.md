@@ -92,6 +92,25 @@ every chat send, and `/health`. A message holding a known secret value is
 intercepted like a credential-shaped one. `TestPlantedSecretsReachNoSink`
 plants each kind and greps all of them, plus every database column.
 
+## Sign-in
+
+`internal/auth` has argon2id password hashing (19 MiB, 2 passes, at most
+four hashes at once; a missing user still costs a hash) and a small OIDC
+client: discovery (the issuer must match), authorization code with PKCE
+and a nonce, ID tokens checked for signature (RS*, PS*, ES256/384 from
+the JWKS, refetched at most once a minute for a new key id), issuer,
+audience, azp, expiry and nonce. `internal/web/accounts.go` turns
+passwords, invites (`invites`, one-time, hashed) and OIDC callbacks
+(`oidc_states`, bound to the browser by a cookie) into the same
+`web_sessions` row, which now has a public id (for revoking), the
+method and a 90-day hard end. Password sign-in is throttled globally and
+per username. Users are matched to OIDC accounts by `oidc_identities`
+(issuer, subject), then verified email (`users.email`), then the invite;
+group claims gate new users and set roles. A character's `belongs_to`
+limits a sprig to one user: `Registry.For` and `UsableBy` are checked in
+routing, the prompt roster, handoffs, team tools, check-ins, the web
+app, the dashboard and the local API.
+
 ## Spend on history
 
 `buildMessages` records the prompt's make-up on the turn

@@ -60,6 +60,14 @@ type Config struct {
 	DailyBudgetUSD   float64
 	MonthlyBudgetUSD float64
 
+	// OpenID Connect sign-in. The issuer, client id and secret are
+	// stored encrypted on start (like the chat tokens); the rest are plain
+	// settings.
+	OIDCIssuer, OIDCClientID, OIDCClientSecret string
+	OIDCName, OIDCGroupsClaim                  string
+	OIDCAdminGroup, OIDCMemberGroup            string
+	OIDCScopes                                 []string
+
 	IdleAfter        time.Duration
 	MessageRetention time.Duration
 	AllowedUsers     []string
@@ -88,6 +96,14 @@ func Load() (*Config, error) {
 		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
 		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
 		CommonsRef:            commonsRef(env("THICKET_COMMONS_CHANNEL", "")),
+		OIDCIssuer:            strings.TrimRight(env("THICKET_OIDC_ISSUER", ""), "/"),
+		OIDCClientID:          env("THICKET_OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:      env("THICKET_OIDC_CLIENT_SECRET", ""),
+		OIDCName:              env("THICKET_OIDC_NAME", ""),
+		OIDCGroupsClaim:       env("THICKET_OIDC_GROUPS_CLAIM", "groups"),
+		OIDCAdminGroup:        env("THICKET_OIDC_ADMIN_GROUP", ""),
+		OIDCMemberGroup:       env("THICKET_OIDC_MEMBER_GROUP", ""),
+		OIDCScopes:            strings.Fields(strings.ReplaceAll(env("THICKET_OIDC_SCOPES", ""), ",", " ")),
 	}
 	switch strings.ToLower(env("THICKET_WEB_PROXY", "")) {
 	case "", "0", "false", "no", "off":
@@ -196,6 +212,9 @@ func (c *Config) EnvSecrets() []EnvSecret {
 		{"telegram_token", "TELEGRAM_TOKEN", c.TelegramToken},
 		{"openrouter_api_key", "OPENROUTER_API_KEY", c.OpenRouterKey},
 		{"model_api_key", "THICKET_MODEL_API_KEY", c.ModelAPIKey},
+		{"oidc_issuer", "THICKET_OIDC_ISSUER", c.OIDCIssuer},
+		{"oidc_client_id", "THICKET_OIDC_CLIENT_ID", c.OIDCClientID},
+		{"oidc_client_secret", "THICKET_OIDC_CLIENT_SECRET", c.OIDCClientSecret},
 	}
 }
 

@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v12)
+## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
 - Pin and delete messages. Reply "pin this" (or say "pin that") to keep a
   message in every reply's context for the rest of the conversation, even
@@ -33,6 +33,17 @@ stated.
   transcripts, prompts, replies, chat sends, `/health`) now passes through
   the redactor, and a pasted known secret is intercepted like a
   credential-shaped one. A test plants each secret and checks every sink.
+- Sign in with a password or single sign-on. Local accounts (argon2id),
+  made with `thicket user add` or an invite link from the owner (dashboard
+  or `thicket user invite`); one-time links still work. Optional OpenID
+  Connect (`THICKET_OIDC_*`: issuer, client id and secret stored
+  encrypted), matching people by subject, verified email or invite, with
+  optional member and admin groups. Sessions have a 90-day hard end, list
+  and sign out from the dashboard and the web app, and a password change
+  signs out other sessions; wrong passwords lock a username for 15
+  minutes. Sprigs can belong to one person (`belongs_to`): members see the
+  shared sprigs and their own, in the web app, dashboard, API and chat.
+  New `thicket user list|add|passwd|email|invite`. Schema v14.
 
 ## Unreleased: sprigs that feel alive (schema v11)
 

@@ -40,6 +40,17 @@ type EnvSecret struct {
 
 var ErrNotFound = errors.New("secret not found")
 
+// notSecret are stored with the secrets (they belong with the one that
+// is) but aren't secret, so they aren't redacted: an issuer URL or a
+// client id like "thicket" would otherwise vanish from every text.
+var notSecret = map[string]bool{"oidc_issuer": true, "oidc_client_id": true}
+
+func (s *Store) learn(name, value string) {
+	if !notSecret[name] {
+		s.red.Add(value)
+	}
+}
+
 var nameRe = regexp.MustCompile(`^[a-z0-9_]{2,48}$`)
 
 // ValidName reports whether name is a usable secret name.
@@ -160,7 +171,7 @@ func New(db *store.Store, key []byte, red *Redactor) (*Store, error) {
 func (s *Store) SetEnvFallback(name, value string) {
 	if value != "" {
 		s.env[name] = value
-		s.red.Add(value)
+		s.learn(name, value)
 	}
 }
 
@@ -180,7 +191,7 @@ func (s *Store) Put(ctx context.Context, name, value string) error {
 	if err := s.db.PutSecretBlob(ctx, name, nonce, ct); err != nil {
 		return err
 	}
-	s.red.Add(value)
+	s.learn(name, value)
 	return nil
 }
 
@@ -204,7 +215,7 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("secret %q can't be decrypted (was the secret key changed?)", name)
 	}
 	v := string(pt)
-	s.red.Add(v)
+	s.learn(name, v)
 	return v, nil
 }
 

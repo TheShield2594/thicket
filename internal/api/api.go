@@ -193,7 +193,7 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	}
 	if req.Sprig != "" {
 		ch, ok := a.Chars.FindByName(req.Sprig) // id, name or nickname
-		if !ok {
+		if !ok || !ch.UsableBy(c.user.ID) {
 			fail(w, http.StatusNotFound, fmt.Sprintf("no sprig %q", req.Sprig))
 			return
 		}
@@ -265,7 +265,7 @@ func (a *API) lockFor(chatID string) *sync.Mutex {
 	return l
 }
 
-func (a *API) getSprigs(w http.ResponseWriter, _ *http.Request, _ caller) {
+func (a *API) getSprigs(w http.ResponseWriter, _ *http.Request, c caller) {
 	type sprig struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -273,8 +273,8 @@ func (a *API) getSprigs(w http.ResponseWriter, _ *http.Request, _ caller) {
 		Host bool   `json:"host,omitempty"`
 	}
 	var out []sprig
-	for _, c := range a.Chars.All() {
-		out = append(out, sprig{c.ID, c.DisplayName(), c.Role, c.Host})
+	for _, ch := range a.Chars.For(c.user.ID) {
+		out = append(out, sprig{ch.ID, ch.DisplayName(), ch.Role, ch.Host})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sprigs": out})
 }

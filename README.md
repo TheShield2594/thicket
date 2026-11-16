@@ -88,13 +88,40 @@ an app on phones and desktops (Add to Home Screen / Install), works in
 light and dark, and can notify you when a sprig writes while it's in the
 background.
 
-Sign-in is by one-time link; there are no passwords:
+### Signing in
 
-- **From Discord:** DM Juni "send me a web app link". The link is posted by
-  Thicket itself and never passes through the model.
-- **From the server:** `docker compose exec thicket thicket web link`.
-- **Fresh install without Discord:** the link is printed in the container
-  logs on startup. Whoever opens it first becomes the owner.
+Three ways, all ending in the same 30-day session (90 days at most):
+
+- **Username and password.** The owner adds people with
+  `thicket user add kim` (or `--user ID` to give someone already on
+  Discord or Telegram a login), or makes an invite link on the dashboard
+  or with `thicket user invite`: the person opens it and chooses a
+  username and password. Anyone signed in can set or change their own
+  password with the key button by their name; changing it signs out
+  their other sessions. Passwords are hashed with argon2id; five wrong
+  ones lock that username for 15 minutes.
+- **Single sign-on (optional).** Any OpenID Connect provider: Authentik,
+  Authelia, Keycloak, Google. Set `THICKET_OIDC_ISSUER`,
+  `THICKET_OIDC_CLIENT_ID` and `THICKET_OIDC_CLIENT_SECRET` (stored
+  encrypted on start, like the chat tokens) and `THICKET_PUBLIC_URL`, and
+  register `<public url>/auth/oidc/callback` as the redirect URI. People
+  are matched by their account at the provider, else by a verified email
+  you've given them (`thicket user email ID ADDRESS`), else by the invite
+  they came with. Set `THICKET_OIDC_MEMBER_GROUP` and/or
+  `THICKET_OIDC_ADMIN_GROUP` to let anyone in those groups in (their role
+  follows the group; the owner's never changes) and keep everyone else
+  out.
+- **One-time link**, as before:
+  - **From Discord:** DM Juni "send me a web app link". The link is posted by
+    Thicket itself and never passes through the model.
+  - **From the server:** `docker compose exec thicket thicket web link`.
+  - **Fresh install without Discord:** the link is printed in the container
+    logs on startup. Whoever opens it first becomes the owner.
+
+Each person sees the shared sprigs and their own: a sprig with
+`belongs_to` set ([details](docs/characters.md#fields)) is invisible to
+everyone else, in the web app, the dashboard and chat. See and sign out
+your sessions under the key button or on the dashboard.
 
 Your web account *is* your Discord account when you sign in through a
 link from Discord or as the owner, so sprigs remember the same things in
@@ -211,6 +238,10 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DAILY_BUDGET_USD` *chat* | `2` | daily spend cap (0 = none) |
 | `THICKET_MONTHLY_BUDGET_USD` *chat* | `30` | monthly spend cap (0 = none) |
 | `THICKET_SECRET_KEY` | generated | encryption key for stored secrets; if unset, `/data/secret.key` is created |
+| `THICKET_OIDC_ISSUER`, `THICKET_OIDC_CLIENT_ID`, `THICKET_OIDC_CLIENT_SECRET` | | single sign-on ([details](#signing-in)); stored encrypted on first start |
+| `THICKET_OIDC_NAME` | `single sign-on` | the button's label, e.g. `Authentik` |
+| `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
+| `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |

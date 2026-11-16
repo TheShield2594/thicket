@@ -18,6 +18,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/api"
+	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
@@ -193,6 +194,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
 	a.Web.Pin = a.Engine.PinWebMessage
+	a.Web.OIDC = a.oidcLogin(ctx)
 	a.channels = append(a.channels, a.Web)
 	for _, ch := range a.channels {
 		a.Engine.AddChannel(ch)
@@ -211,7 +213,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
 		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft,
-		SessionTTL: web.SessionTTL,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {
@@ -250,6 +252,47 @@ func (a *App) importEnvSecrets(ctx context.Context) {
 		if strings.TrimSpace(it.Value) != "" {
 			a.Log.Warn(it.Env+" is stored encrypted; you can remove it from your compose file or environment (Thicket reads it from the store from now on, and a value set there still wins at startup)", "secret", it.Name)
 		}
+	}
+}
+
+// oidcLogin sets up single sign-on if the issuer, client id and secret
+// are stored (from THICKET_OIDC_* or `thicket secrets set oidc_...`).
+func (a *App) oidcLogin(ctx context.Context) *web.OIDCLogin {
+	get := func(n string) string { v, _ := a.Secrets.Get(ctx, n); return strings.TrimSpace(v) }
+	iss, id, secret := strings.TrimRight(get("oidc_issuer"), "/"), get("oidc_client_id"), get("oidc_client_secret")
+	if iss == "" && id == "" && secret == "" {
+		return nil
+	}
+	if iss == "" || id == "" || secret == "" {
+		a.startErr("Single sign-on is half set up: it needs the issuer, client id and client secret (THICKET_OIDC_ISSUER, _CLIENT_ID, _CLIENT_SECRET).")
+		return nil
+	}
+	if !strings.HasPrefix(a.Cfg.PublicURL, "https://") && !strings.HasPrefix(a.Cfg.PublicURL, "http://") {
+		a.startErr("Single sign-on needs THICKET_PUBLIC_URL (the address people open Thicket at), for the provider to send them back to.")
+		return nil
+	}
+	c := a.Cfg
+	gated := c.OIDCAdminGroup != "" || c.OIDCMemberGroup != ""
+	scopes := c.OIDCScopes
+	if len(scopes) == 0 {
+		scopes = []string{"openid", "email", "profile"}
+		if gated {
+			scopes = append(scopes, "groups")
+		}
+	}
+	var wanted []string
+	if gated {
+		wanted = []string{c.OIDCGroupsClaim}
+	}
+	name := c.OIDCName
+	if name == "" {
+		name = "single sign-on"
+	}
+	a.Log.Info("single sign-on is on", "issuer", iss)
+	return &web.OIDCLogin{
+		Provider: auth.NewProvider(auth.OIDCConfig{Issuer: iss, ClientID: id, ClientSecret: secret,
+			RedirectURL: c.PublicURL + "/auth/oidc/callback", Scopes: scopes, Wanted: wanted}),
+		Name: name, GroupsClaim: c.OIDCGroupsClaim, AdminGroup: c.OIDCAdminGroup, MemberGroup: c.OIDCMemberGroup,
 	}
 }
 

@@ -59,6 +59,10 @@ type Dashboard struct {
 	// keeps the session alive, as using the app does.
 	SessionTTL time.Duration
 	Now        func() time.Time
+	// BaseURL is where people open Thicket, for invite links.
+	BaseURL string
+	// Device describes a browser from its user agent.
+	Device func(ua string) string
 }
 
 func (d *Dashboard) now() time.Time {
@@ -126,11 +130,17 @@ func flashFor(code string) string {
 		return "Done. The sprig will tell you how it went in chat."
 	case "resolved":
 		return "Cleared from your inbox."
+	case "revoked":
+		return "Signed out. That browser needs to sign in again."
 	}
 	return ""
 }
 
 func (d *Dashboard) render(w http.ResponseWriter, r *http.Request, code int, flash, problem string) {
+	d.renderWith(w, r, code, func(p *pageData) { p.Flash, p.Problem = flash, problem })
+}
+
+func (d *Dashboard) renderWith(w http.ResponseWriter, r *http.Request, code int, set func(*pageData)) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	u, err := d.user(r)
 	if err != nil {
@@ -147,7 +157,10 @@ func (d *Dashboard) render(w http.ResponseWriter, r *http.Request, code int, fla
 	c, _ := r.Cookie(SessionCookie)
 	data.CSRF = csrfToken(c.Value)
 	data.Nonce, _ = r.Context().Value(nonceKey{}).(string)
-	data.Flash, data.Problem = flash, problem
+	if err := d.sessions(r.Context(), u, c.Value, data); err != nil {
+		d.Log.Error("dashboard sessions", "err", err)
+	}
+	set(data)
 	w.WriteHeader(code)
 	if err := pageTmpl.Execute(w, data); err != nil {
 		d.Log.Error("dashboard render", "err", err)
@@ -184,8 +197,23 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := strconv.ParseInt(r.PostFormValue("id"), 10, 64)
 	ctx := r.Context()
-	var ok string
+	var ok, anchor string
+	anchor = "inbox"
 	switch kind, action := r.PostFormValue("kind"), r.PostFormValue("action"); {
+	case kind == "session" && action == "revoke":
+		owner := u.ID
+		if u.IsAdmin() {
+			owner = 0 // admins can sign anyone out
+		}
+		var done bool
+		done, err = d.DB.RevokeWebSession(ctx, r.PostFormValue("sid"), owner)
+		if err == nil && !done {
+			err = errors.New("that session had already ended")
+		}
+		ok, anchor = "revoked", "signin"
+	case kind == "invite" && action == "create" && u.IsAdmin():
+		d.invite(w, r, u)
+		return
 	case kind == "approval" && (action == "approve" || action == "deny") && d.Decide != nil:
 		err = d.Decide(ctx, u, id, action == "approve")
 		ok = map[bool]string{true: "approved", false: "denied"}[action == "approve"]
@@ -203,7 +231,33 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 		d.render(w, r, http.StatusBadRequest, "", "Couldn't do that: "+err.Error())
 		return
 	}
-	http.Redirect(w, r, "/dashboard?ok="+ok+"#inbox", http.StatusSeeOther)
+	http.Redirect(w, r, "/dashboard?ok="+ok+"#"+anchor, http.StatusSeeOther)
+}
+
+// invite makes an invite link and shows it once (never in a URL).
+func (d *Dashboard) invite(w http.ResponseWriter, r *http.Request, u *store.User) {
+	role := "member"
+	if r.PostFormValue("role") == "admin" {
+		role = "admin"
+	}
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if len(name) > 60 {
+		name = name[:60]
+	}
+	days, _ := strconv.Atoi(r.PostFormValue("days"))
+	if days < 1 || days > 30 {
+		days = 3
+	}
+	token, err := d.DB.CreateInvite(r.Context(), store.Invite{Role: role, Name: name, CreatedBy: u.ID}, time.Duration(days)*24*time.Hour)
+	if err != nil {
+		d.render(w, r, http.StatusInternalServerError, "", "Couldn't make an invite: "+err.Error())
+		return
+	}
+	_ = d.DB.LogActivity(r.Context(), store.Activity{Level: "info", Kind: "system", UserID: u.ID, Summary: "made an invite link (" + role + ")"})
+	d.renderWith(w, r, http.StatusOK, func(p *pageData) {
+		p.InviteLink = strings.TrimRight(d.BaseURL, "/") + "/invite#" + token
+		p.InviteDays = days
+	})
 }
 
 // --- what the page shows ---
@@ -230,10 +284,49 @@ type pageData struct {
 	Skills         []store.Skill
 	Spend          *spendView
 	Health         []checkView
+	// Sign-in: your sessions, everyone's (admins), and an invite just made.
+	Sessions, AllSessions []sessionRow
+	InviteLink            string
+	InviteDays            int
+}
+
+type sessionRow struct {
+	ID, Who, Device, Method, Last, Started string
+	Current                                bool
+}
+
+// sessions fills in the sign-in section.
+func (d *Dashboard) sessions(ctx context.Context, u *store.User, current string, p *pageData) error {
+	loc := u.Location()
+	rows := func(userID int64) ([]sessionRow, error) {
+		list, err := d.DB.WebSessions(ctx, userID, current)
+		if err != nil {
+			return nil, err
+		}
+		var out []sessionRow
+		for _, s := range list {
+			dev := s.UserAgent
+			if d.Device != nil {
+				dev = d.Device(s.UserAgent)
+			}
+			out = append(out, sessionRow{ID: s.PublicID, Who: s.UserName, Device: dev, Method: s.Method,
+				Last: s.LastSeenAt.In(loc).Format("Mon 2 Jan 15:04"), Started: s.CreatedAt.In(loc).Format("2 Jan 2006"), Current: s.Current})
+		}
+		return out, nil
+	}
+	var err error
+	if p.Sessions, err = rows(u.ID); err != nil {
+		return err
+	}
+	if u.IsAdmin() {
+		p.AllSessions, err = rows(0)
+	}
+	return err
 }
 
 type sprigView struct {
 	ID, Name, Role string
+	Only           string // whose sprig it is, if it isn't shared
 	Host           bool
 	Scopes         []string
 	State          string
@@ -333,6 +426,10 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	p.AvatarCSS = template.CSS(avatar.CSS)
 	for _, c := range d.Chars.All() {
 		names[c.ID] = c.DisplayName()
+		// Members see shared sprigs and their own; admins see every sprig.
+		if !u.IsAdmin() && !c.UsableBy(u.ID) {
+			continue
+		}
 		st := states[c.ID]
 		if st == "" {
 			st = "idle"
@@ -340,7 +437,17 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		look := avatar.Load(d.Chars.Dir(), c.ID, c.Color)
 		// Inline renders only validated parts and escapes the label.
 		svg := template.HTML(avatar.Inline(look, st, "av-"+c.ID, c.DisplayName()+" is "+st))
-		p.Sprigs = append(p.Sprigs, sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg})
+		v := sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg}
+		if c.BelongsTo != 0 {
+			v.Only = "yours"
+			if c.BelongsTo != u.ID {
+				v.Only = fmt.Sprintf("user %d's", c.BelongsTo)
+				if o, err := d.DB.UserByID(ctx, c.BelongsTo); err == nil && o.Name != "" {
+					v.Only = o.Name + "'s"
+				}
+			}
+		}
+		p.Sprigs = append(p.Sprigs, v)
 	}
 	name := func(id string) string {
 		if n, ok := names[id]; ok {

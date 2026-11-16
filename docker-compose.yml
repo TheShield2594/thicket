@@ -29,6 +29,14 @@ services:
       # THICKET_SECRET_KEY_FILE: /run/secrets/thicket_secret_key
       # Optional. You can also paste the key to Juni in a DM instead.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Optional single sign-on (Authentik, Authelia, Keycloak...). Needs THICKET_PUBLIC_URL;
+      # register <public url>/auth/oidc/callback with the provider. See README "Signing in".
+      THICKET_OIDC_ISSUER: ${THICKET_OIDC_ISSUER:-}
+      THICKET_OIDC_CLIENT_ID: ${THICKET_OIDC_CLIENT_ID:-}
+      THICKET_OIDC_CLIENT_SECRET: ${THICKET_OIDC_CLIENT_SECRET:-}
+      THICKET_OIDC_NAME: ${THICKET_OIDC_NAME:-}
+      THICKET_OIDC_MEMBER_GROUP: ${THICKET_OIDC_MEMBER_GROUP:-}
+      THICKET_OIDC_ADMIN_GROUP: ${THICKET_OIDC_ADMIN_GROUP:-}
       # Optional. A local OpenAI-compatible model server instead of OpenRouter
       # (see docs/local-models.md), e.g. http://host.docker.internal:11434/v1 for Ollama.
       # You can also just send Juni the address in a DM.

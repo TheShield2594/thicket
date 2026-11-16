@@ -57,6 +57,13 @@ Usage:
   thicket skill starter [ID...|all]   list the example skills, or add them
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
+  thicket user list                   everyone, with their role and how they sign in
+  thicket user add USERNAME [--role member|admin] [--name NAME] [--user ID]
+                                      make a web app login (password from stdin, or typed twice)
+  thicket user passwd USERNAME        set a new password (signs out their sessions)
+  thicket user email ID ADDRESS       the verified email single sign-on matches them by
+  thicket user invite [--role member|admin] [--name NAME] [--user ID] [--ttl 72h]
+                                      print a one-time invite link
   thicket secrets list                names of stored secrets (never values) and where each comes from
   thicket secrets set NAME            store a secret encrypted, reading the value from stdin
   thicket secrets delete NAME         remove a stored secret
@@ -111,6 +118,8 @@ func main() {
 		err = skillCmd(args)
 	case "web":
 		err = webCmd(args)
+	case "user", "users":
+		err = userCmd(args, os.Stdin, os.Stdout)
 	case "secrets", "secret":
 		err = secretsCmd(args, os.Stdin, os.Stdout)
 	case "migrate":

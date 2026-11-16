@@ -276,6 +276,18 @@ func (r *Registry) Get(id string) (*Character, bool) {
 }
 
 // All returns characters sorted with the host first, then by name.
+// For returns the sprigs a user may talk to (shared ones and their own),
+// host first.
+func (r *Registry) For(userID int64) []*Character {
+	var out []*Character
+	for _, c := range r.All() {
+		if c.UsableBy(userID) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (r *Registry) All() []*Character {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

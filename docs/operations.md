@@ -170,6 +170,20 @@ Juni ships with five. For your own sprigs, write prompts only and run
 sounds: replies are saved as the references for tests that have none.
 Voice tests are included in `thicket export` and restored with it.
 
+## People and sign-in
+
+```
+thicket user list                          # id, name, role, how each signs in
+thicket user add kim --name Kim            # a web login; password from stdin or typed twice
+thicket user add sam --user 3              # give user 3 (from Discord, say) a login
+thicket user passwd kim                    # new password; signs out kim's sessions
+thicket user email 3 sam@example.com       # match single sign-on to user 3
+thicket user invite --role member --ttl 72h
+```
+
+`thicket web link` still prints a one-time sign-in link. Sessions are
+listed, and can be signed out, on the dashboard and in the web app.
+
 ## Secrets
 
 Keys and tokens live in the database, encrypted with AES-256-GCM under a
@@ -178,8 +192,9 @@ names (for Docker secrets), else `/data/secret.key`, created on first run.
 Keep the master key off the volume if you can: then a copy of the
 volume alone doesn't reveal the secrets.
 
-`DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `OPENROUTER_API_KEY` and
-`THICKET_MODEL_API_KEY` given in the environment are stored on start, and
+`DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `OPENROUTER_API_KEY`,
+`THICKET_MODEL_API_KEY` and `THICKET_OIDC_ISSUER`, `_CLIENT_ID` and
+`_CLIENT_SECRET` given in the environment are stored on start, and
 the log says each can now be removed from your compose file. Thicket
 reads them from the store from then on. If one is still in the
 environment at startup, its value wins and replaces the stored one (so

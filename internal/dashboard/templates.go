@@ -21,6 +21,8 @@ ul.plain{list-style:none;padding:0;margin:0}ul.plain li{padding:6px 0;border-top
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.stat b{display:block;font-size:20px}
 button{font:inherit;background:none;border:1px solid var(--line);border-radius:8px;padding:4px 12px;color:var(--text);cursor:pointer;min-height:32px}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+input,select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:4px 8px;min-height:32px;max-width:100%}
+label{display:inline-flex;align-items:center;gap:6px}
 form.inline{display:inline}
 .roster{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
 .sprigcard{display:flex;gap:10px;align-items:flex-start}.sprigcard svg{width:72px;height:72px;flex:none}
@@ -34,8 +36,8 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:12px;background:var(--b
 var signInTmpl = template.Must(template.New("signin").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Thicket</title>` + style + `</head>
 <body><main><section><h1>Thicket</h1>
-<p>The dashboard uses the web app's sign-in. Ask Juni for a web app link ("send me a web app link"), open it, then come back to <a href="/dashboard">/dashboard</a>.</p>
-<p class="muted small">On the server, <code>thicket web link</code> prints a sign-in link too.</p>
+<p>The dashboard uses the web app's sign-in. <a href="/">Sign in there</a> with your username and password (or single sign-on, or a one-time link), then come back to <a href="/dashboard">/dashboard</a>.</p>
+<p class="muted small">No password yet? Ask Juni for a web app link ("send me a web app link"), or run <code>thicket web link</code> on the server.</p>
 </section></main></body></html>`))
 
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -43,13 +45,13 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <body><main>
 <header><h1>🌱 Thicket</h1>
 <span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} · <a href="/">Open the chat app</a></span></header>
-<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a>{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
+<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a><a href="#signin">Sign-in</a>{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
 {{if .Flash}}<section class="flash" role="status">{{.Flash}}</section>{{end}}
 {{if .Problem}}<section class="problem" role="alert">{{.Problem}}</section>{{end}}
 <p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>
 
 <section id="sprigs"><h2>Sprigs</h2><div class="roster">
-{{range .Sprigs}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}
+{{range .Sprigs}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}{{if .Only}} <span class="tag">{{.Only}}</span>{{end}}
 <div class="state" id="st-{{.ID}}"><b>{{.State}}</b></div><div class="muted small">{{.Role}}</div>
 <div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}
 </div></section>
@@ -86,6 +88,22 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <section id="skills"><h2>Skills</h2><ul class="plain">
 {{range .Skills}}<li><b>{{.Name}}</b> <span class="tag">{{.ID}} v{{.Version}}</span><br><span class="muted">{{.Description}}</span></li>{{else}}<li class="muted">None saved yet.</li>{{end}}
 </ul></section>
+
+<section id="signin"><h2>Sign-in</h2>
+{{if .InviteLink}}<div class="item" role="status"><b>Invite link</b> (works once, for {{.InviteDays}} day{{if ne .InviteDays 1}}s{{end}}). Send it privately; it won't be shown again:<pre>{{.InviteLink}}</pre></div>{{end}}
+<h3>Where you're signed in</h3><table><tr><th>Browser</th><th>How</th><th>Last active</th><th></th></tr>
+{{range .Sessions}}<tr><td>{{.Device}}{{if .Current}} <span class="tag">this one</span>{{end}}</td><td>{{.Method}}</td><td>{{.Last}}</td><td>{{if not .Current}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="session"><input type="hidden" name="sid" value="{{.ID}}"><button name="action" value="revoke">Sign out</button></form>{{end}}</td></tr>{{end}}</table>
+<p class="muted small">Set or change your password from the web app (the key button by your name).</p>
+{{if .Admin}}<h3>Everyone's sessions</h3><table><tr><th>Who</th><th>Browser</th><th>How</th><th>Last active</th><th></th></tr>
+{{range .AllSessions}}<tr><td>{{.Who}}</td><td>{{.Device}}{{if .Current}} <span class="tag">you, here</span>{{end}}</td><td>{{.Method}}</td><td>{{.Last}}</td><td>{{if not .Current}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="session"><input type="hidden" name="sid" value="{{.ID}}"><button name="action" value="revoke">Sign out</button></form>{{end}}</td></tr>{{end}}</table>
+<h3>Invite someone</h3>
+<form method="post" action="/dashboard/act" class="actions"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="invite">
+<label class="small">Name <input name="name" maxlength="60" placeholder="optional"></label>
+<label class="small">As <select name="role"><option value="member">member</option><option value="admin">admin</option></select></label>
+<label class="small">Valid for <select name="days"><option value="1">1 day</option><option value="3" selected>3 days</option><option value="7">7 days</option></select></label>
+<button class="primary" name="action" value="create">Make invite link</button></form>
+<p class="muted small">They choose a username and password (or use single sign-on, if it's set up). Members see the shared sprigs and their own.</p>{{end}}
+</section>
 
 {{if .Admin}}{{with .Spend}}<section id="costs"><h2>Costs</h2>
 <div class="grid"><div class="stat"><span class="muted small">Today (UTC)</span><b>{{.Today}}</b><span class="muted small">{{.DailyCap}}</span></div>

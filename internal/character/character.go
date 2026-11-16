@@ -64,6 +64,9 @@ type Character struct {
 	Initiative    Initiative    `yaml:"initiative,omitempty"`
 	Model         string        `yaml:"model,omitempty"`
 	CreatedBy     string        `yaml:"created_by,omitempty"`
+	// BelongsTo makes a sprig one person's (their Thicket user id): only
+	// they talk to it. 0, the default, is a sprig everyone shares.
+	BelongsTo int64 `yaml:"belongs_to,omitempty"`
 
 	Body string `yaml:"-"` // Markdown after the frontmatter
 	Path string `yaml:"-"`
@@ -71,6 +74,10 @@ type Character struct {
 }
 
 // DisplayName is what users see: the nickname if there is one.
+// UsableBy reports whether a user may talk to this sprig: it's shared,
+// or it's theirs.
+func (c *Character) UsableBy(userID int64) bool { return c.BelongsTo == 0 || c.BelongsTo == userID }
+
 func (c *Character) DisplayName() string {
 	if c.Nickname != "" {
 		return c.Nickname
@@ -145,6 +152,9 @@ func (c *Character) Validate() []string {
 	}
 	if strings.TrimSpace(c.Role) == "" || len(c.Role) > 200 {
 		p = append(p, "role is required (one sentence, max 200 characters)")
+	}
+	if c.BelongsTo < 0 || (c.Host && c.BelongsTo != 0) {
+		p = append(p, "belongs_to must be a user id, and the host is everyone's (leave it off)")
 	}
 	if n := len(c.Personality.Traits); n < 1 || n > 6 {
 		p = append(p, fmt.Sprintf("personality.traits should list 1-6 core traits (has %d)", n))

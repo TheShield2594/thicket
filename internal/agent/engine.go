@@ -164,6 +164,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err != nil || user == nil {
 		return err
 	}
+	// Someone else's sprig: as if no sprig was named.
+	if addressed != nil && !addressed.UsableBy(user.ID) {
+		addressed, rest = nil, in.Text
+		if !in.IsDM && !in.Mentioned && !in.Listening {
+			return nil
+		}
+	}
 	_ = e.DB.TouchUser(ctx, user.ID)
 	// Proactive messages go to the app the user last wrote from (never
 	// to an internal channel like the API, which can't receive them).
@@ -256,10 +263,10 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	char := host
 	if addressed != nil {
 		char = addressed
-	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" {
+	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user.ID) {
 		char = c // a per-sprig web thread
 	} else if id, ok := e.active.Load(in.ChatRef()); ok {
-		if c, ok := e.Chars.Get(id.(string)); ok {
+		if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user.ID) {
 			char = c
 		}
 	}
@@ -340,13 +347,13 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	// In the commons, @mentioning another sprig hands over to it.
 	if t.handoff == nil && reply != "" && e.isCommons(t.chatRef) {
-		if c := e.mentionedSprig(reply, t.char); c != nil {
+		if c := e.mentionedSprig(reply, t.char); c != nil && c.UsableBy(t.user.ID) {
 			t.handoff = &handoffReq{to: c.ID, message: truncate(reply, 500)}
 		}
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
-		if !ok {
+		if !ok || !target.UsableBy(t.user.ID) {
 			return nil
 		}
 		e.logActivity(ctx, "info", "handoff", t.char.ID, t.user.ID, fmt.Sprintf("%s handed off to %s", t.char.DisplayName(), target.DisplayName()), h.message)
