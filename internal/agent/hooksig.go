@@ -161,23 +161,9 @@ func (e *Engine) rotateHookSecret(ctx context.Context, t *turn, j *store.Job, st
 	if err != nil {
 		return err
 	}
-	// If the new secret can't be delivered, the one the sender already
-	// has must keep working: put the old one back (or none, if new).
+	// The active secret is only replaced once the new one has reached the
+	// user: until then, the one the sender already has keeps working.
 	name := hookSecretName(j.ID)
-	old, oldErr := e.Secrets.Get(ctx, name)
-	if err := e.Secrets.Put(ctx, name, secret); err != nil {
-		return err
-	}
-	defer func() {
-		if err == nil {
-			return
-		}
-		if oldErr == nil && old != "" {
-			_ = e.Secrets.Put(context.WithoutCancel(ctx), name, old)
-		} else {
-			_ = e.Secrets.Delete(context.WithoutCancel(ctx), name)
-		}
-	}()
 	owner, ok := e.Chars.Get(j.Character)
 	if !ok {
 		owner = t.char
@@ -194,7 +180,14 @@ func (e *Engine) rotateHookSecret(ctx context.Context, t *turn, j *store.Job, st
 		"gitlab": "In the project's Settings → Webhooks, paste it as the Secret token.",
 	}[style]
 	msg := fmt.Sprintf("🔏 Signing secret for webhook “%s” (job #%d):\n`%s`\n%s Calls without a matching signature are refused from now on. Keep it private.", j.Name, j.ID, secret, where)
-	return e.dmAs(ctx, user, owner, msg)
+	e.Secrets.Remember(secret)
+	if err := e.dmAs(ctx, user, owner, msg); err != nil {
+		return err
+	}
+	if err := e.Secrets.Put(ctx, name, secret); err != nil {
+		return fmt.Errorf("the new signing secret was sent but couldn't be saved, so it isn't in use: the previous signature setting still applies (try again): %w", err)
+	}
+	return nil
 }
 
 // dmAs sends a code-written DM that stays out of the conversation history.

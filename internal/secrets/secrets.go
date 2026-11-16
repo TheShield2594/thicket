@@ -169,6 +169,14 @@ func (s *Store) Names(ctx context.Context) ([]string, error) {
 // Redact scrubs secret values from text.
 func (s *Store) Redact(text string) string { return s.red.Redact(text) }
 
+// Remember redacts v from now on without storing it, for a value that is
+// shown before it is saved.
+func (s *Store) Remember(v string) {
+	if v = strings.TrimSpace(v); v != "" {
+		s.red.Add(v)
+	}
+}
+
 func (s *Store) Delete(ctx context.Context, name string) error { return s.db.DeleteSecret(ctx, name) }
 
 // WarmRedactor decrypts every stored secret once so the redactor knows them.

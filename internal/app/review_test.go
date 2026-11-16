@@ -84,6 +84,48 @@ func TestSignatureSafety(t *testing.T) {
 	a.Scheduler.Wait()
 	fc.take()
 
+	// A new secret that's delivered but can't be saved isn't put in use.
+	sqlDB := a.DB.DB()
+	for _, op := range []string{"INSERT", "UPDATE"} {
+		if _, err := sqlDB.Exec("CREATE TRIGGER no_secret_" + op + " BEFORE " + op + " ON secrets BEGIN SELECT RAISE(ABORT, 'disk full'); END"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.Engine.HandleIncoming(ctx, dm("sign job 1 with github"))
+	for _, op := range []string{"INSERT", "UPDATE"} {
+		sqlDB.Exec("DROP TRIGGER no_secret_" + op)
+	}
+	fc.take()
+	if r := lastToolResult(fm); !strings.Contains(r, "isn't in use") {
+		t.Fatalf("a secret that couldn't be saved: %s", r)
+	}
+	readyAgain(a)
+	if code, _ := a.Webhook(ctx, token, body, signed(secret)); code != http.StatusAccepted {
+		t.Fatalf("old secret after a rotation that couldn't be saved: %d", code)
+	}
+	a.Scheduler.Wait()
+	fc.take()
+
+	// A stored secret that can't be read isn't touched by a failed rotation.
+	if _, err := sqlDB.Exec("UPDATE secrets SET ciphertext = x'00' WHERE name = 'webhook_1_signing'"); err != nil {
+		t.Fatal(err)
+	}
+	var before []byte
+	sqlDB.QueryRow("SELECT ciphertext FROM secrets WHERE name = 'webhook_1_signing'").Scan(&before)
+	fc.mu.Lock()
+	fc.failIf = func(s string) bool { return strings.Contains(s, "Signing secret") }
+	fc.mu.Unlock()
+	a.Engine.HandleIncoming(ctx, dm("sign job 1 with github"))
+	fc.mu.Lock()
+	fc.failIf = nil
+	fc.mu.Unlock()
+	fc.take()
+	var after []byte
+	sqlDB.QueryRow("SELECT ciphertext FROM secrets WHERE name = 'webhook_1_signing'").Scan(&after)
+	if string(before) != string(after) || len(after) == 0 {
+		t.Fatalf("a failed rotation changed an unreadable secret: %x -> %x", before, after)
+	}
+
 	// A webhook whose signature setup fails isn't left accepting unsigned calls.
 	fc.mu.Lock()
 	fc.failIf = func(s string) bool { return strings.Contains(s, "Signing secret") }
