@@ -74,6 +74,11 @@ func TestOpenRouterExtensions(t *testing.T) {
 	if _, ok := c.body["plugins"]; ok {
 		t.Fatal("auto engine should send no plugin")
 	}
+	o.Chat(ctx, Request{Model: "m", PDFEngine: "cloudflare-ai", WebResults: 5, Messages: pdfMsg})
+	b, _ = json.Marshal(c.body["plugins"])
+	if string(b) != `[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}},{"id":"web","max_results":5}]` {
+		t.Fatalf("both plugins = %s", b)
+	}
 
 	noKey := NewOpenRouter(DefaultURL, func(context.Context) (string, error) { return "", nil })
 	if _, err := noKey.Chat(ctx, Request{Model: "m"}); err != ErrNoKey {

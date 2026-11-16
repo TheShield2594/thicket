@@ -41,6 +41,7 @@ type Config struct {
 	// OpenRouter by default, or a local server such as Ollama.
 	ModelURL    string
 	ModelAPIKey string // optional key for a self-hosted server
+	SearchURL   string // a SearXNG instance for web search (optional)
 
 	Model         string
 	FallbackModel string
@@ -67,6 +68,7 @@ func Load() (*Config, error) {
 		OpenRouterKey:         env("OPENROUTER_API_KEY", ""),
 		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
 		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
+		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),

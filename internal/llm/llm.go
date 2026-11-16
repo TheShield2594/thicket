@@ -178,6 +178,9 @@ type Request struct {
 	// or "mistral-ocr". Empty lets OpenRouter choose (native if the model
 	// reads files, else OCR). Only sent when a message carries a file.
 	PDFEngine string
+	// WebResults > 0 has OpenRouter search the web first and give the
+	// model that many results (its "web" plugin). OpenRouter only.
+	WebResults int
 }
 
 type Usage struct {

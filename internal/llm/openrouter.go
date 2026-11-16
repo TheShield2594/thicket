@@ -91,7 +91,10 @@ func (o *OpenRouter) Chat(ctx context.Context, req Request) (*Response, error) {
 	if hosted {
 		body.Usage = map[string]any{"include": true}
 		if req.PDFEngine != "" && HasFiles(req.Messages) {
-			body.Plugins = []map[string]any{{"id": "file-parser", "pdf": map[string]any{"engine": req.PDFEngine}}}
+			body.Plugins = append(body.Plugins, map[string]any{"id": "file-parser", "pdf": map[string]any{"engine": req.PDFEngine}})
+		}
+		if req.WebResults > 0 {
+			body.Plugins = append(body.Plugins, map[string]any{"id": "web", "max_results": req.WebResults})
 		}
 	}
 	// Local models can be slow, especially on a CPU.

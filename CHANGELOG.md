@@ -58,6 +58,12 @@ First version.
   question and can't ask others in turn); `delegate_task` gives a fellow
   sprig, or itself, a background task whose result arrives by DM (stop
   cancels it; 3 per user at a time).
+- Web search: a new `web` tool scope (Juni has it in new installs) gives
+  `web_search`, through OpenRouter's web search or your own SearXNG
+  (`web_search` and `search_url` settings, `THICKET_SEARCH_URL`), and
+  `fetch_page`, which reads pages as text but only from public internet
+  addresses (checked at connect time, so redirects and DNS can't get
+  around it). Results are treated as data.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

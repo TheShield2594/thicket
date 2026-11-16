@@ -32,12 +32,15 @@ var Known = []Key{
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
 	{"history_tokens", "how much of the conversation each reply includes, in tokens (0 = automatic: 12000 on OpenRouter, 3000 on a local model); older parts are summarised", "int"},
 	{"model_url", "where models run: OpenRouter's API, or a local OpenAI-compatible server such as http://192.168.1.20:11434/v1 (Ollama)", "url"},
+	{"web_search", "how sprigs with the web scope search: auto, openrouter (OpenRouter's web search, about $0.02 a search), searxng (your own SearXNG at search_url), or off", "choice"},
+	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
 }
 
 // choices lists the allowed values of "choice" settings.
 var choices = map[string][]string{
 	"pdf_engine": {"auto", "native", "cloudflare-ai", "mistral-ocr"},
+	"web_search": {"auto", "openrouter", "searxng", "off"},
 }
 
 func lookup(name string) (Key, bool) {
@@ -71,6 +74,8 @@ func (s *Settings) defaults() map[string]string {
 		"consistency_check":  "true",
 		"checkin_days":       "3",
 		"pdf_engine":         "auto",
+		"web_search":         "auto",
+		"search_url":         s.cfg.SearchURL,
 		"history_tokens":     "0",
 		"model_url":          s.cfg.ModelURL,
 	}

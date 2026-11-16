@@ -251,6 +251,23 @@ func (e *Engine) builtinTools() []*Tool {
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
 		},
+		// --- the web (granted per sprig) ---
+		{
+			Name:        "web_search",
+			Description: "Search the web for current information (news, prices, opening hours, facts you're unsure of). Returns results or a sourced answer; then fetch_page a source to read it in full. Say where things came from when you tell the user.",
+			Params:      `{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+			Scope:       character.ScopeWeb,
+			Untrusted:   true,
+			Run:         e.toolWebSearch,
+		},
+		{
+			Name:        "fetch_page",
+			Description: "Read a web page (an http(s) address the user gave, or one from web_search) as plain text. Only public internet addresses.",
+			Params:      `{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`,
+			Scope:       character.ScopeWeb,
+			Untrusted:   true,
+			Run:         e.toolFetchPage,
+		},
 		// --- skills (a shared library of procedures) ---
 		{
 			Name:        "read_skill",
@@ -293,7 +310,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,
@@ -303,7 +320,7 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has). Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,
@@ -759,7 +776,7 @@ const draftSchema = `{"type":"object","properties":{
 "never_say":{"type":"array","items":{"type":"string"}},
 "relationship_to_user":{"type":"string"},
 "relationships":{"type":"object","additionalProperties":{"type":"string"},"description":"how they see other sprigs, keyed by id"},
-"tools":{"type":"array","items":{"type":"string"},"description":"scopes they need: schedule, mcp:<integration>/<tool or *>"},
+"tools":{"type":"array","items":{"type":"string"},"description":"scopes they need: schedule, web, mcp:<integration>/<tool or *>"},
 "avatar":{"type":"string","description":"https URL of an avatar image, if the user has one"},
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},

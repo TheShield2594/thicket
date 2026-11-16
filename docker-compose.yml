@@ -27,6 +27,8 @@ services:
       # You can also just send Juni the address in a DM.
       THICKET_MODEL_URL: ${THICKET_MODEL_URL:-}
       THICKET_MODEL_API_KEY: ${THICKET_MODEL_API_KEY:-}
+      # Optional. Your SearXNG for web search (see docs/web.md); without it, OpenRouter's is used.
+      THICKET_SEARCH_URL: ${THICKET_SEARCH_URL:-}
       # Optional overrides; each can also be changed later by asking Juni.
       THICKET_MODEL: ${THICKET_MODEL:-}
       THICKET_FALLBACK_MODEL: ${THICKET_FALLBACK_MODEL:-}

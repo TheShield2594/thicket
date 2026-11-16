@@ -25,6 +25,7 @@ import (
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/web"
 )
 
 // Limits that keep agents from running away.
@@ -49,6 +50,11 @@ type Engine struct {
 	Log      *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
+	// Fetcher reads web pages for the web tools; nil means one that only
+	// reaches public addresses. Tests replace it.
+	Fetcher        *web.Fetcher
+	fetchOnce      sync.Once
+	defaultFetcher *web.Fetcher
 	// ListModels asks a model server which models it has; nil means
 	// llm.ListModels.
 	ListModels func(ctx context.Context, base, key string) ([]string, error)

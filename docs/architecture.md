@@ -21,6 +21,7 @@ internal/settings    chat-changeable settings over env defaults
 internal/backup      export, restore, daily snapshots, character import
 internal/server      /health, /avatars, /hooks, and /api (mounted from internal/api)
 internal/api         local HTTP API: an internal "api" channel plus token auth
+internal/web         page fetching (public addresses only) and SearXNG search
 ```
 
 ## A message's journey
@@ -168,6 +169,17 @@ starts a background turn in job mode (kind `task`, not stored as a job),
 registered with the running jobs so "stop" cancels it, capped at 3 per
 user and 10 minutes, tied to the app's lifetime; the result goes to the
 user by DM from the sprig that did it.
+
+## Web
+
+`web_search` and `fetch_page` need the `web` scope and are `Untrusted`,
+so their output is wrapped as data. Search goes to SearXNG
+(`search_url`) or, on OpenRouter, to the cheap model with OpenRouter's
+`web` plugin, whose `url_citation` annotations become the source list.
+`web.Fetcher` refuses non-public addresses in the dialer's `Control`
+hook, after DNS resolution, so a redirect or a hostname that resolves to
+a private address is stopped the same way; it bypasses any HTTP proxy
+for that reason. HTML becomes text with the standard library only.
 
 ## Reliability rules
 

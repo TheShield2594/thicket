@@ -97,6 +97,8 @@ exactly what's missing, and `GET /health` reports each part.
 - Let other things wake a sprig: "Make a webhook that tells me when a CI
   build fails." Thicket DMs you a private URL; anything that POSTs to it
   starts the job with what it sent. See [Webhooks](docs/webhooks.md).
+- Look things up: sprigs with web access search the web and read pages,
+  through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
   as a skill, a versioned procedure every sprig follows from then on. See
   [Skills](docs/skills.md).
@@ -127,6 +129,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
 | `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
+| `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |
 | `THICKET_CHEAP_MODEL` *chat* | `anthropic/claude-haiku-5.5` | memory review and personality checks |
@@ -172,6 +175,7 @@ grant it.
 - [Local API and CLI](docs/api.md)
 - [Skills](docs/skills.md)
 - [Local models](docs/local-models.md)
+- [Web search](docs/web.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

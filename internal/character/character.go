@@ -23,6 +23,7 @@ const (
 	ScopeSchedule   = "schedule"
 	ScopeCharacters = "characters"
 	ScopeAdmin      = "admin"
+	ScopeWeb        = "web"
 	ScopeMCPPrefix  = "mcp:"
 )
 
@@ -156,10 +157,10 @@ func (c *Character) Validate() []string {
 	}
 	for _, t := range c.Tools {
 		switch {
-		case t == ScopeSchedule, t == ScopeCharacters, t == ScopeAdmin:
+		case t == ScopeSchedule, t == ScopeCharacters, t == ScopeAdmin, t == ScopeWeb:
 		case mcpRe.MatchString(t):
 		default:
-			p = append(p, fmt.Sprintf("unknown tool scope %q (use schedule, characters, admin, or mcp:<server>/<tool|*>)", t))
+			p = append(p, fmt.Sprintf("unknown tool scope %q (use schedule, web, characters, admin, or mcp:<server>/<tool|*>)", t))
 		}
 	}
 	if c.Initiative.QuietHours != "" {

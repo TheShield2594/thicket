@@ -227,6 +227,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text(`{"in_character": true}`), nil
 	case strings.Contains(sys, "You maintain long-term memory"):
 		return text(`{"ops":[{"op":"add","scope":"shared","kind":"person","content":"Has a sister called Maya."}]}`), nil
+	case strings.HasPrefix(sys, "You search the web for an AI companion"):
+		r := text("Tomatoes need 6 hours of sun [1].")
+		r.Message.Annotations = json.RawMessage(`[{"type":"url_citation","url_citation":{"url":"https://garden.example/tomatoes","title":"Tomato care"}},{"type":"url_citation","url_citation":{"url":"https://garden.example/tomatoes","title":"Tomato care"}}]`)
+		return r, nil
 	case strings.HasPrefix(sys, "You are Pip") && strings.Contains(last.Content, "is asking you this"):
 		if strings.Contains(last.Content, "chain") {
 			return toolCall("ask_sprig", map[string]any{"to": "juniper", "question": "and you?"}), nil
@@ -277,6 +281,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		var v int
 		fmt.Sscanf(u, "restore briefing to %d", &v)
 		return toolCall("manage_skill", map[string]any{"id": "briefing", "action": "restore", "version": v}), nil
+	case strings.HasPrefix(u, "search the web for "):
+		return toolCall("web_search", map[string]any{"query": strings.TrimPrefix(u, "search the web for ")}), nil
+	case strings.HasPrefix(u, "read the page "):
+		return toolCall("fetch_page", map[string]any{"url": strings.TrimPrefix(lastUserText(req.Messages), "read the page ")}), nil
 	case strings.Contains(u, "ask pip"):
 		q := "What's on the calendar tomorrow?"
 		if strings.Contains(u, "chain") {
