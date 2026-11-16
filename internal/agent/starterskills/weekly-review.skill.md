@@ -1,7 +1,7 @@
 ---
 id: weekly-review
 name: Weekly review
-description: Use when the user asks to review their week or plan the next one, or when a weekly job runs.
+description: Use when the user asks to review their week or plan the next one.
 ---
 Needs: nothing beyond your memories. A calendar integration makes step 3 better.
 
