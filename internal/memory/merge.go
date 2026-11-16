@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/store"
@@ -111,7 +112,7 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				case touched[dup.ID]:
 				case dup.Locked:
 					p.Skipped = append(p.Skipped, fmt.Sprintf("add: duplicate of user memory #%d", dup.ID))
-				case normalize(dup.Content) == normalize(content):
+				case sameText(dup.Content, content) && dup.Kind == kind && dup.DueAt.Equal(m.DueAt):
 					p.Changes = append(p.Changes, store.MemoryChange{Action: "touch", Memory: store.Memory{ID: dup.ID}})
 				default:
 					p.Changes = append(p.Changes, store.MemoryChange{Action: "update", Memory: store.Memory{ID: dup.ID, Content: content, Kind: kind, DueAt: m.DueAt}})
@@ -151,13 +152,25 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				}
 			}
 			ch := store.Memory{ID: op.ID, Content: content, Kind: kind}
-			if (kind == "followup" || (kind == "" && old.Kind == "followup")) && op.Due != "" {
-				if due, err := parseDue(op.Due, in.Now, in.Loc); err == nil {
-					ch.DueAt = due
+			effective := kind
+			if effective == "" {
+				effective = old.Kind
+			}
+			if op.Due != "" {
+				due, err := parseDue(op.Due, in.Now, in.Loc)
+				if err != nil {
+					p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: %s", op.ID, err))
+					continue
 				}
+				ch.DueAt = due
+			}
+			// A follow-up must always have a due date, as for adds.
+			if effective == "followup" && ch.DueAt.IsZero() && old.DueAt.IsZero() {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: a followup needs a due date", op.ID))
+				continue
 			}
 			touched[op.ID] = true
-			if normalize(content) == normalize(old.Content) && (kind == "" || kind == old.Kind) && ch.DueAt.IsZero() {
+			if sameText(content, old.Content) && effective == old.Kind && (ch.DueAt.IsZero() || ch.DueAt.Equal(old.DueAt)) {
 				continue
 			}
 			p.Changes = append(p.Changes, store.MemoryChange{Action: "update", Memory: ch})
@@ -197,11 +210,12 @@ func normKind(k string) string {
 
 func cleanContent(s string) (string, error) {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) < 3 {
+	n := utf8.RuneCountInString(s)
+	if n < 3 {
 		return "", fmt.Errorf("content is empty")
 	}
-	if len(s) > MaxContent {
-		return "", fmt.Errorf("content too long (%d > %d chars)", len(s), MaxContent)
+	if n > MaxContent {
+		return "", fmt.Errorf("content too long (%d > %d chars)", n, MaxContent)
 	}
 	if secrets.LooksLikeSecret(s) {
 		return "", fmt.Errorf("content looks like it contains a credential")
@@ -256,7 +270,15 @@ func Tokens(s string) []string {
 	return out
 }
 
-func normalize(s string) string { return strings.Join(Tokens(s), " ") }
+// sameText reports whether two memories say exactly the same thing,
+// ignoring case, spacing and trailing punctuation. It is deliberately
+// stricter than Similarity: "blood type A" and "blood type B" differ.
+func sameText(a, b string) bool {
+	canon := func(s string) string {
+		return strings.TrimRight(strings.ToLower(strings.Join(strings.Fields(s), " ")), ".!? ")
+	}
+	return canon(a) == canon(b)
+}
 
 func set(ws []string) map[string]bool {
 	m := make(map[string]bool, len(ws))

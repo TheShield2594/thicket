@@ -120,11 +120,15 @@ func (s *Store) MarkReviewFailed(ctx context.Context, convID int64) error {
 	return err
 }
 
-// PruneMessages deletes message text of reviewed conversations older than
-// the retention window. Durable facts live on in memories.
+// PruneMessages deletes conversations (and their messages) older than the
+// retention window once memory review is done with them. Durable facts live on in memories.
 func (s *Store) PruneMessages(ctx context.Context, retention time.Duration) (int64, error) {
 	cutoff := s.unix() - int64(retention.Seconds())
-	res, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE reviewed_at IS NOT NULL AND last_activity_at < ?`, cutoff)
+	// Also prune conversations review will never close (gave up after 3
+	// failures, or nothing the user said), so retention holds for them too.
+	res, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE last_activity_at < ? AND (
+		reviewed_at IS NOT NULL OR review_attempts >= 3
+		OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id AND m.role = 'user'))`, cutoff)
 	if err != nil {
 		return 0, err
 	}

@@ -45,6 +45,8 @@ func lookup(name string) (Key, bool) {
 type Settings struct {
 	db  *store.Store
 	cfg *config.Config
+	// CharacterExists validates per-character budget keys. Set by the app.
+	CharacterExists func(id string) bool
 }
 
 func New(db *store.Store, cfg *config.Config) *Settings { return &Settings{db: db, cfg: cfg} }
@@ -88,6 +90,14 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 	k, ok := lookup(name)
 	if !ok {
 		return fmt.Errorf("unknown setting %q", name)
+	}
+	if strings.HasPrefix(name, "budget.character.") {
+		// The cap is read back by character id, so only a real id works.
+		id := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(name, "budget.character."), ".daily_usd"))
+		if s.CharacterExists == nil || !s.CharacterExists(id) {
+			return fmt.Errorf("no sprig with id %q; use the character id (e.g. juniper), not the nickname", id)
+		}
+		name = "budget.character." + id + ".daily_usd"
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {

@@ -2,6 +2,8 @@ package secrets
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 )
 
@@ -33,8 +35,19 @@ func (h *LogHandler) attr(a slog.Attr) slog.Attr {
 	case slog.KindString:
 		return slog.String(a.Key, h.red.Redact(v.String()))
 	case slog.KindAny:
-		if err, ok := v.Any().(error); ok {
-			return slog.String(a.Key, h.red.Redact(err.Error()))
+		// Anything else (errors, structs, maps, raw JSON) is rendered as
+		// text and redacted, so no value type can smuggle a secret through.
+		switch x := v.Any().(type) {
+		case error:
+			return slog.String(a.Key, h.red.Redact(x.Error()))
+		case []byte:
+			return slog.String(a.Key, h.red.Redact(string(x)))
+		case json.RawMessage:
+			return slog.String(a.Key, h.red.Redact(string(x)))
+		case fmt.Stringer:
+			return slog.String(a.Key, h.red.Redact(x.String()))
+		default:
+			return slog.String(a.Key, h.red.Redact(fmt.Sprintf("%+v", x)))
 		}
 	case slog.KindGroup:
 		g := v.Group()

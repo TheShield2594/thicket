@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
@@ -101,7 +102,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
 				Run: func(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-					res, err := e.MCP.Call(ctx, st.Server, st.Tool.Name, args)
+					res, err := e.MCP.Call(ctx, st.Server, st.Tool.Name, args, st.Tool.ReadOnly())
 					if err != nil {
 						return "", err
 					}
@@ -352,7 +353,7 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 		return "", err
 	}
 	content := strings.Join(strings.Fields(a.Content), " ")
-	if len(content) < 3 || len(content) > memory.MaxContent {
+	if n := utf8.RuneCountInString(content); n < 3 || n > memory.MaxContent {
 		return "", fmt.Errorf("content must be 3-%d characters", memory.MaxContent)
 	}
 	if secrets.LooksLikeSecret(content) {
@@ -748,6 +749,9 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		if s == character.ScopeAdmin || s == character.ScopeCharacters {
 			probs = append(probs, "new sprigs can't be given the "+s+" scope from chat")
 		}
+		if strings.HasPrefix(s, character.ScopeMCPPrefix) && !t.user.IsAdmin() {
+			probs = append(probs, "only the owner or an admin can give a sprig integration access ("+s+")")
+		}
 	}
 	if _, exists := e.Chars.Get(c.ID); exists {
 		probs = append(probs, fmt.Sprintf("a sprig with id %q already exists; pick another id", c.ID))
@@ -942,8 +946,8 @@ func (e *Engine) toolAddIntegration(ctx context.Context, t *turn, args json.RawM
 	if err != nil {
 		return "", err
 	}
-	if !secrets.ValidName(a.Name) {
-		return "", errors.New("integration names are lowercase letters, digits and underscores")
+	if !secrets.ValidName(a.Name) || strings.Contains(a.Name, "__") {
+		return "", errors.New("integration names are lowercase letters, digits and single underscores")
 	}
 	for k, v := range a.Headers {
 		if secrets.LooksLikeSecret(v) {

@@ -129,6 +129,10 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 	}
 	pt, err := s.aead.Open(nil, nonce, ct, []byte(name))
 	if err != nil {
+		// An unreadable stored copy shouldn't hide a working env value.
+		if v, ok := s.env[name]; ok {
+			return v, nil
+		}
 		return "", fmt.Errorf("secret %q can't be decrypted (was the secret key changed?)", name)
 	}
 	v := string(pt)
@@ -171,12 +175,14 @@ func (s *Store) WarmRedactor(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Keep going past failures so every readable secret is still redacted.
+	var errs []error
 	for _, n := range names {
 		if _, err := s.Get(ctx, n); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 var placeholderRe = regexp.MustCompile(`\{\{secret:([a-z0-9_]+)\}\}`)

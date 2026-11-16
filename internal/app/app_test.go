@@ -93,7 +93,14 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	case strings.HasPrefix(sys, "You are Pip"):
 		return text("Pip here! I'll sort your calendar."), nil
 	}
-	// Juniper.
+	// Juniper. "spin" keeps calling tools for as long as they're offered,
+	// to prove the loop cap (not the fake) ends the turn.
+	if lastUserText(req.Messages) == "spin forever" {
+		if req.Tools != nil {
+			return toolCall("list_memories", map[string]any{}), nil
+		}
+		return text("Okay, stopping there."), nil
+	}
 	if last.Role == "tool" {
 		if strings.HasPrefix(last.Content, "PENDING") {
 			return text("I'll jot that down as soon as you give me the nod."), nil
@@ -109,10 +116,18 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
 	case strings.Contains(u, "calendar"):
 		return toolCall("handoff", map[string]any{"to": "pip", "message": "help with the calendar"}), nil
-	case strings.Contains(u, "spin"):
-		return toolCall("list_memories", map[string]any{}), nil // always calls a tool: loop cap must stop it
 	}
 	return text("Hi! I'm Juni. Lovely to meet you."), nil
+}
+
+// lastUserText is the newest message the user actually typed.
+func lastUserText(msgs []llm.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && !strings.HasPrefix(msgs[i].Content, "[") {
+			return msgs[i].Content
+		}
+	}
+	return ""
 }
 
 const pip = `---
@@ -138,6 +153,7 @@ func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 		t.Fatal(err)
 	}
 	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.CharactersDir = filepath.Join(dir, "characters") // never touch a developer's real files
 	fc := &fakeChannel{}
 	fm := &fakeModel{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,7 +177,7 @@ func dm(text string) channel.Incoming {
 }
 
 func TestSmoke(t *testing.T) {
-	a, fc, _, ctx := setup(t)
+	a, fc, fm, ctx := setup(t)
 	e := a.Engine
 
 	// 1. First contact, no model key: scripted greeting, owner created.
@@ -248,9 +264,24 @@ func TestSmoke(t *testing.T) {
 	}
 
 	// 7. Runaway tool loops are capped.
+	before := fm.calls
 	e.HandleIncoming(ctx, dm("Juni, spin forever"))
-	if out = fc.take(); len(out) != 1 {
+	if out = fc.take(); len(out) != 1 || !strings.Contains(out[0].text, "stopping") {
 		t.Fatalf("loop cap: %+v", out)
+	}
+	// At most 6 model calls for the turn, plus one personality check.
+	if n := fm.calls - before; n < 6 || n > 7 {
+		t.Fatalf("loop cap: %d model calls", n)
+	}
+
+	// 7b. Addressing a sprig works on multi-line messages too.
+	e.HandleIncoming(ctx, channel.Incoming{Channel: "discord", ChatID: "general", UserID: "owner", Text: "Pip, summarize these:\nfirst\nsecond"})
+	if out = fc.take(); len(out) != 1 || out[0].persona != "Pip" {
+		t.Fatalf("multiline address in a server channel: %+v", out)
+	}
+	e.HandleIncoming(ctx, channel.Incoming{Channel: "discord", ChatID: "general", UserID: "owner", Text: "hey Juni\nhow are you?"})
+	if out = fc.take(); len(out) != 1 || out[0].persona != "Juni" {
+		t.Fatalf("multiline 'hey Juni': %+v", out)
 	}
 
 	// 8. A secret pasted in a server channel is deleted, never processed.

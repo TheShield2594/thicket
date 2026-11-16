@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,17 +27,28 @@ type ServerTool struct {
 	Tool   Tool
 }
 
-// FuncName is the model-facing function name: mcp_<server>_<tool>.
+// FuncName is the model-facing function name.
 func (t ServerTool) FuncName() string { return FuncName(t.Server, t.Tool.Name) }
 
 var unsafe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
+// FuncName maps a server/tool pair to a model-facing function name,
+// mcp_<server>__<tool>. Server names can't contain "__", so the split is
+// unambiguous. If the tool name had to be sanitised or the result is too
+// long, a short hash of the exact pair is appended so distinct tools never
+// collide (and the name stays stable for approval policies).
 func FuncName(server, tool string) string {
-	n := "mcp_" + server + "_" + unsafe.ReplaceAllString(tool, "_")
-	if len(n) > 64 {
-		n = n[:64]
+	clean := unsafe.ReplaceAllString(tool, "_")
+	n := "mcp_" + server + "__" + clean
+	if clean == tool && len(n) <= 64 {
+		return n
 	}
-	return n
+	sum := sha256.Sum256([]byte(server + "\x00" + tool))
+	suffix := "_" + hex.EncodeToString(sum[:4])
+	if len(n) > 64-len(suffix) {
+		n = n[:64-len(suffix)]
+	}
+	return n + suffix
 }
 
 type conn struct {
@@ -53,10 +66,11 @@ type Registry struct {
 
 	mu    sync.Mutex
 	conns map[string]*conn
+	gen   map[string]uint64 // bumped on every (re)connect or removal
 }
 
 func NewRegistry(db *store.Store, sec Expander, log *slog.Logger) *Registry {
-	return &Registry{DB: db, Secrets: sec, Log: log, conns: map[string]*conn{}}
+	return &Registry{DB: db, Secrets: sec, Log: log, conns: map[string]*conn{}, gen: map[string]uint64{}}
 }
 
 func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error) {
@@ -89,7 +103,19 @@ func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error)
 
 // Connect (re)connects one server and lists its tools.
 func (r *Registry) Connect(ctx context.Context, s store.MCPServer) ([]Tool, error) {
+	c, err := r.connect(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	return c.tools, nil
+}
+
+// connect dials a server and publishes the connection, unless the server
+// was removed or reconnected by someone else while we were dialling.
+func (r *Registry) connect(ctx context.Context, s store.MCPServer) (*conn, error) {
 	r.mu.Lock()
+	r.gen[s.Name]++
+	myGen := r.gen[s.Name]
 	if old := r.conns[s.Name]; old != nil && old.client != nil {
 		old.client.Close()
 	}
@@ -107,14 +133,22 @@ func (r *Registry) Connect(ctx context.Context, s store.MCPServer) ([]Tool, erro
 			c = nil
 		}
 	}
+	cn := &conn{client: c, tools: tools, err: err, at: time.Now()}
 	r.mu.Lock()
-	r.conns[s.Name] = &conn{client: c, tools: tools, err: err, at: time.Now()}
+	if r.gen[s.Name] != myGen {
+		r.mu.Unlock()
+		if c != nil {
+			c.Close()
+		}
+		return nil, fmt.Errorf("integration %q was removed or reconnected while connecting", s.Name)
+	}
+	r.conns[s.Name] = cn
 	r.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", s.Name, err)
 	}
 	r.Log.Info("mcp server connected", "server", s.Name, "tools", len(tools))
-	return tools, nil
+	return cn, nil
 }
 
 // ConnectAll connects every enabled server, returning per-server errors.
@@ -139,6 +173,7 @@ func (r *Registry) ConnectAll(ctx context.Context) map[string]error {
 func (r *Registry) Disconnect(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.gen[name]++ // invalidates any connection attempt in flight
 	if c := r.conns[name]; c != nil && c.client != nil {
 		c.client.Close()
 	}
@@ -174,49 +209,59 @@ func (r *Registry) Status() map[string]string {
 	return out
 }
 
-// Call invokes a tool, reconnecting once if the connection dropped.
-func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage) (*CallResult, error) {
+// Call invokes a tool. retrySafe says whether the call may be replayed
+// after a transport failure: only for read-only tools, since a dropped
+// connection doesn't mean the server didn't act.
+func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
 	r.mu.Lock()
 	c := r.conns[server]
 	r.mu.Unlock()
-	if c == nil || c.client == nil {
-		if err := r.reconnect(ctx, server); err != nil {
+	var client *Client
+	if c != nil {
+		client = c.client
+	}
+	if client == nil {
+		var err error
+		if client, err = r.reconnect(ctx, server); err != nil {
 			return nil, err
 		}
-		r.mu.Lock()
-		c = r.conns[server]
-		r.mu.Unlock()
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	res, err := c.client.CallTool(cctx, tool, args)
+	res, err := client.CallTool(cctx, tool, args)
 	var rpcErr *RPCError
-	if err != nil && ctx.Err() == nil && !errors.As(err, &rpcErr) {
-		// Transport failure: reconnect and retry once.
-		if rerr := r.reconnect(ctx, server); rerr == nil {
-			r.mu.Lock()
-			c = r.conns[server]
-			r.mu.Unlock()
-			cctx2, cancel2 := context.WithTimeout(ctx, 60*time.Second)
-			defer cancel2()
-			res, err = c.client.CallTool(cctx2, tool, args)
-		}
+	if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
+		return res, err
 	}
-	return res, err
+	if !retrySafe {
+		return nil, fmt.Errorf("the connection to %s failed mid-call (%v), so I can't tell whether it took effect; check before trying again", server, err)
+	}
+	client, rerr := r.reconnect(ctx, server)
+	if rerr != nil {
+		return nil, err
+	}
+	cctx2, cancel2 := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel2()
+	return client.CallTool(cctx2, tool, args)
 }
 
-func (r *Registry) reconnect(ctx context.Context, server string) error {
+// reconnect connects a configured server and returns its client directly,
+// so a concurrent replacement can't leave the caller holding nothing.
+func (r *Registry) reconnect(ctx context.Context, server string) (*Client, error) {
 	servers, err := r.DB.MCPServers(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, s := range servers {
 		if s.Name == server && s.Enabled {
-			_, err := r.Connect(ctx, s)
-			return err
+			c, err := r.connect(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			return c.client, nil
 		}
 	}
-	return fmt.Errorf("integration %q is not configured", server)
+	return nil, fmt.Errorf("integration %q is not configured", server)
 }
 
 func (r *Registry) Close() {

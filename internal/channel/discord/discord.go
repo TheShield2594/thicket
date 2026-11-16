@@ -5,11 +5,14 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
@@ -29,7 +32,7 @@ type Adapter struct {
 
 	mu       sync.Mutex
 	hooks    map[string]*discordgo.Webhook // parent channel id -> webhook
-	noHooks  map[string]bool               // channels where we lack permission
+	noHooks  map[string]time.Time          // channels where we lack permission, until when
 	chanInfo map[string]*discordgo.Channel
 }
 
@@ -39,7 +42,7 @@ func New(token string, listenChannels []string, log *slog.Logger) *Adapter {
 		l[c] = true
 	}
 	return &Adapter{token: token, listen: l, log: log, hooks: map[string]*discordgo.Webhook{},
-		noHooks: map[string]bool{}, chanInfo: map[string]*discordgo.Channel{}}
+		noHooks: map[string]time.Time{}, chanInfo: map[string]*discordgo.Channel{}}
 }
 
 func (a *Adapter) Name() string    { return "discord" }
@@ -109,12 +112,14 @@ func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, te
 	}
 	ch := a.channel(chatID)
 	if ch != nil && ch.Type != discordgo.ChannelTypeDM && ch.Type != discordgo.ChannelTypeGroupDM {
-		if err := a.sendWebhook(ch, p, text); err == nil {
+		// Only the part the webhook didn't deliver falls back to a bot
+		// message, so nothing is posted twice.
+		rest, err := a.sendWebhook(ch, p, text)
+		if err == nil {
 			return nil
-		} else {
-			a.log.Warn("webhook send failed, falling back to bot message", "channel", chatID, "err", err)
 		}
-		for _, part := range split(text, 1900) {
+		a.log.Warn("webhook send failed, falling back to bot message", "channel", chatID, "err", err)
+		for _, part := range split(rest, 1900) {
 			if _, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{
 				Content: "**" + p.Name + ":** " + part, AllowedMentions: allowedMentions,
 			}); err != nil {
@@ -158,16 +163,19 @@ func (a *Adapter) channel(id string) *discordgo.Channel {
 	return c
 }
 
-func (a *Adapter) sendWebhook(ch *discordgo.Channel, p channel.Persona, text string) error {
+// sendWebhook posts text in chunks through the channel's webhook. On
+// failure it returns the text not yet delivered.
+func (a *Adapter) sendWebhook(ch *discordgo.Channel, p channel.Persona, text string) (string, error) {
 	parent, thread := ch.ID, ""
 	if ch.IsThread() {
 		parent, thread = ch.ParentID, ch.ID
 	}
 	hook, err := a.webhook(parent)
 	if err != nil {
-		return err
+		return text, err
 	}
-	for _, part := range split(text, 1990) {
+	parts := split(text, 1990)
+	for i, part := range parts {
 		params := &discordgo.WebhookParams{Content: part, Username: p.Name, AvatarURL: p.AvatarURL, AllowedMentions: allowedMentions}
 		if thread != "" {
 			_, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, false, thread, params)
@@ -178,10 +186,19 @@ func (a *Adapter) sendWebhook(ch *discordgo.Channel, p channel.Persona, text str
 			a.mu.Lock()
 			delete(a.hooks, parent) // maybe deleted by a user; recreate next time
 			a.mu.Unlock()
-			return err
+			return strings.Join(parts[i:], "\n"), err
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// noHookRetry is how long a missing-permission result is trusted before
+// trying to create a webhook again (permissions can be granted later).
+const noHookRetry = 10 * time.Minute
+
+func isForbidden(err error) bool {
+	var re *discordgo.RESTError
+	return errors.As(err, &re) && re.Response != nil && re.Response.StatusCode == http.StatusForbidden
 }
 
 func (a *Adapter) webhook(channelID string) (*discordgo.Webhook, error) {
@@ -190,7 +207,7 @@ func (a *Adapter) webhook(channelID string) (*discordgo.Webhook, error) {
 		a.mu.Unlock()
 		return h, nil
 	}
-	if a.noHooks[channelID] {
+	if until, ok := a.noHooks[channelID]; ok && time.Now().Before(until) {
 		a.mu.Unlock()
 		return nil, fmt.Errorf("no Manage Webhooks permission")
 	}
@@ -208,9 +225,11 @@ func (a *Adapter) webhook(channelID string) (*discordgo.Webhook, error) {
 	}
 	h, err := a.s.WebhookCreate(channelID, webhookName, "")
 	if err != nil {
-		a.mu.Lock()
-		a.noHooks[channelID] = true
-		a.mu.Unlock()
+		if isForbidden(err) { // cache only a real permission refusal, not a blip
+			a.mu.Lock()
+			a.noHooks[channelID] = time.Now().Add(noHookRetry)
+			a.mu.Unlock()
+		}
 		return nil, fmt.Errorf("create webhook (give the bot Manage Webhooks so each sprig gets its own name and avatar): %w", err)
 	}
 	a.mu.Lock()

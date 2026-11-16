@@ -148,12 +148,14 @@ func (e *Engine) handleApprovalReply(ctx context.Context, in channel.Incoming, u
 		} else {
 			e.logActivity(ctx, "info", "tool", char.ID, user.ID, "ran approved tool "+a.Tool, e.Secrets.Redact(truncate(out, 500)))
 		}
+		// Redact before anything else sees it: the model, the DB, the chat.
+		out = e.Secrets.Redact(out)
 		result = out
 		if tool.Untrusted {
 			result = wrapUntrusted(a.Tool, out)
 		}
 	}
-	_ = e.DB.SetApprovalResult(ctx, a.ID, e.Secrets.Redact(truncate(result, 2000)))
+	_ = e.DB.SetApprovalResult(ctx, a.ID, truncate(result, 2000))
 	return true, e.respond(ctx, t, fmt.Sprintf("The user approved running %s. Result:\n%s\nTell them how it went, honestly.", a.Tool, result))
 }
 

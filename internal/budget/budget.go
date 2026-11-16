@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/llm"
@@ -28,6 +29,23 @@ type Guard struct {
 	Log      *slog.Logger
 	OnAlert  func(ctx context.Context, a Alert)
 	Now      func() time.Time
+
+	mu      sync.Mutex
+	pending []store.Usage // paid calls not yet written to the database
+}
+
+// flushPending retries usage rows that failed to record. Until they are
+// written, spend totals are incomplete, so further calls are refused.
+func (g *Guard) flushPending(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for len(g.pending) > 0 {
+		if err := g.DB.RecordUsage(context.WithoutCancel(ctx), g.pending[0]); err != nil {
+			return err
+		}
+		g.pending = g.pending[1:]
+	}
+	return nil
 }
 
 func (g *Guard) now() time.Time {
@@ -99,6 +117,11 @@ func (g *Guard) Status(ctx context.Context) (string, error) {
 
 func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	m := llm.MetaFrom(ctx)
+	if err := g.flushPending(ctx); err != nil {
+		g.alert(ctx, Alert{Key: "budget:accounting", Level: "error",
+			Message: "I can't record what model calls cost right now (" + err.Error() + "), so I've paused model calls to keep the spend caps honest."})
+		return nil, &llm.BudgetError{Reason: "usage accounting is failing"}
+	}
 	cs, err := g.checks(ctx, m)
 	if err != nil {
 		return nil, err
@@ -117,11 +140,17 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 	if err != nil {
 		return nil, err
 	}
-	if rerr := g.DB.RecordUsage(ctx, store.Usage{
+	u := store.Usage{
 		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
 		Model: resp.Model, PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, CostUSD: resp.Usage.Cost,
-	}); rerr != nil {
-		g.Log.Error("record usage", "err", rerr)
+	}
+	// The call is paid for even if the caller has gone away: record it
+	// regardless of cancellation, and keep it for retry if the write fails.
+	if rerr := g.DB.RecordUsage(context.WithoutCancel(ctx), u); rerr != nil {
+		g.Log.Error("record usage; will retry before the next call", "err", rerr)
+		g.mu.Lock()
+		g.pending = append(g.pending, u)
+		g.mu.Unlock()
 	}
 	for _, c := range cs {
 		after := c.spent + resp.Usage.Cost

@@ -114,6 +114,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Settings = settings.New(db, cfg)
 
 	a.Chars = character.NewRegistry(cfg.CharactersDir, db, log)
+	a.Settings.CharacterExists = func(id string) bool { _, ok := a.Chars.Get(id); return ok }
 	if err := a.Chars.EnsureDefaults(ctx); err != nil {
 		return nil, fmt.Errorf("characters: %w", err)
 	}
@@ -216,9 +217,14 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 }
 
 // Run starts everything and blocks until ctx is cancelled.
-func (a *App) Run(ctx context.Context) error {
+func (a *App) Run(parent context.Context) error {
+	// Workers get a child context so every exit path stops them, and Run
+	// waits for them before returning (Close must not race live workers).
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
+	mcpDone := make(chan struct{})
 	goRun := func(name string, f func()) {
 		wg.Add(1)
 		go func() {
@@ -251,6 +257,7 @@ func (a *App) Run(ctx context.Context) error {
 		})
 	}
 	goRun("mcp", func() {
+		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {
 			a.startErr(fmt.Sprintf("The %s integration didn't connect: %s", name, shortErr(err)))
 		}
@@ -266,7 +273,7 @@ func (a *App) Run(ctx context.Context) error {
 		})
 	})
 	goRun("maintenance", func() { a.maintenance(ctx) })
-	goRun("startup-report", func() { a.reportStartup(ctx) })
+	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone) })
 
 	a.Log.Info("thicket started", "version", a.Version, "characters", len(a.Chars.All()))
 	var err error
@@ -275,17 +282,19 @@ func (a *App) Run(ctx context.Context) error {
 	case err = <-errc:
 		a.Log.Error("fatal", "err", err)
 	}
+	cancel()
 	if a.HTTP != nil {
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = a.HTTP.Shutdown(sctx)
-		cancel()
+		scancel()
 	}
+	wg.Wait()
 	return err
 }
 
 // reportStartup tells the owner about problems found at startup, once a
 // channel is connected.
-func (a *App) reportStartup(ctx context.Context) {
+func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		ok := len(a.channels) == 0
@@ -301,7 +310,11 @@ func (a *App) reportStartup(ctx context.Context) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	time.Sleep(5 * time.Second) // let MCP connections settle
+	select { // MCP failures are part of the report
+	case <-mcpDone:
+	case <-ctx.Done():
+		return
+	}
 	a.mu.Lock()
 	errs := append([]string(nil), a.startErrs...)
 	a.mu.Unlock()

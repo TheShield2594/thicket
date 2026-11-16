@@ -174,3 +174,40 @@ func TestParseOps(t *testing.T) {
 		t.Fatal("expected error for non-JSON")
 	}
 }
+
+func TestFollowupDueChangeIsKept(t *testing.T) {
+	ex := append(existing(), store.Memory{ID: 4, UserID: 7, Character: "juniper", Kind: "followup", Content: "Ask how the interview went.",
+		DueAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC), Source: "auto", UpdatedAt: now})
+	p := BuildPlan(PlanInput{UserID: 7, Scopes: map[string]bool{"juniper": true}, Existing: ex, Now: now, Loc: time.UTC},
+		[]Op{{Op: "add", Scope: "juniper", Kind: "followup", Content: "Ask how the interview went.", Due: "2026-11-20"}})
+	if len(p.Changes) != 1 || p.Changes[0].Action != "update" || p.Changes[0].Memory.DueAt.Day() != 20 {
+		t.Fatalf("new due date lost: %+v", p.Changes)
+	}
+}
+
+func TestUpdateToFollowupNeedsDue(t *testing.T) {
+	p := plan(Op{Op: "update", ID: 1, Kind: "followup", Content: "Ask about Biscuit's vet visit."})
+	if len(p.Changes) != 0 {
+		t.Fatalf("followup without due accepted: %+v", p.Changes)
+	}
+	p = plan(Op{Op: "update", ID: 1, Content: "Has a dog named Biscuit.", Due: "whenever"})
+	if len(p.Changes) != 0 || len(p.Skipped) != 1 {
+		t.Fatalf("bad due silently ignored: %+v %v", p.Changes, p.Skipped)
+	}
+}
+
+func TestSingleLetterDifferencesMatter(t *testing.T) {
+	ex := []store.Memory{{ID: 9, UserID: 7, Kind: "fact", Content: "Has blood type A.", Source: "auto", UpdatedAt: now}}
+	p := BuildPlan(PlanInput{UserID: 7, Existing: ex, Now: now}, []Op{{Op: "update", ID: 9, Content: "Has blood type B."}})
+	if len(p.Changes) != 1 || p.Changes[0].Memory.Content != "Has blood type B." {
+		t.Fatalf("correction dropped: %+v", p.Changes)
+	}
+}
+
+func TestLimitCountsCharactersNotBytes(t *testing.T) {
+	content := strings.Repeat("猫", 150) // 150 characters, 450 bytes
+	p := plan(Op{Op: "add", Scope: "shared", Content: content})
+	if len(p.Changes) != 1 {
+		t.Fatalf("150-character memory rejected: %v", p.Skipped)
+	}
+}

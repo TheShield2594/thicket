@@ -31,8 +31,13 @@ type turn struct {
 	toolCalls       int
 	handoff         *handoffReq
 	nothingToReport bool
-	afterReply      []string // canned posts after the reply (approval prompts)
+	afterReply      []post // canned posts after the reply (approval prompts)
 	noTools         bool
+}
+
+type post struct {
+	text       string
+	approvalID int64
 }
 
 func (t *turn) jobMode() bool { return t.job != nil }
@@ -246,10 +251,11 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
 	if t.chatRef == "" {
 		if err := e.send(ctx, chatRef, t.char, msg); err != nil {
+			_, _ = e.DB.DecideApproval(ctx, id, "expired")
 			return "Error: couldn't ask the user for approval: " + err.Error()
 		}
 	} else {
-		t.afterReply = append(t.afterReply, msg)
+		t.afterReply = append(t.afterReply, post{text: msg, approvalID: id})
 	}
 	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, fmt.Sprintf("approval #%d requested for %s", id, tool.Name), string(args))
 	return "PENDING: this action needs the user's approval. A request with the exact details has been shown to them. Tell them briefly what you want to do and that you're waiting for their OK. Do not say it's done."

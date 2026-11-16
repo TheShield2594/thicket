@@ -199,11 +199,22 @@ func (s *Store) MarkMemoriesUsed(ctx context.Context, ids []int64) error {
 // The grace window is what makes rollback possible.
 func (s *Store) SweepMemories(ctx context.Context, grace time.Duration) (int64, error) {
 	cutoff := s.unix() - int64(grace.Seconds())
-	res, err := s.db.ExecContext(ctx, "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?", cutoff)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	// History holds full copies of the content, so it goes with the memory.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_events WHERE memory_id IN
+		(SELECT id FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?)`, cutoff); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?", cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, tx.Commit()
 }
 
 // --- extraction runs ---
@@ -291,12 +302,19 @@ func (s *Store) RollbackRun(ctx context.Context, runID int64) (int, error) {
 		}
 		evs = append(evs, e)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err // never mark a partial rollback as complete
+	}
 	rows.Close()
 	now := s.unix()
 	for _, e := range evs {
 		switch e.action {
 		case "add":
 			if _, err := tx.ExecContext(ctx, "DELETE FROM memories WHERE id = ?", e.id); err != nil {
+				return 0, err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM memory_events WHERE memory_id = ? AND run_id != ?", e.id, runID); err != nil {
 				return 0, err
 			}
 		case "update", "expire":

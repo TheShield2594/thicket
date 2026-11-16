@@ -194,3 +194,38 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("snapshot missing: %v", err)
 	}
 }
+
+func TestRetentionCoversAbandonedConversations(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return now })
+	u, _ := s.CreateUser(ctx, "discord", "1", "", "owner")
+	c, _ := s.OpenConversation(ctx, u.ID, "discord:dm", time.Minute)
+	s.AddMessage(ctx, c.ID, "user", "", "private words")
+	for i := 0; i < 3; i++ {
+		s.MarkReviewFailed(ctx, c.ID)
+	}
+	now = now.Add(40 * 24 * time.Hour)
+	if n, err := s.PruneMessages(ctx, 30*24*time.Hour); err != nil || n != 1 {
+		t.Fatalf("abandoned conversation not pruned: %d %v", n, err)
+	}
+}
+
+func TestSweepRemovesHistory(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return now })
+	u, _ := s.CreateUser(ctx, "discord", "1", "", "owner")
+	ids, _ := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "context", Content: "Tired today.", Source: "auto", ExpiresAt: now.Add(time.Hour)}}})
+	now = now.Add(60 * 24 * time.Hour)
+	if n, _ := s.SweepMemories(ctx, 30*24*time.Hour); n != 1 {
+		t.Fatal("not swept")
+	}
+	var events int
+	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_events WHERE memory_id = ?", ids[0]).Scan(&events)
+	if events != 0 {
+		t.Fatalf("%d history rows left after sweep", events)
+	}
+}

@@ -83,7 +83,7 @@ expire after 30 minutes).
 - Integration tools the server marks read-only (`readOnlyHint`) run
   without asking. Everything else asks by default.
 - Change it per tool: "Juni, don't ask me before turning on lights" →
-  `set_tool_approval(mcp_homeassistant_HassTurnOn, never)`. Or `always` to
+  `set_tool_approval(mcp_homeassistant__HassTurnOn, never)`. Or `always` to
   require approval for something that normally doesn't.
 - Scheduled jobs that hit a tool needing approval ask in the chat you last talked in.
 

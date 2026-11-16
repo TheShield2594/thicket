@@ -48,15 +48,29 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+// rpcResponse is any incoming message. A response has an id and no
+// method; a server request has both; a notification has only a method.
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id"`
+	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Result  json.RawMessage `json:"result"`
 	Error   *struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// responseID returns the id of a response to one of our requests.
+func (m *rpcResponse) responseID() (int64, bool) {
+	if m.Method != "" || len(m.ID) == 0 {
+		return 0, false
+	}
+	var id int64
+	if err := json.Unmarshal(m.ID, &id); err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 // RPCError is an error the server returned for a request (as opposed to a
@@ -102,7 +116,7 @@ func DialStdio(ctx context.Context, command string, args []string, env map[strin
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", command, err)
 	}
-	st := &stdio{cmd: cmd, in: stdin, pending: map[int64]chan *rpcResponse{}, done: make(chan struct{})}
+	st := &stdio{cmd: cmd, in: stdin, wsem: make(chan struct{}, 1), pending: map[int64]chan *rpcResponse{}, done: make(chan struct{})}
 	go st.readLoop(stdout)
 	c := &Client{t: st}
 	if err := c.initialize(ctx); err != nil {
@@ -212,29 +226,40 @@ func (c *Client) Close() error { return c.t.close() }
 // --- stdio transport ---
 
 type stdio struct {
-	cmd     *exec.Cmd
-	in      io.WriteCloser
-	wmu     sync.Mutex
-	mu      sync.Mutex
-	pending map[int64]chan *rpcResponse
-	done    chan struct{}
-	err     error
+	cmd       *exec.Cmd
+	in        io.WriteCloser
+	wsem      chan struct{} // write lock that can be abandoned on cancel
+	mu        sync.Mutex
+	pending   map[int64]chan *rpcResponse
+	done      chan struct{}
+	err       error
+	closeOnce sync.Once
 }
 
 func (s *stdio) readLoop(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16<<20)
 	for sc.Scan() {
-		var resp rpcResponse
-		if err := json.Unmarshal(sc.Bytes(), &resp); err != nil || resp.ID == nil {
-			continue // logs, notifications, server requests: ignored
+		var msg rpcResponse
+		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+			continue // stray log output
+		}
+		if msg.Method != "" {
+			if len(msg.ID) > 0 {
+				go s.answerServerRequest(msg)
+			}
+			continue // notifications are ignored
+		}
+		id, ok := msg.responseID()
+		if !ok {
+			continue
 		}
 		s.mu.Lock()
-		ch := s.pending[*resp.ID]
-		delete(s.pending, *resp.ID)
+		ch := s.pending[id]
+		delete(s.pending, id)
 		s.mu.Unlock()
 		if ch != nil {
-			ch <- &resp
+			ch <- &msg
 		}
 	}
 	s.mu.Lock()
@@ -243,15 +268,50 @@ func (s *stdio) readLoop(r io.Reader) {
 	close(s.done)
 }
 
-func (s *stdio) send(req rpcRequest) error {
-	b, err := json.Marshal(req)
+// answerServerRequest replies to requests the server sends us. We support
+// ping (required by the spec); everything else is "method not found".
+func (s *stdio) answerServerRequest(req rpcResponse) {
+	reply := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+	if req.Method == "ping" {
+		reply["result"] = map[string]any{}
+	} else {
+		reply["error"] = map[string]any{"code": -32601, "message": "method not supported by this client"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.write(ctx, reply)
+}
+
+func (s *stdio) send(ctx context.Context, req rpcRequest) error { return s.write(ctx, req) }
+
+// write sends one message. If ctx ends while the write is blocked (the
+// server stopped reading and the pipe is full), the process is killed so
+// nothing stays stuck behind it.
+func (s *stdio) write(ctx context.Context, msg any) error {
+	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err = s.in.Write(append(b, '\n'))
-	return err
+	select {
+	case s.wsem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return errors.New("MCP server process exited")
+	}
+	errc := make(chan error, 1)
+	go func() {
+		defer func() { <-s.wsem }()
+		_, err := s.in.Write(append(b, '\n'))
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		s.close()
+		return ctx.Err()
+	}
 }
 
 func (s *stdio) roundTrip(ctx context.Context, req rpcRequest) (*rpcResponse, error) {
@@ -263,7 +323,10 @@ func (s *stdio) roundTrip(ctx context.Context, req rpcRequest) (*rpcResponse, er
 	}
 	s.pending[*req.ID] = ch
 	s.mu.Unlock()
-	if err := s.send(req); err != nil {
+	if err := s.send(ctx, req); err != nil {
+		s.mu.Lock()
+		delete(s.pending, *req.ID)
+		s.mu.Unlock()
 		return nil, err
 	}
 	select {
@@ -279,14 +342,16 @@ func (s *stdio) roundTrip(ctx context.Context, req rpcRequest) (*rpcResponse, er
 	}
 }
 
-func (s *stdio) notify(_ context.Context, req rpcRequest) error { return s.send(req) }
+func (s *stdio) notify(ctx context.Context, req rpcRequest) error { return s.send(ctx, req) }
 
 func (s *stdio) close() error {
-	s.in.Close()
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-	}
-	_ = s.cmd.Wait()
+	s.closeOnce.Do(func() {
+		s.in.Close()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		go s.cmd.Wait() // reap without blocking the caller
+	})
 	return nil
 }
 
@@ -363,8 +428,10 @@ func readSSE(r io.Reader, id int64) (*rpcResponse, error) {
 			return nil
 		}
 		var resp rpcResponse
-		if json.Unmarshal([]byte(data.String()), &resp) == nil && resp.ID != nil && *resp.ID == id {
-			return &resp
+		if json.Unmarshal([]byte(data.String()), &resp) == nil {
+			if got, ok := resp.responseID(); ok && got == id {
+				return &resp
+			}
 		}
 		return nil
 	}

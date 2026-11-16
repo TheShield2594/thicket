@@ -43,10 +43,11 @@ type Registry struct {
 	hashes HashStore
 	log    *slog.Logger
 
-	mu     sync.RWMutex
-	chars  map[string]*Character
-	errs   []LoadError
-	mtimes map[string]time.Time
+	writeMu sync.Mutex // serialises Write's check-then-write
+	mu      sync.RWMutex
+	chars   map[string]*Character
+	errs    []LoadError
+	mtimes  map[string]time.Time
 }
 
 func NewRegistry(dir string, hashes HashStore, log *slog.Logger) *Registry {
@@ -265,6 +266,8 @@ func (r *Registry) Write(ctx context.Context, c *Character) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
 	path := filepath.Join(r.dir, c.ID+".md")
 	if existing, err := os.ReadFile(path); err == nil {
 		known, err := r.hashes.CharacterFileHash(ctx, c.ID)
@@ -291,9 +294,29 @@ func (r *Registry) Write(ctx context.Context, c *Character) (string, error) {
 }
 
 func writeAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// A unique temp file in the same directory, so concurrent writers can't
+	// clobber each other's half-written file before the rename.
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }

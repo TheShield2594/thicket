@@ -52,9 +52,10 @@ type Engine struct {
 	Now      func() time.Time
 
 	channels  map[string]channel.Channel
-	chatLocks sync.Map // chatRef -> *sync.Mutex
-	active    sync.Map // chatRef -> character id
-	drafts    sync.Map // user id -> *character.Character
+	chatLocks sync.Map   // chatRef -> *sync.Mutex
+	active    sync.Map   // chatRef -> character id
+	drafts    sync.Map   // user id -> *character.Character
+	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
 }
@@ -166,18 +167,24 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	if err != nil {
 		reply = e.failureReply(ctx, t, err)
 	}
+	var sendErr error
 	if reply != "" {
-		if err := e.send(ctx, t.chatRef, t.char, reply); err != nil {
-			return err
-		}
-		if t.conv != nil {
+		if sendErr = e.send(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
 			_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", t.char.ID, reply)
 		}
 	}
+	// Approval prompts go out even if the reply failed. An approval whose
+	// prompt the user never saw is withdrawn, so a stray "ok" can't run it.
 	for _, p := range t.afterReply {
-		if err := e.send(ctx, t.chatRef, t.char, p); err != nil {
+		if err := e.send(ctx, t.chatRef, t.char, p.text); err != nil {
 			e.Log.Error("post after reply", "err", err)
+			if p.approvalID != 0 {
+				_, _ = e.DB.DecideApproval(ctx, p.approvalID, "expired")
+			}
 		}
+	}
+	if sendErr != nil {
+		return sendErr
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
@@ -229,6 +236,13 @@ func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.U
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+	// Owner bootstrap is check-then-insert: serialise it so two first DMs
+	// can't both become owner, and re-read in case another goroutine won.
+	e.userMu.Lock()
+	defer e.userMu.Unlock()
+	if u, err := e.DB.UserByExternal(ctx, in.Channel, in.UserID); err == nil {
+		return u, nil
 	}
 	hasOwner, err := e.DB.HasOwner(ctx)
 	if err != nil {
@@ -291,8 +305,8 @@ func (e *Engine) allow(userID int64) bool {
 	return true
 }
 
-var addressRe = regexp.MustCompile(`(?i)^\s*(?:hey|hi|hello|ok|okay|yo)?[\s,]*@?([a-z][a-z0-9-]*)\s*[,:!\-—]\s*(.*)$`)
-var addressBareRe = regexp.MustCompile(`(?i)^\s*(?:hey|hi|hello|yo)[\s,]+@?([a-z][a-z0-9-]*)\b[\s,!.]*(.*)$`)
+var addressRe = regexp.MustCompile(`(?is)^\s*(?:hey|hi|hello|ok|okay|yo)?[\s,]*@?([a-z][a-z0-9-]*)\s*[,:!\-—]\s*(.*)$`)
+var addressBareRe = regexp.MustCompile(`(?is)^\s*(?:hey|hi|hello|yo)[\s,]+@?([a-z][a-z0-9-]*)\b[\s,!.]*(.*)$`)
 
 // addressedCharacter detects "Pip, ..." / "hey Juni ..." at the start of a message.
 func (e *Engine) addressedCharacter(text string) (*character.Character, string) {

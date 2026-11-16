@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -66,7 +67,17 @@ func TestHTTPClient(t *testing.T) {
 	if err != nil || res.Text != "light is on" {
 		t.Fatalf("call: %+v %v", res, err)
 	}
-	if got := FuncName("ha", "turn.on"); got != "mcp_ha_turn_on" {
-		t.Fatalf("func name sanitising: %s", got)
+	if got := FuncName("ha", "turn_on"); got != "mcp_ha__turn_on" {
+		t.Fatalf("plain name: %s", got)
+	}
+	// Names that sanitise to the same thing, or are truncated, must not collide.
+	long := strings.Repeat("x", 80)
+	names := map[string]bool{}
+	for _, pair := range [][2]string{{"ha", "turn_on"}, {"ha", "turn.on"}, {"ha", "turn on"}, {"ha", long + "a"}, {"ha", long + "b"}, {"a_b", "c"}, {"a", "b_c"}} {
+		n := FuncName(pair[0], pair[1])
+		if names[n] || len(n) > 64 {
+			t.Fatalf("collision or too long: %s", n)
+		}
+		names[n] = true
 	}
 }

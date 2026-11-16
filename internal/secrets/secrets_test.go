@@ -3,6 +3,7 @@ package secrets
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -66,8 +67,33 @@ func TestLogHandlerRedacts(t *testing.T) {
 	red.Add("hunter2-hunter2")
 	var buf bytes.Buffer
 	log := slog.New(NewLogHandler(slog.NewJSONHandler(&buf, nil), red))
-	log.Info("calling with hunter2-hunter2", "auth", "Bearer hunter2-hunter2", "err", os.ErrNotExist)
+	log.Info("calling with hunter2-hunter2", "auth", "Bearer hunter2-hunter2", "err", os.ErrNotExist,
+		"raw", json.RawMessage(`{"token":"hunter2-hunter2"}`), "map", map[string]string{"k": "hunter2-hunter2"})
 	if strings.Contains(buf.String(), "hunter2") {
 		t.Fatalf("secret leaked to log: %s", buf.String())
+	}
+}
+
+func TestEnvFallbackWhenStoredCopyUnreadable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, _ := store.Open(ctx, filepath.Join(dir, "t.db"))
+	defer db.Close()
+	a, _ := New(db, bytes.Repeat([]byte{1}, 32), NewRedactor())
+	a.Put(ctx, OpenRouterKey, "stored-key-value-123")
+	b, _ := New(db, bytes.Repeat([]byte{2}, 32), NewRedactor()) // key changed
+	b.SetEnvFallback(OpenRouterKey, "env-key-value-456")
+	if v, err := b.Get(ctx, OpenRouterKey); err != nil || v != "env-key-value-456" {
+		t.Fatalf("got %q %v", v, err)
+	}
+	a.Put(ctx, "zz_other", "another-secret-789")
+	db.PutSecretBlob(ctx, "aa_broken", []byte("123456789012"), []byte("garbage"))
+	red := NewRedactor()
+	c, _ := New(db, bytes.Repeat([]byte{1}, 32), red)
+	if err := c.WarmRedactor(ctx); err == nil {
+		t.Fatal("expected an error for the broken secret")
+	}
+	if strings.Contains(red.Redact("x another-secret-789"), "another") {
+		t.Fatal("secrets after a broken one were not warmed")
 	}
 }
