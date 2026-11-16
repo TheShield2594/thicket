@@ -286,12 +286,28 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 			err = rerr
 			continue
 		}
+		// The server may have changed on reconnect: replay only if this
+		// connection still lists the tool as read-only.
+		if !listsReadOnly(c2.tools, tool) {
+			r.release(c2)
+			return nil, fmt.Errorf("the connection to %s dropped mid-call, and after reconnecting %s is no longer listed as read-only, so I didn't retry it", server, tool)
+		}
 		res, err = r.callOn(ctx, c2, tool, args)
 		if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
 			return res, err
 		}
 	}
 	return nil, err
+}
+
+// listsReadOnly reports whether tools has name, marked read-only.
+func listsReadOnly(tools []Tool, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return t.ReadOnly()
+		}
+	}
+	return false
 }
 
 // callRetries is how many times a read-only call is retried after a

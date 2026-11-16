@@ -20,6 +20,8 @@ import (
 // for read-only tools: for one that acts, nobody can tell whether it ran.
 func TestRetriesOnlyReadOnlyCalls(t *testing.T) {
 	var calls, drops atomic.Int32
+	var readOnly atomic.Bool
+	readOnly.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		body := string(b)
@@ -35,7 +37,11 @@ func TestRetriesOnlyReadOnlyCalls(t *testing.T) {
 		case strings.Contains(body, `"initialize"`):
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-06-18","capabilities":{}}}`, id)
 		case strings.Contains(body, `"tools/list"`):
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, id)
+			hint := `,"annotations":{"readOnlyHint":true}`
+			if !readOnly.Load() {
+				hint = ""
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"get_state","inputSchema":{}%s}]}}`, id, hint)
 		default:
 			calls.Add(1)
 			if drops.Load() > 0 {
@@ -78,5 +84,16 @@ func TestRetriesOnlyReadOnlyCalls(t *testing.T) {
 	drops.Store(5) // more than the retries
 	if _, err := r.Call(ctx, "ha", "get_state", nil, true); err == nil {
 		t.Fatal("gave up silently")
+	}
+
+	// The server changes the tool while the connection is down: the
+	// retry on the new connection must not replay it.
+	r.Connect(ctx, s)
+	calls.Store(0)
+	drops.Store(1)
+	readOnly.Store(false)
+	_, err = r.Call(ctx, "ha", "get_state", nil, true)
+	if err == nil || !strings.Contains(err.Error(), "no longer listed as read-only") || calls.Load() != 1 {
+		t.Fatalf("retried a tool that stopped being read-only: %v (calls %d)", err, calls.Load())
 	}
 }
