@@ -4,6 +4,37 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: stability (schema v10)
+
+- Permission levels per sprig and tool: `read`, `draft`, `ask`, `act`,
+  enforced in code on every call and re-checked on approval.
+  `set_tool_level` replaces `set_tool_approval`; existing rules carry over
+  (`always` → `ask`, `never` → `act`).
+- "Needs you" inbox: failed, interrupted and undelivered jobs and tasks,
+  and drafted actions, are kept until resolved (`needs_you` in chat,
+  `thicket inbox`). Repeated failures bump one item; nothing is dropped
+  when the chat report is de-duplicated.
+- Restarts: job runs and delegated tasks in progress when Thicket stopped
+  are failed cleanly at startup, put in the inbox and reported once.
+  Delegated tasks are now stored (`tasks`).
+- Spend is tagged heartbeat or task. `thicket costs [--week|--month|--days
+  N] [--json]` shows it by sprig, model and day. At a spend cap,
+  heartbeats are skipped (recorded, not failed) instead of failing.
+- Integration calls that only read are retried twice with backoff after a
+  dropped connection (was once, immediately).
+- `thicket doctor`: database, secrets, model server, chat tokens, each MCP
+  server, and the running server's live connections. `/health` lists each
+  integration as an optional check that never fails it.
+- Voice tests: reference exchanges in `characters/<id>/voice_tests/`, five
+  bundled for Juni. `thicket voice-check SPRIG [--record]` replays them and
+  has the cheap model flag drift in tone, length, catchphrases and role.
+  Exported and restored with backups.
+- `thicket migrate` lists applied migrations. A test keeps schema changes
+  in numbered migration files.
+- Tests for levels, the heartbeat-to-task handoff, the inbox, restarts,
+  memory remember/list/forget, the budget guard, doctor, costs and voice
+  checks. All model calls are faked.
+
 ## Unreleased: v0.1.0 (day one)
 
 First version.

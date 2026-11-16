@@ -100,6 +100,16 @@ and work with other sprigs (hand off, ask one a question, or give one a backgrou
 `admin` and `characters` can only be granted by editing the file; in chat,
 Juni can grant `schedule`, `web` and integration scopes.
 
+What a granted tool may do is set separately, per sprig and tool, with
+permission levels (`read`, `draft`, `ask`, `act`): see
+[Approvals and permission levels](mcp.md#approvals-and-permission-levels).
+
+## Voice tests
+
+A sprig can have reference exchanges in `<id>/voice_tests/*.yaml` next to
+its file. `thicket voice-check <id>` replays them and flags drift: see
+[Running Thicket](operations.md#thicket-voice-check-sprig).
+
 ## Memory
 
 A sprig's memory is not in its file. It lives in the database, scoped:

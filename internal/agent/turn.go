@@ -299,8 +299,8 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if !json.Valid(args) {
 		return "Error: tool arguments were not valid JSON."
 	}
-	if e.needsApproval(ctx, tool) {
-		return e.requestApproval(ctx, t, tool, args)
+	if msg, ok := e.gate(ctx, t, tool, args); !ok {
+		return msg
 	}
 	out, err := tool.Run(ctx, t, args)
 	level, summary := "info", "called "+name
@@ -322,20 +322,6 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
-}
-
-func (e *Engine) needsApproval(ctx context.Context, tool *Tool) bool {
-	pol, err := e.DB.ToolPolicy(ctx, tool.Name)
-	if err != nil {
-		return true // fail closed
-	}
-	switch pol {
-	case "always":
-		return true
-	case "never":
-		return false
-	}
-	return tool.Risky
 }
 
 // deliverApproval shows the prompt and only then registers the approval.
@@ -366,13 +352,7 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		}
 		chatRef = ref
 	}
-	pretty := string(args)
-	var v any
-	if json.Unmarshal(args, &v) == nil {
-		if b, err := json.MarshalIndent(v, "", "  "); err == nil {
-			pretty = string(b)
-		}
-	}
+	pretty := prettyArgs(args)
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
 	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
 	if t.chatRef != "" {

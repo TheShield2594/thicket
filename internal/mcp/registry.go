@@ -100,6 +100,9 @@ type Registry struct {
 	DB      *store.Store
 	Secrets Expander
 	Log     *slog.Logger
+	// RetryBackoff is the first wait before retrying a read-only call
+	// (doubles each time); 0 means 500ms.
+	RetryBackoff time.Duration
 
 	mu    sync.Mutex
 	conns map[string]*conn
@@ -266,12 +269,34 @@ func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawM
 	if !retrySafe {
 		return nil, fmt.Errorf("the connection to %s failed mid-call (%v), so I can't tell whether it took effect; check before trying again", server, err)
 	}
-	c2, rerr := r.reconnect(ctx, server)
-	if rerr != nil {
-		return nil, err
+	// Read-only: reconnect and try again, with backoff, a few times.
+	backoff := r.RetryBackoff
+	if backoff == 0 {
+		backoff = 500 * time.Millisecond
 	}
-	return r.callOn(ctx, c2, tool, args)
+	for attempt := 0; attempt < callRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		c2, rerr := r.reconnect(ctx, server)
+		if rerr != nil {
+			err = rerr
+			continue
+		}
+		res, err = r.callOn(ctx, c2, tool, args)
+		if err == nil || errors.As(err, &rpcErr) || ctx.Err() != nil {
+			return res, err
+		}
+	}
+	return nil, err
 }
+
+// callRetries is how many times a read-only call is retried after a
+// transport failure.
+const callRetries = 2
 
 // callOn runs one call on a held connection and releases it afterwards.
 func (r *Registry) callOn(ctx context.Context, c *conn, tool string, args json.RawMessage) (*CallResult, error) {

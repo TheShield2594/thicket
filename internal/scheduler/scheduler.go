@@ -148,11 +148,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.base = ctx
 	s.mu.Unlock()
-	if n, err := s.DB.FailStaleRuns(ctx); err != nil {
-		s.Log.Error("fail stale runs", "err", err)
-	} else if n > 0 {
-		s.Log.Warn("marked interrupted job runs as failed", "count", n)
-	}
+	s.failStale(ctx)
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	s.Tick(ctx)
@@ -165,6 +161,35 @@ func (s *Scheduler) Run(ctx context.Context) {
 			s.Tick(ctx)
 		}
 	}
+}
+
+// ErrInterrupted is the error of a run Thicket stopped during. Those runs
+// are failed cleanly at the next start (not retried: a half-done run may
+// already have acted) and reported through JobFinished.
+var ErrInterrupted = errors.New(store.StaleRunError)
+
+// failStale fails runs a stop or crash left running, and reports each.
+func (s *Scheduler) failStale(ctx context.Context) {
+	runs, err := s.DB.FailStaleRuns(ctx)
+	if err != nil {
+		s.Log.Error("fail stale runs", "err", err)
+		return
+	}
+	for _, r := range runs {
+		j, err := s.DB.JobByID(ctx, r.JobID)
+		if err != nil {
+			continue // the job was deleted since
+		}
+		s.Log.Warn("job run interrupted by a restart", "job", j.ID, "run", r.ID)
+		s.Exec.JobFinished(ctx, *j, Result{Status: "error", Err: ErrInterrupted}, time.Time{})
+	}
+}
+
+// Pauser is optionally implemented by an Executor to hold back scheduled
+// runs (when the spend cap is reached). A paused job isn't run or counted
+// as failed: its turn passes and it runs again at its next time.
+type Pauser interface {
+	PausedReason(ctx context.Context, job store.Job) string
 }
 
 // Tick runs every job that is due. Exposed for tests.
@@ -193,6 +218,14 @@ func (s *Scheduler) Tick(ctx context.Context) {
 		due, missed := Due(j, sched, now, loc)
 		if !due {
 			continue
+		}
+		if p, ok := s.Exec.(Pauser); ok {
+			if why := p.PausedReason(ctx, j); why != "" {
+				// Move last_run_at on so the skipped turn isn't counted as
+				// missed later, and say so in the run history.
+				_ = s.DB.RecordSkippedRun(ctx, j.ID, now, why)
+				continue
+			}
 		}
 		s.mu.Lock()
 		if s.running[j.ID] {

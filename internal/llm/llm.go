@@ -233,7 +233,29 @@ type Meta struct {
 	UserID    int64
 	Character string
 	JobID     int64
-	Purpose   string // chat | job | memory | consistency | preview | proactive | document
+	Purpose   string // chat | job | memory | consistency | preview | proactive | document | voice-check
+	// Origin is "heartbeat" for work Thicket starts by itself (jobs,
+	// check-ins, follow-ups, memory review) or "task" for work a person
+	// asked for. Empty means it follows from the purpose the call
+	// started with (see OriginOf).
+	Origin string
+}
+
+const (
+	OriginHeartbeat = "heartbeat"
+	OriginTask      = "task"
+)
+
+// OriginOf says whether a call is heartbeat or task work.
+func OriginOf(m Meta) string {
+	if m.Origin != "" {
+		return m.Origin
+	}
+	switch m.Purpose {
+	case "job", "proactive", "memory":
+		return OriginHeartbeat
+	}
+	return OriginTask
 }
 
 type metaKey struct{}
@@ -248,8 +270,11 @@ func MetaFrom(ctx context.Context) Meta {
 }
 
 // WithPurpose returns ctx with the purpose field of its Meta replaced.
+// The origin stays what the outer call's purpose made it: a consistency
+// check inside a scheduled job is still heartbeat work.
 func WithPurpose(ctx context.Context, purpose string) context.Context {
 	m := MetaFrom(ctx)
+	m.Origin = OriginOf(m)
 	m.Purpose = purpose
 	return WithMeta(ctx, m)
 }

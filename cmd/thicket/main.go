@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,7 +52,14 @@ Usage:
   thicket skill import FILE           add a skill, or a new version of one with the same id
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
-  thicket migrate                     apply database migrations and print the schema version
+  thicket migrate                     apply pending database migrations (startup does this too) and list them
+  thicket doctor                      check everything: database, secrets, model server, chat tokens,
+                                      each MCP server, and the running server's live connections
+  thicket costs [--week|--month|--days N] [--json]
+                                      model spend by sprig (heartbeat vs task), model and day
+  thicket voice-check SPRIG [--record]
+                                      replay the sprig's voice tests and flag drift
+  thicket inbox [list] | resolve ID   what needs you: failed or interrupted work, drafts, approvals
   thicket api-token create NAME [--user APP:ID]
                                       make a token for the local API (acts as the owner by default)
   thicket api-token list | revoke ID
@@ -94,7 +102,15 @@ func main() {
 	case "web":
 		err = webCmd(args)
 	case "migrate":
-		err = migrate()
+		err = migrateCmd(os.Stdout)
+	case "costs", "cost":
+		err = costsCmd(args, os.Stdout)
+	case "doctor":
+		err = doctorCmd(os.Stdout)
+	case "voice-check":
+		err = voiceCheckCmd(args, os.Stdout)
+	case "inbox":
+		err = inboxCmd(args, os.Stdout)
 	case "api-token", "api-tokens":
 		err = apiTokenCmd(args)
 	case "ask":
@@ -194,8 +210,25 @@ func healthcheck() error {
 	return nil
 }
 
+// onlyModelKeyMissing reports whether the one required check failing is
+// the model key (optional checks never count).
 func onlyModelKeyMissing(body string) bool {
-	return strings.Count(body, `"ok":false`) == 1 && strings.Contains(body, `"model_key":{"ok":false`)
+	var h struct {
+		Checks map[string]struct {
+			OK       bool `json:"ok"`
+			Optional bool `json:"optional"`
+		} `json:"checks"`
+	}
+	if json.Unmarshal([]byte(body), &h) != nil {
+		return false
+	}
+	failed := []string{}
+	for name, c := range h.Checks {
+		if !c.OK && !c.Optional {
+			failed = append(failed, name)
+		}
+	}
+	return len(failed) == 1 && failed[0] == "model_key"
 }
 
 func openStore(cfg *config.Config) (*store.Store, error) {
@@ -410,21 +443,6 @@ func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(s, "\n")
 	return s
-}
-
-func migrate() error {
-	cfg := loadConfig()
-	db, err := openStore(cfg)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	v, err := db.SchemaVersion(context.Background())
-	if err != nil {
-		return err
-	}
-	fmt.Println("schema version", v)
-	return nil
 }
 
 func webCmd(args []string) error {

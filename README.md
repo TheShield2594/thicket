@@ -71,8 +71,11 @@ The first person to DM the bot becomes the owner, unless you set
 Ask Juni to link the other one: she DMs you a one-time code to send from
 there, and you keep one profile and one set of memories.
 
-Not sure something's right? `docker compose run --rm thicket check` says
-exactly what's missing, and `GET /health` reports each part.
+Not sure something's right? `docker compose exec thicket thicket doctor`
+checks the database, stored keys, the model server, chat app tokens and
+each integration, and says what's wrong. `GET /health` reports each part
+too. See [Running Thicket](docs/operations.md) for `doctor`, `costs`, the
+"needs you" inbox and voice checks.
 
 ## The web app
 
@@ -147,7 +150,12 @@ cookies (`Secure` over HTTPS).
   reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API
   with tokens from `thicket api-token create`. See [Local API](docs/api.md).
 - Risky actions (sending email, controlling devices) show the exact action
-  and wait for you to reply **approve** or **deny**.
+  and wait for you to reply **approve** or **deny**. Each sprig's access to
+  each tool can be set to `read`, `draft` (write it up, don't do it), `ask`
+  or `act` ([details](docs/mcp.md#approvals-and-permission-levels)).
+- Nothing fails silently: failed or interrupted jobs and tasks, and
+  results that couldn't be delivered, land in a "needs you" inbox. Ask
+  Juni "what needs me?" or run `thicket inbox`.
 - Changed your mind? Say **stop** (or "never mind", 🛑, `/stop`) while a
   sprig is working: it stops at once, tells you anything it had already
   done, and sets aside messages you sent in the meantime. With no reply
@@ -218,6 +226,7 @@ grant it.
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
 - [Dashboard](docs/dashboard.md)
+- [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

@@ -178,6 +178,17 @@ func (s *Store) FinishJobRun(ctx context.Context, runID int64, status, output, e
 	return err
 }
 
+// RecordSkippedRun notes a run that was held back on purpose (spend cap)
+// and moves the job's last run time on, so it isn't counted as missed.
+func (s *Store) RecordSkippedRun(ctx context.Context, jobID int64, at time.Time, why string) error {
+	if _, err := s.db.ExecContext(ctx, "UPDATE jobs SET last_run_at = ? WHERE id = ?", at.Unix(), jobID); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "INSERT INTO job_runs (job_id, started_at, finished_at, status, error) VALUES (?, ?, ?, 'missed', ?)",
+		jobID, at.Unix(), at.Unix(), "skipped: "+why)
+	return err
+}
+
 // RecordMissedRun notes runs that were skipped while Thicket was down, so
 // history shows the gap instead of silently hiding it.
 func (s *Store) RecordMissedRun(ctx context.Context, jobID int64, count int, at time.Time) error {
@@ -186,14 +197,36 @@ func (s *Store) RecordMissedRun(ctx context.Context, jobID int64, count int, at 
 	return err
 }
 
-// FailStaleRuns marks runs left 'running' by a crash as errors.
-func (s *Store) FailStaleRuns(ctx context.Context) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "UPDATE job_runs SET status = 'error', error = 'Thicket stopped while this run was in progress', finished_at = ? WHERE status = 'running'", s.unix())
+// FailStaleRuns marks runs left 'running' by a stop or crash as errors
+// and returns them, so each can be reported.
+func (s *Store) FailStaleRuns(ctx context.Context) ([]JobRun, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, job_id, started_at FROM job_runs WHERE status = 'running'")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.RowsAffected()
+	var out []JobRun
+	for rows.Next() {
+		var r JobRun
+		var st int64
+		if err := rows.Scan(&r.ID, &r.JobID, &st); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		r.StartedAt, r.Status, r.Error = time.Unix(st, 0), "error", StaleRunError
+		out = append(out, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE job_runs SET status = 'error', error = ?, finished_at = ? WHERE status = 'running'", StaleRunError, s.unix()); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
+
+// StaleRunError is the error recorded for a run Thicket stopped during.
+const StaleRunError = "Thicket stopped while this run was in progress"
 
 func (s *Store) JobRuns(ctx context.Context, jobID int64, limit int) ([]JobRun, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT id, job_id, started_at, finished_at, status, output, error, cost_usd FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?", jobID, limit)

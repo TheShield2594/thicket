@@ -259,6 +259,9 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		detail += fmt.Sprintf(", %d file(s) with problems", n)
 	}
 	out["characters"] = server.Check{OK: ok && host != nil, Detail: detail}
+	for name, st := range a.MCP.Status() {
+		out["mcp."+name] = server.Check{OK: !strings.HasPrefix(st, "error"), Detail: st, Optional: true}
+	}
 	return out
 }
 
@@ -286,6 +289,9 @@ func (a *App) Run(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	a.Engine.SetLifetime(ctx) // background tasks end with Thicket
+	// Before anything can start a new task: fail the ones a stop or crash
+	// cut short (reported once the chat apps are up).
+	interrupted := a.Engine.RecoverInterrupted(ctx)
 	var wg sync.WaitGroup
 	errc := make(chan error, len(a.channels)+1)
 	mcpDone := make(chan struct{})
@@ -337,7 +343,7 @@ func (a *App) Run(parent context.Context) error {
 		})
 	})
 	goRun("maintenance", func() { a.maintenance(ctx) })
-	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone) })
+	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone, interrupted) })
 	goRun("first-run-link", func() { a.firstRunLink(ctx) })
 
 	a.Log.Info("thicket started", "version", a.Version, "characters", len(a.Chars.All()))
@@ -360,7 +366,7 @@ func (a *App) Run(parent context.Context) error {
 
 // reportStartup tells the owner about problems found at startup, once a
 // channel is connected.
-func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
+func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}, interrupted []store.Task) {
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		ok := true
@@ -376,6 +382,7 @@ func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+	a.Engine.ReportInterrupted(ctx, interrupted)
 	select { // MCP failures are part of the report
 	case <-mcpDone:
 	case <-ctx.Done():

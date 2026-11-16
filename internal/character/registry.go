@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-//go:embed defaults/*.md
+//go:embed defaults/*.md defaults/*/voice_tests/*.yaml
 var defaultsFS embed.FS
 
 // HashStore remembers the hash of each file Thicket wrote, so a later
@@ -67,6 +67,12 @@ func (r *Registry) EnsureDefaults(ctx context.Context) error {
 		return err
 	}
 	for _, e := range entries {
+		if e.IsDir() {
+			if err := r.ensureDefaultVoiceTests(e.Name()); err != nil {
+				return err
+			}
+			continue
+		}
 		dest := filepath.Join(r.dir, e.Name())
 		if _, err := os.Stat(dest); err == nil {
 			continue
@@ -79,6 +85,32 @@ func (r *Registry) EnsureDefaults(ctx context.Context) error {
 			return err
 		}
 		if err := r.hashes.SetCharacterFileHash(ctx, strings.TrimSuffix(e.Name(), ".md"), HashBytes(b)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureDefaultVoiceTests writes a bundled sprig's voice tests if it has
+// no voice_tests folder yet. An existing folder is left alone.
+func (r *Registry) ensureDefaultVoiceTests(id string) error {
+	dir := VoiceTestDir(r.dir, id)
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	files, err := defaultsFS.ReadDir("defaults/" + id + "/voice_tests")
+	if err != nil {
+		return nil // no bundled tests for this one
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, f := range files {
+		b, err := defaultsFS.ReadFile("defaults/" + id + "/voice_tests/" + f.Name())
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, f.Name()), b, 0o644); err != nil {
 			return err
 		}
 	}

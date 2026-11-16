@@ -189,3 +189,48 @@ func unixOrNil(t time.Time) any {
 	}
 	return t.Unix()
 }
+
+// QuickCheck runs SQLite's integrity check (the fast variant).
+func (s *Store) QuickCheck(ctx context.Context) error {
+	var res string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&res); err != nil {
+		return err
+	}
+	if res != "ok" {
+		return errors.New(res)
+	}
+	return nil
+}
+
+// AppliedMigration is one row of the migration history.
+type AppliedMigration struct {
+	Version   int
+	Name      string
+	AppliedAt time.Time
+}
+
+// AppliedMigrations lists migrations applied to this database, oldest first.
+func (s *Store) AppliedMigrations(ctx context.Context) ([]AppliedMigration, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT version, name, applied_at FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AppliedMigration
+	for rows.Next() {
+		var m AppliedMigration
+		var at int64
+		if err := rows.Scan(&m.Version, &m.Name, &at); err != nil {
+			return nil, err
+		}
+		m.AppliedAt = time.Unix(at, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// KnownMigrations is how many migrations this binary carries.
+func KnownMigrations() (int, error) {
+	m, err := loadMigrations()
+	return len(m), err
+}

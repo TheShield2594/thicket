@@ -147,8 +147,17 @@ func (e *Engine) handleApprovalReply(ctx context.Context, in channel.Incoming, u
 	}
 	tool := e.toolsFor(ctx, t)[a.Tool]
 	var result string
+	if lv := ""; tool != nil && tool.Risky {
+		lv = e.toolLevel(ctx, char, tool)
+		if lv == store.LevelRead || lv == store.LevelDraft {
+			// Lowered since the request: the level in force now wins.
+			tool, result = nil, "Error: your access to "+a.Tool+" was lowered to "+lv+" since you asked, so it wasn't run."
+		}
+	}
 	if tool == nil {
-		result = "Error: that tool is no longer available to you."
+		if result == "" {
+			result = "Error: that tool is no longer available to you."
+		}
 	} else {
 		out, err := tool.Run(ctx, t, json.RawMessage(a.Args))
 		if err != nil {

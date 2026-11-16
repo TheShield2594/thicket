@@ -52,6 +52,16 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	return scheduler.Result{Status: "ok", Output: out, Cost: cost}
 }
 
+// PausedReason holds scheduled jobs back while a spend cap is reached
+// (scheduler.Pauser).
+func (e *Engine) PausedReason(ctx context.Context, j store.Job) string {
+	why := e.Budget.HeartbeatPause(ctx, j.Character)
+	if why != "" {
+		e.logActivity(ctx, "warn", "budget", j.Character, j.UserID, fmt.Sprintf("job #%d %q skipped: %s", j.ID, j.Name, why), "")
+	}
+	return why
+}
+
 // JobFinished delivers a job's result, or reports its failure loudly.
 func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Result, next time.Time) {
 	user, err := e.DB.UserByID(ctx, j.UserID)
@@ -77,6 +87,8 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 		if err := e.sendToUser(ctx, user, char, res.Output); err != nil {
 			e.Log.Error("deliver job output", "job", j.ID, "err", err)
 			e.logActivity(ctx, "error", "job", char.ID, user.ID, fmt.Sprintf("job #%d ran but its message couldn't be delivered", j.ID), err.Error())
+			e.deadLetter(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: fmt.Sprintf("job:%d", j.ID),
+				Title: fmt.Sprintf("Job “%s” ran, but its message couldn't be delivered", j.Name), Detail: res.Output})
 		}
 	case "empty":
 		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q ran: nothing to report", j.ID, j.Name), "")
@@ -86,6 +98,13 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 			errText = res.Err.Error()
 		}
 		e.logActivity(ctx, "error", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q failed", j.ID, j.Name), errText)
+		// Every failure lands in the inbox (repeats bump one item), even
+		// when the chat report below is held back as a duplicate.
+		kind, title := store.InboxFailed, fmt.Sprintf("Job “%s” failed", j.Name)
+		if errors.Is(res.Err, scheduler.ErrInterrupted) {
+			kind, title = store.InboxInterrupted, fmt.Sprintf("Job “%s” was interrupted by a restart", j.Name)
+		}
+		e.deadLetter(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: kind, Ref: fmt.Sprintf("job:%d", j.ID), Title: title, Detail: errText})
 		// Same error for the same job is reported at most every 6 hours.
 		key := fmt.Sprintf("jobfail:%d:%s", j.ID, truncate(errText, 80))
 		if ok, _ := e.DB.ClaimNotice(ctx, key, 6*time.Hour); !ok {
@@ -105,6 +124,15 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 	}
 }
 
+// deadLetter puts something that needs a person in the inbox. If even that
+// fails, the log is the last resort.
+func (e *Engine) deadLetter(ctx context.Context, it store.InboxItem) {
+	it.Detail = e.Secrets.Redact(truncate(it.Detail, 4000))
+	if _, err := e.DB.AddInbox(context.WithoutCancel(ctx), it); err != nil {
+		e.Log.Error("dead-letter to inbox failed", "title", it.Title, "err", err)
+	}
+}
+
 // --- light initiative: follow-ups and check-ins ---
 
 // RunInitiative checks for due follow-ups and quiet users every 5 minutes.
@@ -116,8 +144,8 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if !e.ModelReady(ctx) {
-				continue
+			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {
+				continue // follow-ups wait; nothing is lost
 			}
 			e.FollowUps(ctx)
 			e.CheckIns(ctx)

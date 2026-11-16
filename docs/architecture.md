@@ -5,7 +5,7 @@ A short tour for contributors.
 ## Layout
 
 ```
-cmd/thicket          CLI: serve, check, healthcheck, export, restore, character, memory, migrate
+cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, export, restore, character, memory, migrate
 internal/app         wires everything together (also used by the smoke test)
 internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
 internal/character   character files: parse, validate, load, write without clobbering
@@ -24,6 +24,7 @@ internal/server      /health, /avatars, /hooks, /api/v1, /dashboard, and mounts 
 internal/api         local HTTP API (/api/v1): an internal "api" channel plus token auth
 internal/websearch   page fetching (public addresses only) and SearXNG search
 internal/dashboard   read-only /dashboard, signed in through the web app's session
+internal/doctor      `thicket doctor`: end-to-end checks of an installation
 ```
 
 ## A message's journey
@@ -196,6 +197,34 @@ looks it up with `WebSessionUser`, which also keeps the session alive.
 Every response carries a CSP with `default-src 'none'`, no
 framing, no referrer and no caching. A user sees their own memories and
 jobs; spending, health and activity are added for admins.
+
+## Permission levels
+
+Every tool call passes `Engine.gate` before it runs. The level comes from
+`tool_levels` (a sprig's own row, else the `*` row for every sprig, else
+the default: `ask` for `Tool.Risky`, `act` otherwise). `read` refuses risky
+tools, `draft` saves the exact call to the inbox instead of running it,
+`ask` registers an approval, `act` runs. Non-risky tools run at `read` and
+`draft`. Approving re-checks the level, so lowering it cancels a pending
+action. Only MCP tools without `readOnlyHint` are risky today.
+
+## Heartbeats, tasks and the inbox
+
+Model calls carry `llm.Meta.Origin`: `heartbeat` for work Thicket starts
+itself (jobs, check-ins, follow-ups, memory review), `task` for work a
+person asked for. It is set from the purpose the work starts with and kept
+when `WithPurpose` changes the purpose mid-turn, then stored on each
+`usage` row. The scheduler's tick is the heartbeat; it hands each due job
+to `Engine.RunJob`, unless `Engine.PausedReason` (the scheduler's optional
+`Pauser`) says a spend cap is reached: then the run is recorded as skipped
+and `last_run_at` moves on. The initiative loop checks the same pause.
+
+Failures are dead-lettered into `inbox` (kinds `failed`, `interrupted`,
+`undelivered`, `draft`), keyed by `ref` (`job:ID`, `task:ID`) so repeats
+bump one open item. Delegated tasks are rows in `tasks`. At startup,
+`RecoverInterrupted` fails tasks still `running` and the scheduler fails
+stale job runs, each reported through the inbox and once in chat. Neither
+is re-run: a half-finished run may already have acted.
 
 ## Reliability rules
 

@@ -17,9 +17,13 @@ import (
 type Check struct {
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail,omitempty"`
+	// Optional checks are reported but don't make /health fail (an
+	// integration being down mustn't get the container restarted).
+	Optional bool `json:"optional,omitempty"`
 }
 
-// HealthFunc returns named checks; any failing check makes /health 503.
+// HealthFunc returns named checks; any failing required check makes
+// /health 503.
 type HealthFunc func(ctx context.Context) map[string]Check
 
 // HookFunc starts the webhook job for token with the request body. It
@@ -70,7 +74,7 @@ func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Ser
 		checks := health(ctx)
 		ok := true
 		for _, c := range checks {
-			ok = ok && c.OK
+			ok = ok && (c.OK || c.Optional)
 		}
 		status := "ok"
 		code := http.StatusOK

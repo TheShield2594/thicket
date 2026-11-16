@@ -115,6 +115,27 @@ func (g *Guard) Status(ctx context.Context) (string, error) {
 	return s, nil
 }
 
+// HeartbeatPause returns why background work (scheduled jobs, check-ins,
+// follow-ups) for this sprig should be held back, or "" to go ahead. At a
+// cap, heartbeats aren't started at all, so they don't fail and pile up
+// error reports; the 100% alert already told the admins. character may be
+// empty.
+func (g *Guard) HeartbeatPause(ctx context.Context, character string) string {
+	if g == nil {
+		return ""
+	}
+	cs, err := g.checks(ctx, llm.Meta{Character: character})
+	if err != nil {
+		return "" // the call itself will be checked again, failing closed
+	}
+	for _, c := range cs {
+		if c.limit > 0 && c.spent >= c.limit {
+			return fmt.Sprintf("the %s spend cap ($%.2f) is reached", c.name, c.limit)
+		}
+	}
+	return ""
+}
+
 func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	m := llm.MetaFrom(ctx)
 	if err := g.flushPending(ctx); err != nil {
@@ -141,7 +162,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		return nil, err
 	}
 	u := store.Usage{
-		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
+		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose, Origin: llm.OriginOf(m),
 		Model: resp.Model, PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, CostUSD: resp.Usage.Cost,
 	}
 	// The call is paid for even if the caller has gone away: record it

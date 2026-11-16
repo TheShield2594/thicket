@@ -19,6 +19,8 @@ func TestExportRestoreRoundTrip(t *testing.T) {
 	chars := filepath.Join(src, "characters")
 	os.MkdirAll(chars, 0o755)
 	os.WriteFile(filepath.Join(chars, "pip.md"), []byte("---\nid: pip\n---\n"), 0o644)
+	os.MkdirAll(filepath.Join(chars, "pip", "voice_tests"), 0o755)
+	os.WriteFile(filepath.Join(chars, "pip", "voice_tests", "01-hello.yaml"), []byte("prompt: hi\nreference: Hello!\n"), 0o644)
 	os.WriteFile(filepath.Join(src, "secret.key"), []byte("k"), 0o600)
 	db, err := store.Open(ctx, filepath.Join(src, "thicket.db"))
 	if err != nil {
@@ -42,6 +44,9 @@ func TestExportRestoreRoundTrip(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dchars, "pip.md")); !strings.Contains(string(b), "id: pip") {
 		t.Fatal("character not restored")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dchars, "pip", "voice_tests", "01-hello.yaml")); !strings.Contains(string(b), "reference: Hello!") {
+		t.Fatal("voice tests not restored")
 	}
 	rdb, err := store.Open(ctx, filepath.Join(dst, "thicket.db"))
 	if err != nil {

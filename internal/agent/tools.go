@@ -212,6 +212,13 @@ func (e *Engine) builtinTools() []*Tool {
 				return "Onboarding complete.", nil
 			},
 		},
+		{
+			Name:        "needs_you",
+			Description: "The user's 'needs you' inbox: failed or interrupted jobs and tasks, results that couldn't be delivered, drafted actions, and approvals still waiting. action 'list' (default) shows them; 'resolve' closes one by id once the user has dealt with it.",
+			Params:      `{"type":"object","properties":{"action":{"type":"string","enum":["list","resolve"]},"id":{"type":"integer"}}}`,
+			Scope:       "host",
+			Run:         e.toolNeedsYou,
+		},
 		// --- schedule ---
 		{
 			Name:        "schedule_job",
@@ -378,13 +385,13 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRemoveIntegration,
 		},
 		{
-			Name:        "set_tool_approval",
-			Description: "Configure whether a tool needs the user's approval: 'always', 'never', or 'default' (integration tools that change things need approval by default).",
-			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"mode":{"type":"string","enum":["always","never","default"]}},"required":["tool","mode"]}`,
+			Name:        "set_tool_level",
+			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act).",
+			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"level":{"type":"string","enum":["read","draft","ask","act","default"]},"sprig":{"type":"string","description":"sprig id or name; omit for every sprig"}},"required":["tool","level"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
-			Run:         e.toolSetApproval,
+			Run:         e.toolSetLevel,
 		},
 		{
 			Name:        "invite_user",
@@ -1121,27 +1128,6 @@ func (e *Engine) toolRemoveIntegration(ctx context.Context, t *turn, args json.R
 	}
 	e.logActivity(ctx, "info", "tool", t.char.ID, t.user.ID, "integration "+a.Name+" removed", "")
 	return "Removed " + a.Name + ". Character files still list its scope; that's harmless.", nil
-}
-
-func (e *Engine) toolSetApproval(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-	a, err := decode[struct {
-		Tool string `json:"tool"`
-		Mode string `json:"mode"`
-	}](args)
-	if err != nil {
-		return "", err
-	}
-	mode := a.Mode
-	if mode == "default" {
-		mode = ""
-	} else if mode != "always" && mode != "never" {
-		return "", fmt.Errorf("mode must be always, never or default")
-	}
-	if err := e.DB.SetToolPolicy(ctx, a.Tool, mode); err != nil {
-		return "", err
-	}
-	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, "approval policy for "+a.Tool+" set to "+a.Mode, "")
-	return fmt.Sprintf("Approval for %s is now %s.", a.Tool, a.Mode), nil
 }
 
 func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
