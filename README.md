@@ -91,6 +91,9 @@ exactly what's missing, and `GET /health` reports each part.
 - Let other things wake a sprig: "Make a webhook that tells me when a CI
   build fails." Thicket DMs you a private URL; anything that POSTs to it
   starts the job with what it sent. See [Webhooks](docs/webhooks.md).
+- Teach them once: after working through a task, a sprig offers to save it
+  as a skill, a versioned procedure every sprig follows from then on. See
+  [Skills](docs/skills.md).
 - Script it: `thicket ask --sprig pip "what's on tomorrow?"` prints the
   reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API
   with tokens from `thicket api-token create`. See [Local API](docs/api.md).
@@ -154,6 +157,7 @@ grant it.
 - [Webhooks](docs/webhooks.md)
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
+- [Skills](docs/skills.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 

@@ -183,6 +183,25 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	switch {
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
+	case strings.HasPrefix(u, "save skill "):
+		steps := "1. Weather\n2. Calendar"
+		base := 0
+		switch strings.TrimPrefix(u, "save skill ") {
+		case "with key":
+			steps = "1. Log in with ghp_" + strings.Repeat("k", 36)
+		case "v2":
+			steps, base = "1. Weather\n2. Calendar\n3. One nice thing", 1
+		case "stale":
+			steps, base = "1. Something else", 1
+		}
+		return toolCall("save_skill", map[string]any{"id": "briefing", "name": "Morning briefing",
+			"description": "When putting together the morning summary", "steps": steps, "base_version": base}), nil
+	case strings.Contains(u, "use the briefing skill"):
+		return toolCall("read_skill", map[string]any{"id": "briefing"}), nil
+	case strings.HasPrefix(u, "restore briefing to "):
+		var v int
+		fmt.Sscanf(u, "restore briefing to %d", &v)
+		return toolCall("manage_skill", map[string]any{"id": "briefing", "action": "restore", "version": v}), nil
 	case strings.Contains(u, "link my other app"):
 		return toolCall("link_account", map[string]any{}), nil
 	case strings.Contains(u, "webhook for ci"):

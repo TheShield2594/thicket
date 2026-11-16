@@ -26,6 +26,13 @@ First version.
   `thicket api-token create|list|revoke`, `thicket ask`, `thicket jobs`,
   `thicket run-job`. Tokens act as one user and are stored hashed. Schema
   v5 adds `api_tokens`. Rate-limited messages now report it to the API.
+- Skills: a shared library of versioned procedures. Sprigs see an index
+  in their prompt and `read_skill` when a task matches; owners and admins
+  `save_skill` (sprigs offer after a multi-step task), view history,
+  restore and delete with `manage_skill`. Stale edits are refused instead
+  of overwriting. Secrets and untrusted content are refused in steps.
+  `thicket skill list|export|import` shares them as Markdown. Schema v6
+  adds `skills` and `skill_versions`.
 - Attachments: sprigs see images (PNG, JPEG, GIF, WebP; up to 4 per
   message, 5 MB each) and read text files (up to 256 KB, first 12,000
   characters). Images go to the model with that message only and are

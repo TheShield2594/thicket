@@ -233,6 +233,29 @@ func (e *Engine) builtinTools() []*Tool {
 			ChatOnly:    true,
 			Run:         e.toolUpdateJob,
 		},
+		// --- skills (a shared library of procedures) ---
+		{
+			Name:        "read_skill",
+			Description: "Read a saved skill (a procedure listed under Skills in your instructions) before doing the task it covers. Returns its steps and version.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
+			Run:         e.toolReadSkill,
+		},
+		{
+			Name:        "save_skill",
+			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it"},"steps":{"type":"string"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
+			AdminOnly:   true,
+			ChatOnly:    true,
+			Run:         e.toolSaveSkill,
+		},
+		{
+			Name:        "manage_skill",
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), or delete a skill.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			AdminOnly:   true,
+			ChatOnly:    true,
+			Run:         e.toolManageSkill,
+		},
 		// --- characters ---
 		{
 			Name:        "preview_character",

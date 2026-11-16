@@ -133,8 +133,13 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	_ = e.DB.MarkMemoriesUsed(ctx, ids)
 
+	skills, err := e.DB.Skills(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sys := buildSystemPrompt(promptInput{
-		char: t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
+		skills: skills,
+		char:   t.char, user: t.user, roster: e.Chars.All(), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM,
 	})

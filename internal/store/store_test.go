@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -404,5 +405,50 @@ func TestIdentities(t *testing.T) {
 	}
 	if ids, _ := s.Identities(ctx, owner.ID); len(ids) != 3 {
 		t.Fatalf("identities: %+v", ids)
+	}
+}
+
+func TestSkillVersions(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	k := Skill{ID: "briefing", Name: "Morning briefing", Description: "How to do the briefing", Body: "1. Weather\n2. Calendar", Author: "juniper"}
+	if _, err := s.SaveSkill(ctx, k, 1); err != ErrNotFound {
+		t.Fatalf("revising a skill that doesn't exist: %v", err)
+	}
+	v, err := s.SaveSkill(ctx, k, 0)
+	if err != nil || v != 1 {
+		t.Fatalf("create: %d %v", v, err)
+	}
+	if _, err := s.SaveSkill(ctx, k, 0); err == nil {
+		t.Fatal("creating an existing id should conflict")
+	}
+	if _, err := s.SaveSkill(ctx, k, 1); err != ErrNoChange {
+		t.Fatalf("identical save: %v", err)
+	}
+	k.Body = "1. Weather\n2. Calendar\n3. One nice thing"
+	if v, err := s.SaveSkill(ctx, k, 1); err != nil || v != 2 {
+		t.Fatalf("revise: %d %v", v, err)
+	}
+	var vc *VersionConflict
+	k.Body = "stale edit"
+	if _, err := s.SaveSkill(ctx, k, 1); !errors.As(err, &vc) || vc.Current != 2 {
+		t.Fatalf("stale base: %v", err)
+	}
+	cur, _ := s.SkillByID(ctx, "briefing", 0)
+	old, _ := s.SkillByID(ctx, "briefing", 1)
+	if cur.Version != 2 || !strings.Contains(cur.Body, "nice thing") || old.Body != "1. Weather\n2. Calendar" {
+		t.Fatalf("versions: %+v / %+v", cur, old)
+	}
+	if h, _ := s.SkillHistory(ctx, "briefing"); len(h) != 2 || h[0].Version != 2 {
+		t.Fatalf("history: %+v", h)
+	}
+	if all, _ := s.Skills(ctx); len(all) != 1 || all[0].Version != 2 {
+		t.Fatalf("list: %+v", all)
+	}
+	if err := s.DeleteSkill(ctx, "briefing"); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := s.SkillHistory(ctx, "briefing"); len(h) != 0 {
+		t.Fatal("versions outlived their skill")
 	}
 }

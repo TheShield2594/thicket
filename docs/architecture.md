@@ -103,6 +103,19 @@ messages go and can't redeem link codes. Tokens are stored as SHA-256
 hashes and made by the CLI. `POST /api/v1/jobs/{id}/run` goes through
 `Scheduler.Fire`, with the webhook limits.
 
+## Skills
+
+Skills are rows in `skills` (id and current version) and
+`skill_versions` (every version's name, description, steps, note and
+author). `SaveSkill` takes the version the change was based on and
+refuses a stale one (`VersionConflict`), so concurrent edits never
+overwrite each other; restoring copies an old version forward. The
+prompt carries an index (first 40 skills); sprigs call `read_skill` for
+the steps, which are returned as instructions, not untrusted data. That's
+why saving is admin-only and the validator refuses secrets and
+`<untrusted>` content. `thicket skill export/import` moves them as
+Markdown with YAML frontmatter.
+
 ## Reliability rules
 
 - Success is checked in code: exit status, API responses, run records. The

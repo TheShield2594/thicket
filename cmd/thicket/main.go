@@ -43,6 +43,9 @@ Usage:
   thicket character list              list character files and any problems
   thicket character export ID [-o FILE]
   thicket character import FILE       add a shared character (integration access is stripped)
+  thicket skill list                  list saved skills (procedures sprigs follow)
+  thicket skill export ID [-o FILE]   write a skill as Markdown, to share
+  thicket skill import FILE           add a skill, or a new version of one with the same id
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket migrate                     apply database migrations and print the schema version
@@ -82,6 +85,8 @@ func main() {
 		err = characterCmd(args)
 	case "memory":
 		err = memoryCmd(args)
+	case "skill", "skills":
+		err = skillCmd(args)
 	case "migrate":
 		err = migrate()
 	case "api-token", "api-tokens":

@@ -25,6 +25,7 @@ type promptInput struct {
 	onboarded bool
 	hostTools bool // character has the characters scope
 	isDM      bool
+	skills    []store.Skill
 }
 
 func buildSystemPrompt(in promptInput) string {
@@ -107,6 +108,14 @@ func buildSystemPrompt(in promptInput) string {
 	}
 	b.WriteString("Use memories naturally; don't recite them. When the user tells you something worth keeping, or asks you to remember something, call remember. ")
 	b.WriteString("When they ask what you remember, call list_memories and answer honestly. When they say \"forget that\", find it and call forget.\n")
+
+	b.WriteString(skillIndex(in.skills))
+	if in.user.IsAdmin() && !in.jobMode {
+		if len(in.skills) == 0 {
+			b.WriteString("\n## Skills\n")
+		}
+		b.WriteString(skillOfferGuide)
+	}
 
 	if c.Host && !in.onboarded && !in.jobMode {
 		b.WriteString(onboardingGuide)
