@@ -59,8 +59,9 @@ func historySize(h store.Message, newest bool) int {
 }
 
 // fitHistory keeps the newest messages that fit the budget (always the
-// newest one), returning them and whether any were left out.
-func fitHistory(history []store.Message, budget int) ([]store.Message, bool) {
+// newest one, and the message with keepID, the one this turn answers),
+// returning them and whether any were left out.
+func fitHistory(history []store.Message, budget int, keepID int64) ([]store.Message, bool) {
 	used := 0
 	start := len(history)
 	for i := len(history) - 1; i >= 0; i-- {
@@ -70,6 +71,12 @@ func fitHistory(history []store.Message, budget int) ([]store.Message, bool) {
 		}
 		used += size
 		start = i
+	}
+	for i := 0; i < start; i++ {
+		if keepID != 0 && history[i].ID == keepID {
+			start = i
+			break
+		}
 	}
 	return history[start:], start > 0
 }
@@ -97,7 +104,9 @@ func (e *Engine) maybeCompact(ctx context.Context, t *turn) {
 	if until, ok := e.compactBackoff.Load(conv.ID); ok && e.now().Before(until.(time.Time)) {
 		return
 	}
-	msgs, err := e.DB.MessagesAfter(ctx, conv.ID, conv.SummaryUpto, historyLoadLimit)
+	// Oldest first: what gets folded must be the run right after what the
+	// summary already covers, or messages could be skipped for good.
+	msgs, err := e.DB.OldestMessagesAfter(ctx, conv.ID, conv.SummaryUpto, historyLoadLimit)
 	if err != nil || len(msgs) <= messagesKeptVerbatim {
 		return
 	}

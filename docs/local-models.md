@@ -3,8 +3,11 @@
 Thicket can think with models on your own hardware instead of OpenRouter:
 anything that speaks the OpenAI chat API, such as
 [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai),
-llama.cpp's `llama-server` or vLLM. Nothing leaves your network, and
-there's no bill (the spend caps simply stay at $0).
+llama.cpp's `llama-server` or vLLM. Your conversations are then
+thought about on that server rather than sent to a model provider, and
+there's no model bill (the spend caps simply stay at $0). Messages still
+travel through the chat app you use (Discord or Telegram), and through any
+integrations or web search you've turned on.
 
 ## Setting it up in chat
 

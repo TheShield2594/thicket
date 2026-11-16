@@ -84,6 +84,8 @@ type Engine struct {
 	// with lifetime (set by the app), not with the message that started
 	// them.
 	tasks     sync.WaitGroup
+	taskMu    sync.Mutex
+	taskUse   map[int64]int // user id -> background tasks reserved or running
 	taskSeq   atomic.Int64
 	lifeMu    sync.Mutex
 	lifetime  context.Context
@@ -162,16 +164,14 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if in.UserRef == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
 		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
 	}
-	if !e.allow(user.ID) {
-		e.Log.Warn("rate limited", "user", user.ID)
-		return ErrRateLimited
-	}
-	seq := e.arrivals.Add(1)
+	// A stop request comes before the rate limit: someone sending a burst
+	// of messages is exactly who may need to stop a reply.
 	stopText := in.Text
 	if addressed != nil {
 		stopText = rest // "Pip, stop"
 	}
-	if isStopRequest(stopText) && len(in.Attachments) == 0 {
+	isStop := isStopRequest(stopText) && len(in.Attachments) == 0
+	if isStop {
 		stopped, jobs := e.Stop(in.ChatRef(), user)
 		if stopped {
 			return nil // the reply being stopped says so itself
@@ -182,6 +182,11 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		}
 		// Nothing running: an ordinary message (it may deny an approval).
 	}
+	if !e.allow(user.ID) {
+		e.Log.Warn("rate limited", "user", user.ID)
+		return ErrRateLimited
+	}
+	seq := e.arrivals.Add(1)
 	w := e.waiting(in.ChatRef())
 	w.Add(1)
 	unlock := e.lockChat(in.ChatRef())
@@ -254,13 +259,14 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err != nil {
 		return err
 	}
-	if err := e.DB.AddMessage(ctx, conv.ID, "user", "", in.Text); err != nil {
+	msgID, err := e.DB.AddMessageID(ctx, conv.ID, "user", "", in.Text)
+	if err != nil {
 		return err
 	}
 	if ch := e.channels[in.Channel]; ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, userMsgID: msgID}
 	return e.respond(ctx, t, "")
 }
 
@@ -491,6 +497,16 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 // sendToUser posts proactively in the user's DMs and records it in that
 // conversation, so the user can reply with context.
 func (e *Engine) sendToUser(ctx context.Context, u *store.User, c *character.Character, text string) error {
+	return e.deliverToUser(ctx, u, c, text, true)
+}
+
+// sendNotice is sendToUser for operational notices: the user's current
+// sprig stays the one they were talking to.
+func (e *Engine) sendNotice(ctx context.Context, u *store.User, c *character.Character, text string) error {
+	return e.deliverToUser(ctx, u, c, text, false)
+}
+
+func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.Character, text string, takeOver bool) error {
 	ch := e.channels[u.Channel]
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
@@ -500,7 +516,9 @@ func (e *Engine) sendToUser(ctx context.Context, u *store.User, c *character.Cha
 		return err
 	}
 	ref := u.Channel + ":" + chatID
-	e.active.Store(ref, c.ID)
+	if takeOver {
+		e.active.Store(ref, c.ID)
+	}
 	conv, err := e.DB.OpenConversation(ctx, u.ID, ref, e.Cfg.IdleAfter)
 	if err != nil {
 		return err
@@ -533,7 +551,7 @@ func (e *Engine) Notify(ctx context.Context, key string, window time.Duration, l
 	}
 	for _, a := range admins {
 		a := a
-		if err := e.sendToUser(ctx, &a, host, text); err != nil {
+		if err := e.sendNotice(ctx, &a, host, text); err != nil {
 			e.Log.Error("notify admin", "user", a.ID, "err", err)
 		}
 	}

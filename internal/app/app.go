@@ -141,8 +141,8 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	sec.SetEnvFallback(secrets.ModelAPIKey, cfg.ModelAPIKey)
 	// The address and key are read per call: onboarding can switch to a
 	// local server, and keys added in chat apply at once.
-	or := llm.NewOpenRouter(cfg.ModelURL, func(ctx context.Context) (string, error) {
-		if llm.IsOpenRouter(a.Settings.String(ctx, "model_url")) {
+	or := llm.NewOpenRouter(cfg.ModelURL, func(ctx context.Context, base string) (string, error) {
+		if llm.IsOpenRouter(base) {
 			return sec.Get(ctx, secrets.OpenRouterKey)
 		}
 		k, _ := sec.Get(ctx, secrets.ModelAPIKey) // most local servers need none
@@ -263,7 +263,7 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 }
 
 func (a *App) webStatus(ctx context.Context, admin bool) web.Status {
-	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Secrets.Has(ctx, secrets.OpenRouterKey)}
+	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Engine.ModelReady(ctx)}
 	for _, ch := range a.channels {
 		st.Channels[ch.Name()] = ch.Connected()
 	}
@@ -486,7 +486,12 @@ func (a *App) Webhook(ctx context.Context, token string, body []byte, header htt
 		payload = strings.Join(head, "\n") + "\n\n" + payload
 	}
 	j.Payload = payload
-	switch err := a.Scheduler.Fire(*j); {
+	fireErr := a.Scheduler.Fire(*j)
+	if fireErr != nil {
+		// Not run: let the sender's retry of this delivery through.
+		a.Engine.ReleaseDelivery(ctx, *j, header)
+	}
+	switch err := fireErr; {
 	case err == nil:
 		return http.StatusAccepted, "started"
 	case errors.Is(err, scheduler.ErrPaused):

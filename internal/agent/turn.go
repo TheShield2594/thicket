@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
@@ -37,6 +38,8 @@ type turn struct {
 	// budgetChars overrides the history budget (after the model said its
 	// context was full).
 	budgetChars int
+	// userMsgID is the stored message this turn answers (0 if none).
+	userMsgID int64
 
 	toolCalls       int
 	handoff         *handoffReq
@@ -161,7 +164,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		if history, err = e.DB.MessagesAfter(ctx, t.conv.ID, t.conv.SummaryUpto, historyLoadLimit); err != nil {
 			return nil, err
 		}
-		history, _ = fitHistory(history, e.historyBudget(ctx, t))
+		history, _ = fitHistory(history, e.historyBudget(ctx, t), t.userMsgID)
 		summary = t.conv.Summary
 	}
 	query := t.query + " " + event
@@ -190,21 +193,32 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		msgs = append(msgs, llm.Message{Role: "user", Content: summaryMessage(summary)})
 	}
 	for i, h := range history {
-		newest := i == len(history)-1
+		// The message this turn answers, tracked by id: a notice added to
+		// the conversation mid-turn mustn't take its media or its room.
+		origin := h.Role == "user" && (h.ID == t.userMsgID || (t.userMsgID == 0 && i == len(history)-1))
 		content := h.Content
-		// The newest message may carry a text file the user just sent:
-		// let the model read all of it this once.
+		// It may carry text files the user just sent: let the model read
+		// them all this once (each file is capped, plus its wrapper).
 		limit := 4000
-		if newest && h.Role == "user" {
-			limit = maxTextFileChars*maxFilesPerMessage/2 + 4000
+		if origin {
+			limit = maxFilesPerMessage*(maxTextFileChars+200) + 4000
+			if t.budgetChars > 0 {
+				// The model said its context was full: this message must
+				// shrink too, not just the history before it.
+				limit = min(limit, max(t.budgetChars, minHistoryChars))
+			}
 		}
 		if len(content) > limit && h.Role != "document" { // documents are capped when stored
-			content = content[:limit] + " […]"
+			cut := limit
+			for cut > 0 && !utf8.RuneStart(content[cut]) {
+				cut--
+			}
+			content = content[:cut] + " […cut to fit]"
 		}
 		switch {
 		case h.Role == "user":
 			m := llm.Message{Role: "user", Content: content}
-			if newest {
+			if origin {
 				m.Images, m.Files = t.images, t.pdfs
 			}
 			msgs = append(msgs, m)

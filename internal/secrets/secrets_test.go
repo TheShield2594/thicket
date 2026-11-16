@@ -101,6 +101,7 @@ func TestEnvFallbackWhenStoredCopyUnreadable(t *testing.T) {
 func TestChatTokenShapes(t *testing.T) {
 	for _, s := range []string{
 		"my bot is 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw4 ok",
+		"123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw-",
 		"https://example.com/hooks/thk_abcdefghijklmnopqrstuvwxyzABCDEF",
 	} {
 		if !LooksLikeSecret(s) {
@@ -111,5 +112,13 @@ func TestChatTokenShapes(t *testing.T) {
 		if LooksLikeSecret(s) {
 			t.Errorf("false positive: %s", s)
 		}
+	}
+}
+
+func TestRedactTelegramTokenEndingInHyphen(t *testing.T) {
+	tok := "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw-"
+	got := NewRedactor().Redact("token " + tok + " here")
+	if strings.Contains(got, "PALDsa") {
+		t.Fatalf("token not fully redacted: %s", got)
 	}
 }

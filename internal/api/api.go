@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -71,12 +72,17 @@ type API struct {
 	mu       sync.Mutex
 	collect  map[string]*[]Reply    // chat id -> replies of the request in flight
 	chatLock map[string]*sync.Mutex // one request at a time per conversation
-	seq      atomic.Int64
+	// A stop also sets aside requests already waiting for the
+	// conversation: each records the stop count when it starts waiting,
+	// and gives up if it changed by the time its turn comes.
+	stops   map[string]int
+	waiting map[string]int
+	seq     atomic.Int64
 }
 
 func New(e *agent.Engine, db *store.Store, sched *scheduler.Scheduler, chars *character.Registry, log *slog.Logger) *API {
 	return &API{Engine: e, DB: db, Sched: sched, Chars: chars, Log: log,
-		collect: map[string]*[]Reply{}, chatLock: map[string]*sync.Mutex{}}
+		collect: map[string]*[]Reply{}, chatLock: map[string]*sync.Mutex{}, stops: map[string]int{}, waiting: map[string]int{}}
 }
 
 // --- channel.Channel: replies are collected for the waiting request ---
@@ -197,8 +203,20 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	// Each token has its own conversations, kept apart from chat apps'.
 	chatID := fmt.Sprintf("t%d.%s", c.token.ID, conv)
 	lock := a.lockFor(chatID)
+	a.mu.Lock()
+	stopsBefore := a.stops[chatID]
+	a.waiting[chatID]++
+	a.mu.Unlock()
 	lock.Lock()
 	defer lock.Unlock()
+	a.mu.Lock()
+	a.waiting[chatID]--
+	setAside := a.stops[chatID] != stopsBefore
+	a.mu.Unlock()
+	if setAside {
+		fail(w, http.StatusConflict, "set aside: a stop for this conversation came in while this message was waiting")
+		return
+	}
 	var replies []Reply
 	a.mu.Lock()
 	a.collect[chatID] = &replies
@@ -226,6 +244,14 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	default:
 		writeJSON(w, http.StatusOK, map[string]any{"conversation": conv, "replies": out})
 	}
+}
+
+// Queued is how many requests are waiting for a conversation ("t<token
+// id>.<name>"). For tests.
+func (a *API) Queued(chatID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.waiting[chatID]
 }
 
 func (a *API) lockFor(chatID string) *sync.Mutex {
@@ -321,8 +347,11 @@ func (a *API) stop(w http.ResponseWriter, r *http.Request, c caller) {
 	var req struct {
 		Conversation string `json:"conversation"`
 	}
-	if r.ContentLength != 0 {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req)
+	// An empty body means the default conversation; anything else must be
+	// valid, so a mistake can't stop the wrong reply.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		fail(w, http.StatusBadRequest, "body must be JSON: {\"conversation\": \"…\"} (or empty)")
+		return
 	}
 	conv := strings.ToLower(req.Conversation)
 	if conv == "" {
@@ -332,9 +361,17 @@ func (a *API) stop(w http.ResponseWriter, r *http.Request, c caller) {
 		fail(w, http.StatusBadRequest, "conversation: up to 40 lowercase letters, digits, - or _")
 		return
 	}
-	stopped, jobs := a.Engine.Stop(fmt.Sprintf("api:t%d.%s", c.token.ID, conv), c.user)
+	chatID := fmt.Sprintf("t%d.%s", c.token.ID, conv)
+	stopped, jobs := a.Engine.Stop("api:"+chatID, c.user)
+	setAside := 0
+	if stopped {
+		a.mu.Lock()
+		a.stops[chatID]++
+		setAside = a.waiting[chatID]
+		a.mu.Unlock()
+	}
 	if jobs == nil {
 		jobs = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"stopped_reply": stopped, "stopped_jobs": jobs})
+	writeJSON(w, http.StatusOK, map[string]any{"stopped_reply": stopped, "stopped_jobs": jobs, "set_aside": setAside})
 }

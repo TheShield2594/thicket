@@ -127,12 +127,13 @@ type Scheduler struct {
 	base     context.Context
 	mu       sync.Mutex
 	running  map[int64]bool
+	admitted map[int64]time.Time // job id -> when Fire last started it
 	lastTick time.Time
 	wg       sync.WaitGroup
 }
 
 func New(db *store.Store, exec Executor, log *slog.Logger) *Scheduler {
-	return &Scheduler{DB: db, Exec: exec, Log: log, Now: time.Now, running: map[int64]bool{}}
+	return &Scheduler{DB: db, Exec: exec, Log: log, Now: time.Now, running: map[int64]bool{}, admitted: map[int64]time.Time{}}
 }
 
 // LastTick is when the scheduler last checked for due jobs (for /health).
@@ -226,9 +227,6 @@ func (s *Scheduler) Fire(j store.Job) error {
 		return ErrPaused
 	}
 	now := s.Now()
-	if !j.LastRunAt.IsZero() && now.Sub(j.LastRunAt) < WebhookMinGap {
-		return ErrTooSoon
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running[j.ID] {
@@ -238,6 +236,19 @@ func (s *Scheduler) Fire(j store.Job) error {
 	if ctx == nil {
 		ctx = context.Background() // not started (tests)
 	}
+	// The caller's copy of the job may predate a run that has finished
+	// since: re-read the last run time under the lock, and also count
+	// this scheduler's own latest admission.
+	last := j.LastRunAt
+	if fresh, err := s.DB.JobByID(ctx, j.ID); err == nil {
+		last = fresh.LastRunAt
+	}
+	if a := s.admitted[j.ID]; a.After(last) {
+		last = a
+	}
+	if !last.IsZero() && now.Sub(last) < WebhookMinGap {
+		return ErrTooSoon
+	}
 	n, err := s.DB.JobRunsSince(ctx, j.ID, now.Add(-24*time.Hour))
 	if err != nil {
 		return err
@@ -246,6 +257,7 @@ func (s *Scheduler) Fire(j store.Job) error {
 		return ErrTooMany
 	}
 	s.running[j.ID] = true
+	s.admitted[j.ID] = now
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

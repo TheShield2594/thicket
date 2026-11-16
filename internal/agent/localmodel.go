@@ -113,12 +113,14 @@ func (e *Engine) bootstrap(ctx context.Context, in channel.Incoming, user *store
 	if !user.IsAdmin() || !in.IsDM {
 		return e.bootstrapGreeting(ctx, in, user, host)
 	}
+	// An address in this message wins: it may be the replacement for a
+	// configured server that didn't answer.
+	if cands := localCandidates(in.Text); len(cands) > 0 {
+		return e.connectLocal(ctx, in, user, host, cands, true)
+	}
 	// A server set in the environment: connect to it straight away.
 	if e.localModel(ctx) {
 		return e.connectLocal(ctx, in, user, host, []string{e.Settings.String(ctx, "model_url")}, false)
-	}
-	if cands := localCandidates(in.Text); len(cands) > 0 {
-		return e.connectLocal(ctx, in, user, host, cands, true)
 	}
 	return e.bootstrapGreeting(ctx, in, user, host)
 }

@@ -51,8 +51,12 @@ func toHTML(md string) string {
 }
 
 // split breaks text into chunks no longer than n bytes, preferring line
-// breaks, without cutting a code fence's backticks or a UTF-8 rune.
+// breaks, never inside a code fence's backticks or a UTF-8 rune. A chunk
+// that ends inside a code block closes it, and the next reopens it, so
+// each chunk's formatting stands on its own.
 func split(text string, n int) []string {
+	const fence = "```"
+	n -= len(fence) + 1 // room to close a fence at the end of a chunk
 	var out []string
 	for len(text) > n {
 		cut := strings.LastIndex(text[:n], "\n")
@@ -65,8 +69,17 @@ func split(text string, n int) []string {
 				cut--
 			}
 		}
-		out = append(out, strings.TrimSpace(text[:cut]))
-		text = strings.TrimSpace(text[cut:])
+		for cut > 0 && text[cut-1] == '`' && text[cut] == '`' { // inside a run of backticks
+			cut--
+		}
+		chunk := strings.TrimSpace(text[:cut])
+		rest := strings.TrimSpace(text[cut:])
+		if strings.Count(chunk, fence)%2 == 1 { // cut inside a code block
+			chunk += "\n" + fence
+			rest = fence + "\n" + rest
+		}
+		out = append(out, chunk)
+		text = rest
 	}
 	if text != "" {
 		out = append(out, text)

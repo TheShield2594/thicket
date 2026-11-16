@@ -26,6 +26,42 @@ const (
 
 var skillIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 
+// Passwords written out in words ("the password is velvet heron", "log in
+// with password hunter2", "password: …") are refused. Words that usually
+// follow "password" in instructions about passwords, not in them, are
+// allowed ("reset the password policy", "the password is stored in the
+// vault"). This catches the obvious cases; it can't recognise every one.
+var (
+	passwordValueRe = regexp.MustCompile(`(?i)\b(?:password|passphrase|passcode)\s*(?:is|was|=|:)\s*["'\x60]?([^\s"'\x60.,;]+)`)
+	passwordUseRe   = regexp.MustCompile(`(?i)\b(?:with|using|use|enter|type)\s+(?:the\s+|my\s+|this\s+|our\s+)?(?:password|passphrase|passcode)\s+["'\x60]?([^\s"'\x60.,;]+)`)
+	passwordQuoteRe = regexp.MustCompile(`(?i)\b(?:password|passphrase|passcode)\s*["'\x60][^"'\x60]+["'\x60]`)
+	notAPassword    = map[string]bool{}
+)
+
+func init() {
+	for _, w := range strings.Fields(`policy policies reset resets manager managers field fields prompt prompts change changes
+		changed rule rules requirement requirements strength stored saved kept held managed required needed set expired
+		expiring wrong incorrect correct right missing empty not never always still in on at for from to of the a an your
+		their his her our my its this that which you we they it hint hints protected box page screen form option settings
+		hash hashes length lengths format vault safe`) {
+		notAPassword[w] = true
+	}
+}
+
+func containsPassword(s string) bool {
+	if passwordQuoteRe.MatchString(s) {
+		return true
+	}
+	for _, re := range []*regexp.Regexp{passwordValueRe, passwordUseRe} {
+		for _, m := range re.FindAllStringSubmatch(s, -1) {
+			if w := strings.ToLower(m[1]); w != "" && !notAPassword[w] && !strings.HasPrefix(w, "{{secret:") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ValidateSkill checks a skill's fields (shared by the tools and the CLI).
 func ValidateSkill(k store.Skill) error {
 	var probs []string
@@ -49,7 +85,8 @@ func ValidateSkill(k store.Skill) error {
 	if strings.Contains(k.Body, "<untrusted") {
 		probs = append(probs, "steps can't contain <untrusted> content: write the procedure in your own words")
 	}
-	if secrets.LooksLikeSecret(k.Body + " " + k.Description) {
+	all := strings.Join([]string{k.Name, k.Description, k.Body, k.Note}, "\n")
+	if secrets.LooksLikeSecret(all) || containsPassword(all) {
 		probs = append(probs, "skills can't contain keys or passwords: store those with request_secret and refer to {{secret:name}}")
 	}
 	if len(probs) > 0 {
@@ -184,7 +221,7 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 			return "", err
 		}
 		e.logActivity(ctx, "info", "skill", t.char.ID, t.user.ID, "skill "+id+" deleted", "")
-		return "Skill " + id + " deleted, with its history.", nil
+		return "Skill " + id + " deleted. Its old versions are kept: if it's ever recreated with this id, numbering carries on from them.", nil
 	}
 	return "", fmt.Errorf("unknown action %q", a.Action)
 }

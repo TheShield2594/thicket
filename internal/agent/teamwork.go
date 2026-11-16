@@ -133,21 +133,28 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 	if task == "" || len(task) > 2000 {
 		return "", errors.New("task is required (max 2000 characters): say what to do and what to report")
 	}
-	running := 0
-	e.jobsRunning.Range(func(k, v any) bool {
-		if _, isTask := k.(string); isTask && v.(*inFlight).userID == t.user.ID {
-			running++
-		}
-		return true
-	})
-	if running >= maxTasksPerUser {
-		return "", fmt.Errorf("%d background tasks are already running for this user: wait for one to finish (or they can say stop)", running)
+	// Check the cap and take a slot in one step, so two calls at once
+	// can't both squeeze in.
+	e.taskMu.Lock()
+	if e.taskUse == nil {
+		e.taskUse = map[int64]int{}
 	}
+	if n := e.taskUse[t.user.ID]; n >= maxTasksPerUser {
+		e.taskMu.Unlock()
+		return "", fmt.Errorf("%d background tasks are already running for this user: wait for one to finish (or they can say stop)", n)
+	}
+	e.taskUse[t.user.ID]++
+	e.taskMu.Unlock()
 	from := t.char
 	name := fmt.Sprintf("%s's task: %s", target.DisplayName(), truncate(task, 60))
 	e.tasks.Add(1)
 	go func() {
 		defer e.tasks.Done()
+		defer func() {
+			e.taskMu.Lock()
+			e.taskUse[t.user.ID]--
+			e.taskMu.Unlock()
+		}()
 		e.runTask(context.WithoutCancel(ctx), t.user, from, target, task, name)
 	}()
 	e.logActivity(ctx, "info", "sprig", from.ID, t.user.ID, fmt.Sprintf("%s gave %s a background task", from.DisplayName(), target.DisplayName()), task)

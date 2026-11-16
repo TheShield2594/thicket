@@ -38,7 +38,15 @@ of it.
 Skills can't contain keys or passwords (store those with the sprig's
 secret request; steps can refer to `{{secret:name}}`), and can't contain
 content marked as untrusted, such as text copied from a web page or email:
-write the procedure in your own words.
+write the procedure in your own words. Keys and tokens are recognised by
+their shape, and passwords when they're written out ("the password is
+…", "log in with password …", "password: …"); talking about passwords
+("reset the password policy") is fine. No check catches every password,
+so don't rely on it: keep them out of skills.
+
+Deleting a skill removes it from the library but keeps its old versions:
+if a skill with the same id is created again, its numbering carries on,
+so an edit made against the deleted one can't overwrite the new one.
 
 ## Sharing
 

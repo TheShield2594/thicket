@@ -191,7 +191,7 @@ func askCmd(args []string) error {
 	}
 	text := strings.Join(pos, " ")
 	if text == "" || text == "-" {
-		b, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		b, err := readStdin()
 		if err != nil {
 			return err
 		}
@@ -237,7 +237,7 @@ func runJobCmd(args []string) error {
 		return fmt.Errorf("JOB_ID must be a number (see `thicket jobs`)")
 	}
 	if *payload == "-" {
-		b, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		b, err := readStdin()
 		if err != nil {
 			return err
 		}
@@ -320,4 +320,19 @@ func stopCmd(args []string) error {
 		fmt.Println("nothing was running")
 	}
 	return nil
+}
+
+// maxStdin is the most read from stdin: the server's limits are lower, so
+// anything bigger is refused here rather than silently cut short.
+const maxStdin = 64 << 10
+
+func readStdin() ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdin+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxStdin {
+		return nil, fmt.Errorf("stdin is over %d KB; send less", maxStdin>>10)
+	}
+	return b, nil
 }

@@ -29,16 +29,21 @@ func TestLocalCandidates(t *testing.T) {
 func TestFitHistory(t *testing.T) {
 	msg := func(n int) store.Message { return store.Message{Role: "user", Content: strings.Repeat("x", n)} }
 	h := []store.Message{msg(1000), msg(1000), msg(1000), msg(50)}
-	got, dropped := fitHistory(h, 2000) // sizes count 40 characters of framing each
+	got, dropped := fitHistory(h, 2000, 0) // sizes count 40 characters of framing each
 	if len(got) != 2 || !dropped || got[1].Content != h[3].Content {
 		t.Fatalf("kept %d, dropped=%v", len(got), dropped)
 	}
 	// The newest message always goes in, even alone over budget.
-	got, dropped = fitHistory([]store.Message{msg(500), msg(9000)}, 2000)
+	got, dropped = fitHistory([]store.Message{msg(500), msg(9000)}, 2000, 0)
 	if len(got) != 1 || !dropped {
 		t.Fatalf("newest over budget: kept %d", len(got))
 	}
-	if got, dropped := fitHistory(h, 100000); len(got) != 4 || dropped {
+	if got, dropped := fitHistory(h, 100000, 0); len(got) != 4 || dropped {
 		t.Fatal("everything fits")
+	}
+	// The message the turn answers stays, even if a notice came after it.
+	h[1].ID = 42
+	if got, _ := fitHistory(h, 200, 42); len(got) != 3 || got[0].ID != 42 {
+		t.Fatalf("message being answered dropped: kept %d", len(got))
 	}
 }

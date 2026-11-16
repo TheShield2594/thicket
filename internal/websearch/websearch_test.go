@@ -40,20 +40,22 @@ func TestFetchRefusesPrivateAddresses(t *testing.T) {
 }
 
 func TestFetchRedirectToPrivateIsBlocked(t *testing.T) {
-	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("internal")) }))
+	innerCalls := 0
+	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { innerCalls++; w.Write([]byte("internal")) }))
 	defer inner.Close()
-	// The public-looking hop is itself local in a test, so allow the first
-	// connection only: the dial check must still stop the redirect.
-	calls := 0
+	outerCalls := 0
 	outer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		outerCalls++
 		http.Redirect(w, r, inner.URL, http.StatusFound)
 	}))
 	defer outer.Close()
-	f := &Fetcher{}
+	// The first hop stands in for a public site: only its exact address is
+	// let through, so the redirect still meets the production check.
+	allowed := strings.TrimPrefix(outer.URL, "http://")
+	f := &Fetcher{allowAddr: func(a string) bool { return a == allowed }}
 	_, err := f.Fetch(context.Background(), outer.URL)
-	if !errors.Is(err, ErrBlocked) || calls != 0 {
-		t.Fatalf("redirect chain: %v (outer reached %d times)", err, calls)
+	if !errors.Is(err, ErrBlocked) || outerCalls != 1 || innerCalls != 0 {
+		t.Fatalf("redirect to a private address: err=%v, first hop reached %d times, private target %d times", err, outerCalls, innerCalls)
 	}
 }
 

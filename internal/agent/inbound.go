@@ -11,6 +11,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -69,7 +70,7 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 		if err := e.Secrets.Put(ctx, secrets.OpenRouterKey, key); err != nil {
 			return true, err
 		}
-		if !ready && e.Settings.IsSet(ctx, "model_url") {
+		if prev := e.Settings.String(ctx, "model_url"); !ready && e.Settings.IsSet(ctx, "model_url") && !llm.IsOpenRouter(prev) {
 			// A local server was tried in chat but never worked: the key
 			// means they've chosen OpenRouter.
 			for _, k := range []string{"model_url", "model", "cheap_model", "fallback_model"} {

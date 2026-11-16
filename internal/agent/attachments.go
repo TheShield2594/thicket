@@ -189,6 +189,9 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 				fmt.Fprintf(&b, "\n[pdf %s could not be read: %v]", name, err)
 				continue
 			}
+			// Kept text is matched to its file by name: two PDFs called
+			// receipt.pdf must not share one.
+			name = uniqueName(name, pdfs)
 			pdfs = append(pdfs, llm.File{Name: name, URL: "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(body)})
 		}
 	}
@@ -376,4 +379,23 @@ func annotationTexts(raws []json.RawMessage) (named map[string]string, unnamed [
 func documentMessage(content string) string {
 	name, text, _ := strings.Cut(content, "\n")
 	return fmt.Sprintf("[Thicket event] The user sent %s earlier in this conversation. Its text, kept for follow-up questions:\n%s", name, wrapUntrusted("pdf "+name, text))
+}
+
+// uniqueName returns name, or "name (2).pdf" and so on if a file in taken
+// already has it.
+func uniqueName(name string, taken []llm.File) string {
+	used := map[string]bool{}
+	for _, f := range taken {
+		used[f.Name] = true
+	}
+	if !used[name] {
+		return name
+	}
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 2; ; i++ {
+		if n := fmt.Sprintf("%s (%d)%s", stem, i, ext); !used[n] {
+			return n
+		}
+	}
 }

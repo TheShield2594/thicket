@@ -111,7 +111,11 @@ func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMe
 	if a.Signature != "" && a.Signature != "none" {
 		note, err := e.setHookSignature(ctx, t, j, a.Signature)
 		if err != nil {
-			return "", fmt.Errorf("created webhook job #%d, but couldn't turn on signatures: %w", j.ID, err)
+			// The user has a URL that was meant to need signatures: don't
+			// leave it accepting unsigned calls.
+			_ = e.DB.DeleteJob(context.WithoutCancel(ctx), j.ID)
+			_ = e.Secrets.Delete(context.WithoutCancel(ctx), hookSecretName(j.ID))
+			return "", fmt.Errorf("couldn't set up signatures (%w), so I removed webhook job #%d again; its URL won't work. Try again", err, j.ID)
 		}
 		return fmt.Sprintf("Webhook job #%d created, run by %s. Thicket DMed the user its URL. %s", j.ID, owner.DisplayName(), note), nil
 	}
@@ -199,7 +203,7 @@ func (e *Engine) WebhookRefused(ctx context.Context, j store.Job, cause error) {
 	if errors.Is(cause, ErrBadSignature) {
 		msg = fmt.Sprintf("Heads-up: my webhook job “%s” got calls without a valid signature, so I refused them. If you haven't just changed the sender's settings, someone else may have the URL: ask me for a new URL and secret.", j.Name)
 	}
-	if err := e.sendToUser(ctx, user, char, msg); err != nil {
+	if err := e.sendNotice(ctx, user, char, msg); err != nil {
 		e.Log.Error("report webhook refusal", "job", j.ID, "err", err)
 	}
 }

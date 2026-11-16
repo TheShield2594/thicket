@@ -204,3 +204,27 @@ func TestToHTML(t *testing.T) {
 		}
 	}
 }
+
+func TestSendKeepsCodeBlocksAcrossChunks(t *testing.T) {
+	a, f := newTest(t)
+	code := strings.Repeat("x := 1 // a line of code\n", 200) // ~5,000 bytes
+	if err := a.Send(context.Background(), "42", channel.Persona{Name: "Pip"}, "Here:\n```\n"+code+"```\nThat's all."); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent) < 2 {
+		t.Fatalf("want the reply split, got %d part(s)", len(f.sent))
+	}
+	for i, m := range f.sent {
+		html := m["text"].(string)
+		if strings.Count(html, "<pre>") != strings.Count(html, "</pre>") || len(html) > 4096 {
+			t.Errorf("part %d: unbalanced or too long (%d bytes)", i, len(html))
+		}
+		if i < len(f.sent)-1 && !strings.Contains(html, "<pre>") {
+			t.Errorf("part %d lost the code formatting", i)
+		}
+	}
+	last := f.sent[len(f.sent)-1]["text"].(string)
+	if !strings.HasSuffix(last, "</pre>\nThat's all.") {
+		t.Errorf("text after the block came out as code: %q", last[max(0, len(last)-60):])
+	}
+}

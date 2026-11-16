@@ -448,7 +448,20 @@ func TestSkillVersions(t *testing.T) {
 	if err := s.DeleteSkill(ctx, "briefing"); err != nil {
 		t.Fatal(err)
 	}
-	if h, _ := s.SkillHistory(ctx, "briefing"); len(h) != 0 {
-		t.Fatal("versions outlived their skill")
+	if _, err := s.SkillByID(ctx, "briefing", 0); err != ErrNotFound {
+		t.Fatal("a deleted skill is still readable")
+	}
+	if all, _ := s.Skills(ctx); len(all) != 0 {
+		t.Fatal("a deleted skill is still listed")
+	}
+	// Recreated with the same id: numbering carries on, so an edit based
+	// on the old version 2 is refused instead of landing on the new skill.
+	k.Body = "recreated"
+	if v, err := s.SaveSkill(ctx, k, 0); err != nil || v != 3 {
+		t.Fatalf("recreate: %d %v", v, err)
+	}
+	k.Body = "stale edit from before the delete"
+	if _, err := s.SaveSkill(ctx, k, 2); !errors.As(err, &vc) || vc.Current != 3 {
+		t.Fatalf("stale save onto a recreated skill: %v", err)
 	}
 }

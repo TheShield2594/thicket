@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 var secretRe = regexp.MustCompile(`thk_whs_[A-Za-z0-9_-]{30,}`)
@@ -32,7 +33,14 @@ func takeHook(t *testing.T, fc *fakeChannel) (token, secret string) {
 	return token, secret
 }
 
-func readyAgain(a *App) { a.DB.DB().Exec("UPDATE jobs SET last_run_at = NULL") } // skip the 1-minute gap
+// readyAgain skips the one-minute gap between webhook runs by moving the
+// scheduler's clock on.
+func readyAgain(a *App) {
+	skip := 2 * time.Minute
+	if prev := a.Scheduler.Now; prev != nil {
+		a.Scheduler.Now = func() time.Time { return prev().Add(skip) }
+	}
+}
 
 func TestSignedWebhooks(t *testing.T) {
 	a, fc, fm, ctx := setup(t)

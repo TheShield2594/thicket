@@ -46,6 +46,9 @@ func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Ser
 	}
 	if hooks, maxBody := rt.Hooks, rt.MaxHookBody; hooks != nil {
 		mux.HandleFunc("POST /hooks/{token}", func(w http.ResponseWriter, r *http.Request) {
+			// Unauthenticated callers mustn't hold a connection by
+			// sending the body slowly.
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
 			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBody)))
 			var tooBig *http.MaxBytesError
 			if errors.As(err, &tooBig) {

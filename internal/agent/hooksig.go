@@ -83,15 +83,32 @@ func (e *Engine) CheckWebhook(ctx context.Context, j store.Job, body []byte, h h
 		e.WebhookRefused(ctx, j, ErrBadSignature)
 		return ErrBadSignature
 	}
-	for _, k := range []string{"X-GitHub-Delivery", "X-Gitea-Delivery", "X-Forgejo-Delivery", "X-Gitlab-Event-UUID"} {
-		if id := h.Get(k); id != "" {
-			if fresh, err := e.DB.ClaimNotice(ctx, fmt.Sprintf("hookdelivery:%d:%s", j.ID, truncate(id, 80)), 7*24*time.Hour); err == nil && !fresh {
-				return ErrDuplicate
-			}
-			break
+	if key := deliveryKey(j, h); key != "" {
+		if fresh, err := e.DB.ClaimNotice(ctx, key, 7*24*time.Hour); err == nil && !fresh {
+			return ErrDuplicate
 		}
 	}
 	return nil
+}
+
+// deliveryKey names the claim on one delivery to job j, or "" when the
+// call carries no delivery id.
+func deliveryKey(j store.Job, h http.Header) string {
+	for _, k := range []string{"X-GitHub-Delivery", "X-Gitea-Delivery", "X-Forgejo-Delivery", "X-Gitlab-Event-UUID"} {
+		if id := h.Get(k); id != "" {
+			return fmt.Sprintf("hookdelivery:%d:%s", j.ID, truncate(id, 80))
+		}
+	}
+	return ""
+}
+
+// ReleaseDelivery drops the claim CheckWebhook made, for a delivery that
+// was then refused (paused, busy, rate-limited), so the sender's retry
+// can still run.
+func (e *Engine) ReleaseDelivery(ctx context.Context, j store.Job, h http.Header) {
+	if key := deliveryKey(j, h); key != "" {
+		_ = e.DB.ReleaseNotice(ctx, key)
+	}
 }
 
 // WebhookEvent names the event a call is about, from the usual headers.
@@ -111,7 +128,11 @@ func (e *Engine) setHookSignature(ctx context.Context, t *turn, j *store.Job, st
 		return "", fmt.Errorf("job #%d runs on a schedule, not a webhook", j.ID)
 	}
 	style = strings.ToLower(strings.TrimSpace(style))
-	if style == "none" || style == "" {
+	if style == "" {
+		// Only an explicit "none" removes protection.
+		return "", errors.New("say which signature style: github, gitea, gitlab, or none to turn signatures off")
+	}
+	if style == "none" {
 		if err := e.DB.SetJobHookAuth(ctx, j.ID, ""); err != nil {
 			return "", err
 		}
@@ -135,14 +156,28 @@ func (e *Engine) setHookSignature(ctx context.Context, t *turn, j *store.Job, st
 
 // rotateHookSecret stores a new signing secret and DMs it, with where it
 // goes for that sender.
-func (e *Engine) rotateHookSecret(ctx context.Context, t *turn, j *store.Job, style string) error {
+func (e *Engine) rotateHookSecret(ctx context.Context, t *turn, j *store.Job, style string) (err error) {
 	secret, err := newHookSecret()
 	if err != nil {
 		return err
 	}
-	if err := e.Secrets.Put(ctx, hookSecretName(j.ID), secret); err != nil {
+	// If the new secret can't be delivered, the one the sender already
+	// has must keep working: put the old one back (or none, if new).
+	name := hookSecretName(j.ID)
+	old, oldErr := e.Secrets.Get(ctx, name)
+	if err := e.Secrets.Put(ctx, name, secret); err != nil {
 		return err
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if oldErr == nil && old != "" {
+			_ = e.Secrets.Put(context.WithoutCancel(ctx), name, old)
+		} else {
+			_ = e.Secrets.Delete(context.WithoutCancel(ctx), name)
+		}
+	}()
 	owner, ok := e.Chars.Get(j.Character)
 	if !ok {
 		owner = t.char

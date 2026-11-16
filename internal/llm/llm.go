@@ -132,8 +132,8 @@ func ToolsRejected(err error) bool {
 // input", providers 400/415/422), as opposed to an outage or a bad key.
 func MediaRejected(err error) bool {
 	var ae *APIError
-	if !errors.As(err, &ae) {
-		return false
+	if !errors.As(err, &ae) || ToolsRejected(err) || ContextExceeded(err) {
+		return false // other recoveries handle these, keeping the media
 	}
 	switch ae.Status {
 	case 400, 404, 413, 415, 422:

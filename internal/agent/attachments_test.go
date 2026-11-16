@@ -65,3 +65,50 @@ func TestSkillIndex(t *testing.T) {
 		t.Fatalf("index not capped:\n%s", idx)
 	}
 }
+
+func TestSkillPasswords(t *testing.T) {
+	ok := store.Skill{ID: "login-help", Name: "Login help", Description: "When they're locked out", Body: "x"}
+	for _, body := range []string{
+		"1. Reset the password policy.\n2. Check the password field.",
+		"The password is stored in the vault; never paste it.",
+		"Log in with the password from {{secret:router}}.",
+		"Use password managers.",
+	} {
+		ok.Body = body
+		if err := ValidateSkill(ok); err != nil {
+			t.Errorf("ordinary text refused: %q: %v", body, err)
+		}
+	}
+	for _, body := range []string{
+		"Log in with password velvet heron canoe",
+		"The password is hunter2.",
+		"password: Tr0ub4dor",
+		`Wifi password "correct horse"`,
+	} {
+		ok.Body = body
+		if err := ValidateSkill(ok); err == nil || !strings.Contains(err.Error(), "passwords") {
+			t.Errorf("password accepted: %q", body)
+		}
+	}
+	// Names and notes are checked too: names go into every prompt.
+	ok.Body = "1. x"
+	ok.Name = "ghp_" + strings.Repeat("a", 36)
+	if ValidateSkill(ok) == nil {
+		t.Error("a key in the name was accepted")
+	}
+	ok.Name, ok.Note = "Login help", "the password is hunter2"
+	if ValidateSkill(ok) == nil {
+		t.Error("a password in the note was accepted")
+	}
+}
+
+func TestUniquePDFNames(t *testing.T) {
+	var taken []llm.File
+	for _, want := range []string{"receipt.pdf", "receipt (2).pdf", "receipt (3).pdf"} {
+		n := uniqueName("receipt.pdf", taken)
+		if n != want {
+			t.Fatalf("got %q want %q", n, want)
+		}
+		taken = append(taken, llm.File{Name: n})
+	}
+}

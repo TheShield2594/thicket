@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -62,15 +63,21 @@ func Public(a netip.Addr) bool {
 // Fetcher reads pages. The zero value is safe; AllowPrivate is for tests.
 type Fetcher struct {
 	AllowPrivate bool
-	client       *http.Client
+	// allowAddr lets tests reach one local address while every other
+	// connection still gets the public-address check.
+	allowAddr func(address string) bool
+	once      sync.Once
+	client    *http.Client
 }
 
 func (f *Fetcher) httpClient() *http.Client {
-	if f.client != nil {
-		return f.client
-	}
+	f.once.Do(f.setup)
+	return f.client
+}
+
+func (f *Fetcher) setup() {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
-		if f.AllowPrivate {
+		if f.AllowPrivate || (f.allowAddr != nil && f.allowAddr(address)) {
 			return nil
 		}
 		host, _, err := net.SplitHostPort(address)
@@ -102,7 +109,6 @@ func (f *Fetcher) httpClient() *http.Client {
 			return nil
 		},
 	}
-	return f.client
 }
 
 // Page is a fetched page as text.

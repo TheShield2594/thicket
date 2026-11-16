@@ -45,3 +45,10 @@ func TestFetch(t *testing.T) {
 		t.Fatal("404 treated as success")
 	}
 }
+
+func TestFetchCapsOpen(t *testing.T) {
+	big := Attachment{Name: "x.png", Open: func(context.Context, int) ([]byte, string, error) { return make([]byte, 50), "image/png", nil }}
+	if _, _, err := Fetch(context.Background(), big, 10); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("an adapter returning more than max: %v", err)
+	}
+}

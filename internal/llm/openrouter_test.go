@@ -54,7 +54,7 @@ func TestOpenRouterExtensions(t *testing.T) {
 	c := &capture{}
 	srv := c.server(t)
 	u, _ := url.Parse(srv.URL)
-	o := NewOpenRouter(DefaultURL, func(context.Context) (string, error) { return "k", nil })
+	o := NewOpenRouter(DefaultURL, func(context.Context, string) (string, error) { return "k", nil })
 	o.HTTP = &http.Client{Transport: toServer{u}}
 	ctx := context.Background()
 
@@ -80,7 +80,7 @@ func TestOpenRouterExtensions(t *testing.T) {
 		t.Fatalf("both plugins = %s", b)
 	}
 
-	noKey := NewOpenRouter(DefaultURL, func(context.Context) (string, error) { return "", nil })
+	noKey := NewOpenRouter(DefaultURL, func(context.Context, string) (string, error) { return "", nil })
 	if _, err := noKey.Chat(ctx, Request{Model: "m"}); err != ErrNoKey {
 		t.Fatalf("OpenRouter without a key: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestOpenRouterExtensions(t *testing.T) {
 func TestLocalServer(t *testing.T) {
 	c := &capture{}
 	srv := c.server(t)
-	o := NewOpenRouter(DefaultURL, func(context.Context) (string, error) { return "", nil })
+	o := NewOpenRouter(DefaultURL, func(context.Context, string) (string, error) { return "", nil })
 	o.URL = func(context.Context) string { return srv.URL + "/v1" }
 	resp, err := o.Chat(context.Background(), Request{Model: "llama3.1:8b", PDFEngine: "native", Messages: pdfMsg})
 	if err != nil || resp.Message.Content != "ok" {
@@ -129,7 +129,33 @@ func TestIsOpenRouter(t *testing.T) {
 			t.Errorf("IsOpenRouter(%q) != %v", u, want)
 		}
 	}
-	if !ToolsRejected(&APIError{Status: 400, Message: "registry.ollama.ai/library/gemma:2b does not support tools"}) || ToolsRejected(&APIError{Status: 503, Message: "tools down"}) {
+	tools := &APIError{Status: 400, Message: "registry.ollama.ai/library/gemma:2b does not support tools"}
+	if !ToolsRejected(tools) || ToolsRejected(&APIError{Status: 503, Message: "tools down"}) {
 		t.Fatal("ToolsRejected")
+	}
+	if MediaRejected(tools) || MediaRejected(&APIError{Status: 400, Message: "This model's maximum context length is 8192 tokens"}) {
+		t.Fatal("a tools or context error must not be taken for a media rejection (the retry would drop the image)")
+	}
+	if !MediaRejected(&APIError{Status: 404, Message: "No endpoints found that support image input"}) {
+		t.Fatal("MediaRejected")
+	}
+}
+
+// The key is chosen for the server the call actually goes to.
+func TestKeyFollowsTheCallsServer(t *testing.T) {
+	c := &capture{}
+	srv := c.server(t)
+	var asked string
+	o := NewOpenRouter(DefaultURL, func(_ context.Context, base string) (string, error) {
+		asked = base
+		if IsOpenRouter(base) {
+			return "openrouter-key", nil
+		}
+		return "", nil
+	})
+	o.URL = func(context.Context) string { return srv.URL + "/v1" }
+	o.Chat(context.Background(), Request{Model: "m"})
+	if asked != srv.URL+"/v1" || c.auth != "" {
+		t.Fatalf("key looked up for %q, sent %q", asked, c.auth)
 	}
 }

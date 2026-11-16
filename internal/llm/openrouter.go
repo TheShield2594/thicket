@@ -21,12 +21,15 @@ import (
 type OpenRouter struct {
 	BaseURL string
 	// URL, if set, returns the base URL for each call (overrides BaseURL).
-	URL  func(ctx context.Context) string
-	Key  func(ctx context.Context) (string, error)
+	URL func(ctx context.Context) string
+	// Key returns the credential for base, the server this call goes to,
+	// so a concurrent change of server can't pair one server's address
+	// with another's key.
+	Key  func(ctx context.Context, base string) (string, error)
 	HTTP *http.Client
 }
 
-func NewOpenRouter(baseURL string, key func(ctx context.Context) (string, error)) *OpenRouter {
+func NewOpenRouter(baseURL string, key func(ctx context.Context, base string) (string, error)) *OpenRouter {
 	return &OpenRouter{BaseURL: strings.TrimRight(baseURL, "/"), Key: key, HTTP: &http.Client{}}
 }
 
@@ -76,7 +79,7 @@ type orResponse struct {
 func (o *OpenRouter) Chat(ctx context.Context, req Request) (*Response, error) {
 	base := o.base(ctx)
 	hosted := IsOpenRouter(base)
-	key, err := o.Key(ctx)
+	key, err := o.Key(ctx, base)
 	if hosted && (err != nil || key == "") {
 		return nil, ErrNoKey // local servers usually need no key
 	}

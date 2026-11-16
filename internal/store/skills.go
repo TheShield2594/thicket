@@ -51,7 +51,7 @@ func scanSkill(r interface{ Scan(...any) error }) (*Skill, error) {
 
 // Skills returns the current version of every skill, by id.
 func (s *Store) Skills(ctx context.Context) ([]Skill, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.version = s.version ORDER BY s.id")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.version = s.version WHERE s.deleted = 0 ORDER BY s.id")
 	if err != nil {
 		return nil, err
 	}
@@ -70,14 +70,14 @@ func (s *Store) Skills(ctx context.Context) ([]Skill, error) {
 // SkillByID returns a skill's current version, or version v if v > 0.
 func (s *Store) SkillByID(ctx context.Context, id string, v int) (*Skill, error) {
 	if v > 0 {
-		return scanSkill(s.db.QueryRowContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id WHERE s.id = ? AND v.version = ?", id, v))
+		return scanSkill(s.db.QueryRowContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id WHERE s.id = ? AND s.deleted = 0 AND v.version = ?", id, v))
 	}
-	return scanSkill(s.db.QueryRowContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.version = s.version WHERE s.id = ?", id))
+	return scanSkill(s.db.QueryRowContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.version = s.version WHERE s.id = ? AND s.deleted = 0", id))
 }
 
 // SkillHistory lists a skill's versions, newest first (bodies included).
 func (s *Store) SkillHistory(ctx context.Context, id string) ([]Skill, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id WHERE s.id = ? ORDER BY v.version DESC", id)
+	rows, err := s.db.QueryContext(ctx, "SELECT "+skillCols+" FROM skills s JOIN skill_versions v ON v.skill_id = s.id WHERE s.id = ? AND s.deleted = 0 ORDER BY v.version DESC", id)
 	if err != nil {
 		return nil, err
 	}
@@ -104,20 +104,26 @@ func (s *Store) SaveSkill(ctx context.Context, k Skill, base int) (int, error) {
 	defer tx.Rollback()
 	now := s.unix()
 	var cur int
-	err = tx.QueryRowContext(ctx, "SELECT version FROM skills WHERE id = ?", k.ID).Scan(&cur)
+	var deleted bool
+	err = tx.QueryRowContext(ctx, "SELECT version, deleted FROM skills WHERE id = ?", k.ID).Scan(&cur, &deleted)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows), err == nil && deleted:
 		if base != 0 {
+			// Gone, or deleted since it was read (maybe recreated later).
 			return 0, ErrNotFound
 		}
 		var n int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM skills").Scan(&n); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM skills WHERE deleted = 0").Scan(&n); err != nil {
 			return 0, err
 		}
 		if n >= MaxSkills {
 			return 0, fmt.Errorf("the skill library is full (%d skills): delete one first", MaxSkills)
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO skills (id, version, created_at, updated_at) VALUES (?, 0, ?, ?)", k.ID, now, now); err != nil {
+		if deleted { // recreated: numbering carries on from the old versions
+			if _, err := tx.ExecContext(ctx, "UPDATE skills SET deleted = 0 WHERE id = ?", k.ID); err != nil {
+				return 0, err
+			}
+		} else if _, err := tx.ExecContext(ctx, "INSERT INTO skills (id, version, created_at, updated_at) VALUES (?, 0, ?, ?)", k.ID, now, now); err != nil {
 			return 0, err
 		}
 	case err != nil:
@@ -148,8 +154,10 @@ func (s *Store) SaveSkill(ctx context.Context, k Skill, base int) (int, error) {
 	return next, tx.Commit()
 }
 
+// DeleteSkill removes a skill from the library. Its versions are kept, so
+// a skill recreated with the same id continues the numbering.
 func (s *Store) DeleteSkill(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM skills WHERE id = ?", id)
+	res, err := s.db.ExecContext(ctx, "UPDATE skills SET deleted = 1, updated_at = ? WHERE id = ? AND deleted = 0", s.unix(), id)
 	if err != nil {
 		return err
 	}

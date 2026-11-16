@@ -38,6 +38,9 @@ func Fetch(ctx context.Context, a Attachment, max int) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
+		if len(body) > max { // whatever the adapter did, the limit holds here
+			return nil, "", fmt.Errorf("too large (limit %s)", humanSize(max))
+		}
 		if ct == "" || strings.HasPrefix(ct, "application/octet-stream") {
 			ct = a.ContentType
 		}
