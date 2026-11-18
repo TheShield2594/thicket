@@ -596,15 +596,12 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		writeErr(w, http.StatusNotFound, "no such chat")
 		return
 	}
-	var body struct {
-		Text string `json:"text"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad request")
+	text, atts, err := readPost(w, r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text := strings.TrimSpace(body.Text)
-	if text == "" || len(text) > maxTextLen {
+	if (text == "" && len(atts) == 0) || len(text) > maxTextLen {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("messages must be 1 to %d characters", maxTextLen))
 		return
 	}
@@ -615,7 +612,7 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		writeErr(w, http.StatusServiceUnavailable, "Thicket is still starting up")
 		return
 	}
-	m, err := a.DB.AddWebMessage(r.Context(), u.ID, store.WebMessage{ChatID: chatID, Role: "user", Content: text})
+	m, err := a.DB.AddWebMessage(r.Context(), u.ID, store.WebMessage{ChatID: chatID, Role: "user", Content: withFileNames(text, atts)})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
@@ -626,7 +623,7 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		name = "you"
 	}
 	in := channel.Incoming{Channel: ChannelName, ChatID: chatID, MessageID: strconv.FormatInt(m.ID, 10),
-		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig}
+		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig, Attachments: atts}
 	go h(runCtx, in) // the turn outlives this request
 	writeJSON(w, http.StatusOK, map[string]any{"message": m})
 }

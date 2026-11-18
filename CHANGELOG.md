@@ -6,6 +6,12 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- Files and voice messages in the web app. A paperclip button (or drag
+  and drop) attaches up to 8 files, 30 MB in all; a microphone button
+  records a voice message and sends it when tapped again (up to 5
+  minutes). `POST /api/chats/{chat}/messages` also takes a multipart form
+  (`text` plus `file` parts). Files are held in memory for the reply and
+  never stored; the chat shows a line per file.
 - Routing. With the new `auto_route` setting on, a message that names no
   sprig goes to the one whose role fits it, picked by the cheap model from
   the sprigs' roles and the last few messages (`route` purpose). The

@@ -82,7 +82,9 @@ too. See [Running Thicket](docs/operations.md) for `doctor`, `costs`, the
 Thicket serves a web app on the same port as `/health` (8080). Each sprig
 has its own thread, there's an **Everyone** room where you address sprigs
 by name, and you can open up to three chats side by side (Shift-click a
-sprig, or use the split button on its row). The details panel shows what a
+sprig, or use the split button on its row). Attach files with the paperclip (or
+drop them on the message box), or tap the microphone to record a voice
+message: tap again to send it, and the sprig answers what you said. The details panel shows what a
 sprig remembers, its routines and how each last run went. It installs as
 an app on phones and desktops (Add to Home Screen / Install), works in
 light and dark, and can notify you when a sprig writes while it's in the
@@ -161,10 +163,10 @@ cookies (`Secure` over HTTPS).
   ([details](docs/characters.md#bringing-on-a-new-sprig)).
 - Every sprig has a drawn, animated avatar that shows what it's doing
   (idle, thinking, working, sleeping, stuck).
-- Send voice messages: they're transcribed (by the `transcribe_model`
+- Send voice messages (in Discord, Telegram or the web app): they're transcribed (by the `transcribe_model`
   setting, a model that hears audio) and the sprig answers what you said.
   Needs OpenRouter.
-- Send pictures, PDFs and text files. Sprigs look at images (the chat
+- Send pictures, PDFs and text files (from the web app too). Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
   logs. Images are seen for that reply only. A PDF's text (its first

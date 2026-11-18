@@ -79,6 +79,9 @@ const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2 2M15 8l2 2"/>',
   pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  clip: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
 };
 function icon(name, cls) {
@@ -92,7 +95,9 @@ function icon(name, cls) {
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || 'GET', credentials: 'same-origin', headers: { 'X-Thicket': '1' } };
-  if (opts.body !== undefined) {
+  if (opts.body instanceof FormData) {
+    init.body = opts.body; // the browser sets the multipart boundary
+  } else if (opts.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(opts.body);
   }
@@ -563,16 +568,20 @@ async function loadRoutines(id) {
 }
 
 let tempId = -1;
-async function send(chat, text) {
+// fileLine is how a sent file shows in the chat (the server stores the same).
+const fileLine = (f) => (f.type.startsWith('audio/') ? '🎤 ' : '📎 ') + f.name;
+
+async function send(chat, text, files = []) {
   text = text.trim();
-  if (!text) return;
+  if (!text && !files.length) return;
   const c = S.chats.get(chat);
-  const m = { id: tempId--, chat, role: 'user', content: text, at: new Date().toISOString(), pending: true };
+  const content = [text, ...files.map(fileLine)].filter(Boolean).join('\n');
+  const m = { id: tempId--, chat, role: 'user', content, text, files, at: new Date().toISOString(), pending: true };
   c.messages.push(m);
   renderFeed(chat, m.id, true);
   const session = S.session;
   try {
-    const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages`, { method: 'POST', body: { text } });
+    const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages`, { method: 'POST', body: files.length ? formOf(text, files) : { text } });
     if (session !== S.session) return; // signed out meanwhile
     const i = c.messages.indexOf(m);
     const dup = c.messages.some((x) => x.id === res.message.id);
@@ -584,6 +593,13 @@ async function send(chat, text) {
     m.pending = false; m.failed = e.message || 'Not sent';
   }
   renderFeed(chat);
+}
+
+function formOf(text, files) {
+  const fd = new FormData();
+  fd.append('text', text);
+  for (const f of files) fd.append('file', f, f.name);
+  return fd;
 }
 
 // ---------- layout actions ----------
@@ -953,7 +969,7 @@ function messageEl(m, cont, animate) {
     h('button.msg-act', { title: 'Delete: remove it here and from what sprigs remember of this conversation', 'aria-label': 'Delete message', onclick: () => deleteMessage(m) }, icon('trash')));
   const pinMark = m.pinned && h('span.pin-mark', { title: 'Pinned for this conversation' }, icon('pin'));
   if (m.role === 'user') {
-    const retry = m.failed && h('button', { class: 'stamp', style: { opacity: 1, color: 'var(--err)' }, onclick: () => { const c = S.chats.get(m.chat); c.messages = c.messages.filter((x) => x !== m); send(m.chat, m.content); } }, `Not sent (${m.failed}). Tap to retry`);
+    const retry = m.failed && h('button', { class: 'stamp', style: { opacity: 1, color: 'var(--err)' }, onclick: () => { const c = S.chats.get(m.chat); c.messages = c.messages.filter((x) => x !== m); send(m.chat, m.text ?? m.content, m.files || []); } }, `Not sent (${m.failed}). Tap to retry`);
     return h('div.msg.user' + (cont ? '.cont' : '') + (m.pending ? '.pending' : '') + (m.failed ? '.failed' : '') + (m.pinned ? '.pinned' : ''), {},
       h('div.stack', {}, h('div.bubble', { html: md(m.content) }), retry || h('span.stamp', {}, actions, pinMark, m.pending ? 'Sending…' : clock(m.at))));
   }
@@ -1008,18 +1024,34 @@ function composer(chat, opts = {}) {
     enterkeyhint: 'send',
   });
   ta.value = S.drafts.get(chat) || '';
+  let files = [];
   const btn = h('button.send', { type: 'submit', 'aria-label': 'Send', disabled: !ta.value.trim() }, icon('send'));
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; btn.disabled = !ta.value.trim(); };
+  const tray = h('div.tray');
+  const showFiles = () => {
+    tray.replaceChildren(...files.map((f) => h('span.chip.file', {}, fileLine(f),
+      h('button', { type: 'button', 'aria-label': 'Remove ' + f.name, onclick: () => { files = files.filter((x) => x !== f); showFiles(); grow(); } }, icon('x')))));
+  };
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; btn.disabled = !ta.value.trim() && !files.length; };
   ta.addEventListener('input', () => { S.drafts.set(chat, ta.value); grow(); });
   const submit = async () => {
     const text = ta.value;
-    if (!text.trim()) return;
-    ta.value = ''; S.drafts.delete(chat); grow();
+    const sending = files;
+    if (!text.trim() && !sending.length) return;
+    ta.value = ''; S.drafts.delete(chat); files = []; showFiles(); grow();
     if (opts.home) {
       await openChat(chat);
     }
-    send(chat, text);
+    send(chat, text, sending);
   };
+  const addFiles = (list) => {
+    const room = MAX_FILES - files.length;
+    const add = [...list].slice(0, Math.max(room, 0));
+    if (list.length > add.length) toast(`Up to ${MAX_FILES} files per message`);
+    files = files.concat(add); showFiles(); grow(); ta.focus();
+  };
+  const picker = h('input', { type: 'file', multiple: true, hidden: true, accept: 'image/*,audio/*,.pdf,.txt,.md,.csv,.json,.log', onchange: () => { addFiles(picker.files); picker.value = ''; } });
+  const attach = h('button.tool', { type: 'button', 'aria-label': 'Attach files', title: 'Attach files', onclick: () => picker.click() }, icon('clip'));
+  const mic = canRecord() && recorder(() => ta, (f) => { files = files.concat(f); submit(); });
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !MOBILE.matches) { e.preventDefault(); submit(); }
   });
@@ -1042,8 +1074,63 @@ function composer(chat, opts = {}) {
     h('div.composer-inner', {},
       h('div.approval-slot'),
       pick,
-      h('div.box', {}, ta, btn),
+      tray,
+      h('div.box', { ondragover: (e) => e.preventDefault(), ondrop: (e) => { e.preventDefault(); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); } },
+        picker, attach, ta, mic, btn),
       h('div.hint', {}, 'Enter to send · Shift+Enter for a new line')));
+}
+
+const MAX_FILES = 8;
+const MAX_RECORDING_MS = 5 * 60 * 1000;
+
+function canRecord() {
+  return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+}
+
+// recorder is the voice message button: tap to record, tap again to send.
+// The recording goes up as a file and the server has it transcribed.
+function recorder(textarea, done) {
+  let rec = null, chunks = [], timer = 0, started = 0;
+  const btn = h('button.tool', { type: 'button', 'aria-label': 'Record a voice message', title: 'Record a voice message' }, icon('mic'));
+  const reset = () => {
+    clearInterval(timer);
+    btn.classList.remove('recording');
+    btn.replaceChildren(icon('mic'));
+    btn.setAttribute('aria-label', 'Record a voice message');
+    const ta = textarea(); ta.placeholder = ta.dataset.placeholder || ta.placeholder;
+  };
+  btn.addEventListener('click', async () => {
+    if (rec) { rec.stop(); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return toast('Microphone not available. Check the browser’s permission for this site.'); }
+    const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
+    try { rec = new MediaRecorder(stream, type ? { mimeType: type } : {}); }
+    catch { stream.getTracks().forEach((t) => t.stop()); return toast('This browser can’t record audio.'); }
+    chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const mime = (rec.mimeType || type || 'audio/webm').split(';')[0];
+      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+      const long = Date.now() - started > 700;
+      rec = null; reset();
+      if (long && chunks.length) done(new File(chunks, `voice message.${ext}`, { type: mime }));
+    };
+    rec.start();
+    started = Date.now();
+    btn.classList.add('recording');
+    btn.replaceChildren(icon('stop'));
+    btn.setAttribute('aria-label', 'Stop and send the voice message');
+    const ta = textarea(); ta.dataset.placeholder = ta.placeholder;
+    const tick = () => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      ta.placeholder = `Recording… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}. Tap stop to send`;
+      if (Date.now() - started > MAX_RECORDING_MS) rec?.stop();
+    };
+    tick(); timer = setInterval(tick, 500);
+  });
+  return btn;
 }
 
 // ---------- details ----------
