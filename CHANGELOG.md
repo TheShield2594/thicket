@@ -6,6 +6,13 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- Voice messages. A voice note sent in Discord or Telegram (or any audio
+  file: ogg, mp3, wav, m4a, webm, flac, aac) is transcribed and the words
+  go into the message, so the sprig answers what was said. Up to 2 per
+  message, 10 MB each. New `transcribe_model` setting (default
+  `google/gemini-3.8-flash`, which hears audio); transcription is billed
+  under the `transcribe` purpose. Needs OpenRouter: with a local model
+  server the sprig is told the message wasn't transcribed.
 - Pin and delete messages. Reply "pin this" (or say "pin that") to keep a
   message in every reply's context for the rest of the conversation, even
   after compaction; "what's pinned?", "unpin this", "unpin all". Reply

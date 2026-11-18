@@ -35,6 +35,7 @@ var Known = []Key{
 	{"web_search", "how sprigs with the web scope search: auto, openrouter (OpenRouter's web search, about $0.02 a search), searxng (your own SearXNG at search_url), or off", "choice"},
 	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
 	{"document_chars", "how much of a PDF's text is kept for follow-up questions, in characters (0 = none, at most 100000); it's re-sent with every later reply in the conversation", "int"},
+	{"transcribe_model", "model that transcribes voice messages; it must accept audio (OpenRouter model id)", "string"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
 }
 
@@ -78,6 +79,7 @@ func (s *Settings) defaults() map[string]string {
 		"consistency_check":  "true",
 		"checkin_days":       "3",
 		"pdf_engine":         "auto",
+		"transcribe_model":   config.DefaultFallbackModel,
 		"web_search":         "auto",
 		"search_url":         s.cfg.SearchURL,
 		"history_tokens":     "0",

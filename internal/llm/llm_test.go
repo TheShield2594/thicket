@@ -36,6 +36,14 @@ func TestMessageJSON(t *testing.T) {
 	if string(b) != want {
 		t.Fatalf("file:\n got %s\nwant %s", b, want)
 	}
+	b, err = json.Marshal(Message{Role: "user", Content: "transcribe", Audio: []Audio{{Data: "T2dnUw==", Format: "ogg"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"role":"user","content":[{"type":"text","text":"transcribe"},{"type":"input_audio","input_audio":{"data":"T2dnUw==","format":"ogg"}}]}`
+	if string(b) != want {
+		t.Fatalf("audio:\n got %s\nwant %s", b, want)
+	}
 	// Annotations round-trip from a response back into the next request.
 	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"","annotations":[{"type":"file","file":{"hash":"h"}}]}`), &m); err != nil {
 		t.Fatal(err)

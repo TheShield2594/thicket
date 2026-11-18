@@ -155,6 +155,9 @@ cookies (`Secure` over HTTPS).
   ([details](docs/characters.md#bringing-on-a-new-sprig)).
 - Every sprig has a drawn, animated avatar that shows what it's doing
   (idle, thinking, working, sleeping, stuck).
+- Send voice messages: they're transcribed (by the `transcribe_model`
+  setting, a model that hears audio) and the sprig answers what you said.
+  Needs OpenRouter.
 - Send pictures, PDFs and text files. Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
@@ -244,6 +247,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
+| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
 | `document_chars` *chat only* | `20000` | how much of a PDF's text is kept for follow-up questions (0 = none); it's re-sent with every later reply |
