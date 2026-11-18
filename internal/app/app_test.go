@@ -186,6 +186,20 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	if pdfText == "" {
 		pdfText = "Quarterly revenue rose 12%."
 	}
+	if strings.HasPrefix(req.Messages[0].Content, "You pick which character") {
+		in := req.Messages[1].Content
+		newest := in[strings.Index(in, "Newest message from the user:"):]
+		cur := strings.TrimSpace(strings.SplitN(strings.SplitN(in, "Currently talking: ", 2)[1], "\n", 2)[0])
+		switch {
+		case strings.Contains(newest, "router down"):
+			return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
+		case strings.Contains(newest, "calendar"):
+			return text("```json\n{\"sprig\": \"pip\"}\n```"), nil
+		case strings.Contains(newest, "garden"):
+			return text(`{"sprig": "fern"}`), nil
+		}
+		return text(`{"sprig": "` + cur + `"}`), nil
+	}
 	if strings.HasPrefix(req.Messages[0].Content, "You transcribe audio") {
 		a := req.Messages[1].Audio
 		if len(a) != 1 || a[0].Data == "" || a[0].Format == "" {

@@ -6,6 +6,12 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- Routing. With the new `auto_route` setting on, a message that names no
+  sprig goes to the one whose role fits it, picked by the cheap model from
+  the sprigs' roles and the last few messages (`route` purpose). The
+  current sprig keeps the conversation when the model is unsure, fails or
+  names a sprig the person can't use; naming a sprig or writing in its own
+  web thread skips routing. Off by default.
 - Voice messages. A voice note sent in Discord or Telegram (or any audio
   file: ogg, mp3, wav, m4a, webm, flac, aac) is transcribed and the words
   go into the message, so the sprig answers what was said. Up to 2 per

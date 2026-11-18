@@ -138,6 +138,12 @@ cookies (`Secure` over HTTPS).
 
 - In DMs, just talk. The sprig you spoke to last keeps the conversation.
 - Address someone by name to switch: `Pip, what's on tomorrow?`
+- Or let Thicket pick: ask Juni to turn on `auto_route` and a message
+  that names nobody goes to the sprig whose role fits it ("what's on
+  tomorrow?" reaches Pip). The sprig already talking keeps the
+  conversation unless the message is plainly for someone else, and any
+  doubt or failure leaves it where it was. It costs one small model call
+  per un-named message.
 - Sprigs work together: one can ask another a question mid-reply ("let me
   check with Pip"), hand you over, or give one a longer task to do in the
   background while you keep chatting; that sprig messages you when it's
@@ -248,6 +254,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
 | `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
+| `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
 | `document_chars` *chat only* | `20000` | how much of a PDF's text is kept for follow-up questions (0 = none); it's re-sent with every later reply |

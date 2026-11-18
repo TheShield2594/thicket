@@ -261,21 +261,28 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	in.Text = strings.TrimSpace(typed)
 
 	char := host
+	chosen := true // the user picked the sprig: by name, or by its thread
 	if addressed != nil {
 		char = addressed
 	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user.ID) {
 		char = c // a per-sprig web thread
-	} else if id, ok := e.active.Load(in.ChatRef()); ok {
-		if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user.ID) {
-			char = c
+	} else {
+		chosen = false
+		if id, ok := e.active.Load(in.ChatRef()); ok {
+			if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user.ID) {
+				char = c
+			}
 		}
 	}
-	e.active.Store(in.ChatRef(), char.ID)
 
 	conv, err := e.DB.OpenConversation(ctx, user.ID, in.ChatRef(), e.Cfg.IdleAfter)
 	if err != nil {
 		return err
 	}
+	if !chosen && e.Settings.Bool(ctx, "auto_route") {
+		char = e.route(ctx, user, conv, char, in.Text)
+	}
+	e.active.Store(in.ChatRef(), char.ID)
 	msgID, err := e.DB.AddMessageID(ctx, conv.ID, "user", "", in.Text)
 	if err != nil {
 		return err
