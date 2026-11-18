@@ -45,6 +45,12 @@ type Config struct {
 	ModelURL    string
 	ModelAPIKey string // optional key for a self-hosted server
 	SearchURL   string // a SearXNG instance for web search (optional)
+	// SandboxURL is the thicket-sandbox container's MCP address; when set,
+	// Thicket connects it as the "sandbox" integration (sprigs' computer).
+	SandboxURL string
+	// SandboxTokenFile is where the token shared with the sandbox lives (a
+	// small volume both containers mount).
+	SandboxTokenFile string
 	// WebProxy sends fetch_page through HTTPS_PROXY/HTTP_PROXY (see
 	// docs/web.md for the trade-off).
 	WebProxy bool
@@ -85,6 +91,8 @@ func Load() (*Config, error) {
 		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
 		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
 		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
+		SandboxURL:            strings.TrimRight(env("THICKET_SANDBOX_URL", ""), "/"),
+		SandboxTokenFile:      env("THICKET_SANDBOX_TOKEN_FILE", ""),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),

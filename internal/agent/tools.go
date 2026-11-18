@@ -346,7 +346,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/*. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,

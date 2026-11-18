@@ -7,7 +7,8 @@ little initiative, and stay true to who they are.
 Talk to them in Discord, in the built-in web app, or both. The web app
 installs on your phone and desktop and shows every sprig at once.
 
-Thicket is one Go binary and one SQLite file. No vector database, no
+Thicket is one Go binary and one SQLite file, plus an optional sandbox
+container that sprigs use as their computer. No vector database, no
 bundled browser, no plugin marketplace. You set it up by talking to Juni,
 the first sprig.
 
@@ -189,6 +190,10 @@ cookies (`Secure` over HTTPS).
   your sprigs with live avatars, the "needs you" inbox (approve or deny
   there), the trail of what they did, and costs. See
   [Dashboard](docs/dashboard.md).
+- Give a sprig a computer: the bundled sandbox container is a small
+  Linux machine where sprigs run commands and keep files ("clone this
+  repo and run its tests"). It can't see Thicket's data, and commands ask
+  for your OK unless you say otherwise. See [The sandbox](docs/sandbox.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -249,6 +254,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
 | `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
+| `THICKET_SANDBOX_URL` | `http://sandbox:7070` in compose | the sandbox container ([details](docs/sandbox.md)); empty turns it off |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
 | `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
@@ -305,6 +311,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 
 - [Character file reference](docs/characters.md)
 - [Integrations (MCP) setup](docs/mcp.md)
+- [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)

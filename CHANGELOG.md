@@ -6,6 +6,17 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- A computer for sprigs. The new `thicket-sandbox` container (Debian
+  with git, curl, python3 and friends, a persistent `/workspace`, no
+  access to Thicket's data, not published on a port) runs an MCP server
+  with `run_command`, `read_file`, `write_file` and `list_files`. With
+  `THICKET_SANDBOX_URL` set (compose sets it), Thicket shares a random
+  token through the `sandbox-auth` volume and connects it as the
+  `sandbox` integration. Nobody can use it until granted
+  `mcp:sandbox/*`; commands and writes ask for approval by default.
+  Commands time out (60 s, up to 10 min), output is capped, and leftover
+  processes are killed. CI builds and publishes
+  `ghcr.io/theshield2594/thicket-sandbox`.
 - OAuth sign-in for integrations. Hosted MCP servers that need you to sign
   in (Notion, Linear, Sentry, Atlassian and others) can be connected:
   `add_integration` takes `auth: "oauth"`, Thicket finds the server's

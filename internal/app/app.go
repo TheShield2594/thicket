@@ -443,9 +443,13 @@ func (a *App) Run(parent context.Context) error {
 			}
 		})
 	}
+	a.ensureSandbox(ctx)
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {
+			if name == sandboxName && a.retrySandbox(ctx) == nil {
+				continue // it was still starting
+			}
 			a.startErr(fmt.Sprintf("The %s integration didn't connect: %s", name, shortErr(err)))
 		}
 	})
