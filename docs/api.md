@@ -53,7 +53,9 @@ All endpoints take `Authorization: Bearer thk_api_…` and speak JSON.
 {"text": "what did the CI say?", "sprig": "pip", "conversation": "ci"}
 ```
 
-`sprig` (id or name) and `conversation` are optional. Without `sprig`,
+`sprig` (id or name) and `conversation` are optional. `"no_approvals":
+true` marks the message as coming from an agent acting for you: it can't
+answer an approval prompt (the [MCP server](mcp-server.md) always sets it). Without `sprig`,
 whoever you spoke to last in that conversation answers, as in chat.
 Conversations (up to 40 lowercase letters, digits, `-` or `_`; default
 `default`) are separate threads, per token, kept apart from your chat

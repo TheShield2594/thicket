@@ -38,6 +38,10 @@ type Incoming struct {
 	// Attachments are files sent with the message. Text holds only what
 	// the user typed; the engine decides what to download.
 	Attachments []Attachment
+	// NoApprovals: this message comes from an agent acting for the user
+	// (the MCP server), so it can't answer an approval prompt. The person
+	// answers on the dashboard or in a chat app instead.
+	NoApprovals bool
 	// ReplyTo is the platform id of the message this one replies to, if
 	// any ("forget this", "pin this" in reply to a message).
 	ReplyTo string

@@ -6,6 +6,13 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- MCP server. `thicket mcp` serves the Model Context Protocol on stdio,
+  so Claude Desktop, Claude Code, Cursor and other agents can talk to
+  sprigs (`ask_sprig`, `list_sprigs`, `list_jobs`, `run_job`, `stop`)
+  through the local API with an API token. An agent can never answer an
+  approval prompt: the API's new `no_approvals` field, which the MCP
+  server always sets, makes Thicket refuse and point the person to the
+  dashboard or their chat app.
 - Files and voice messages in the web app. A paperclip button (or drag
   and drop) attaches up to 8 files, 30 MB in all; a microphone button
   records a voice message and sends it when tapped again (up to 5

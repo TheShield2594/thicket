@@ -173,6 +173,9 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 		Text         string `json:"text"`
 		Sprig        string `json:"sprig"`
 		Conversation string `json:"conversation"`
+		// NoApprovals stops this message from answering an approval
+		// prompt (the MCP server always sets it).
+		NoApprovals bool `json:"no_approvals"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxMessage*4)).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "body must be JSON: {\"text\": \"…\"}")
@@ -232,6 +235,7 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	err := a.Engine.Handle(ctx, channel.Incoming{
 		Channel: "api", ChatID: chatID, MessageID: "api-" + strconv.FormatInt(a.seq.Add(1), 10),
 		UserID: strconv.FormatInt(c.user.ID, 10), UserName: c.user.Name, Text: text, IsDM: true, UserRef: c.user.ID,
+		NoApprovals: req.NoApprovals,
 	})
 	a.mu.Lock()
 	out := append([]Reply{}, replies...)

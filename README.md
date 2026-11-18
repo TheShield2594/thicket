@@ -198,6 +198,10 @@ cookies (`Secure` over HTTPS).
 - Script it: `thicket ask --sprig pip "what's on tomorrow?"` prints the
   reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API
   with tokens from `thicket api-token create`. See [Local API](docs/api.md).
+- Let your other AI tools in: `thicket mcp` is an MCP server, so Claude
+  Desktop, Claude Code or Cursor can ask your sprigs things and run jobs.
+  They can't approve risky actions: that stays with you. See
+  [Thicket as an MCP server](docs/mcp-server.md).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**. Each sprig's access to
   each tool can be set to `read`, `draft` (write it up, don't do it), `ask`
@@ -301,6 +305,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
+- [Thicket as an MCP server](docs/mcp-server.md)
 - [Skills](docs/skills.md)
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
