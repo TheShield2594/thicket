@@ -90,6 +90,13 @@ func (f *fakeChannel) take() []sent {
 	return out
 }
 
+// peek returns what was sent without clearing it.
+func (f *fakeChannel) peek() []sent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sent(nil), f.sent...)
+}
+
 // fakeModel answers based on who is speaking and what was asked.
 type fakeModel struct {
 	mu     sync.Mutex
@@ -339,6 +346,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "tools": []string{"schedule"},
 			"routines": []map[string]string{{"name": "Sunday reading nudge", "schedule": "0 10 * * 0", "task": "Suggest what to read next."}},
 			"look":     map[string]string{"body": "tall", "accessory": "book", "expression": "curious"}}), nil
+	case strings.HasPrefix(u, "connect notes at "):
+		return toolCall("add_integration", map[string]any{"name": "notes", "transport": "http", "target": strings.TrimPrefix(lastUserText(req.Messages), "connect notes at "), "auth": "oauth"}), nil
+	case strings.Contains(u, "just signed in to notes"):
+		return text("You're in! Who should get the notes tools?"), nil
 	case strings.Contains(u, "create wren"):
 		return toolCall("create_character", map[string]any{"id": "wren"}), nil
 	case strings.Contains(u, "schedule a reminder"):

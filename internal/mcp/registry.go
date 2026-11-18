@@ -100,6 +100,8 @@ type Registry struct {
 	DB      *store.Store
 	Secrets Expander
 	Log     *slog.Logger
+	// OAuth supplies tokens for servers signed in with OAuth.
+	OAuth *OAuth
 	// RetryBackoff is the first wait before retrying a read-only call
 	// (doubles each time); 0 means 500ms.
 	RetryBackoff time.Duration
@@ -129,14 +131,23 @@ func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error)
 		return DialStdio(ctx, s.Target, s.Args, env)
 	case "http":
 		hdr := map[string]string{}
+		var token TokenFunc
 		for k, v := range s.Headers {
+			if v == OAuthHeader {
+				if r.OAuth == nil {
+					return nil, errors.New("OAuth isn't available")
+				}
+				name := s.Name
+				token = func(ctx context.Context, force bool) (string, error) { return r.OAuth.AccessToken(ctx, name, force) }
+				continue
+			}
 			x, err := r.Secrets.Expand(ctx, v)
 			if err != nil {
 				return nil, err
 			}
 			hdr[k] = x
 		}
-		return DialHTTP(ctx, s.Target, hdr)
+		return dialHTTP(ctx, s.Target, hdr, token)
 	}
 	return nil, fmt.Errorf("unknown transport %q", s.Transport)
 }

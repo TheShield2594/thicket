@@ -59,6 +59,7 @@ type App struct {
 	Chars     *character.Registry
 	Guard     *budget.Guard
 	MCP       *mcp.Registry
+	OAuth     *mcp.OAuth
 	Engine    *agent.Engine
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
@@ -189,7 +190,10 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.Budget = a.Guard
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
+	a.OAuth = &mcp.OAuth{Secrets: sec, RedirectURL: cfg.WebBaseURL() + "/oauth/callback"}
+	a.MCP.OAuth = a.OAuth
 	a.Engine.MCP = a.MCP
+	a.Engine.OAuth = a.OAuth
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
@@ -226,7 +230,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
 			Hooks: a.Webhook, MaxHookBody: agent.MaxWebhookPayload,
 			API: a.API.Handler(), Dashboard: a.Dashboard.Handler(), App: a.Web.Handler(),
-			Avatar: a.Avatar,
+			Avatar: a.Avatar, OAuthCallback: http.HandlerFunc(a.oauthCallback),
 		})
 	}
 	return a, nil

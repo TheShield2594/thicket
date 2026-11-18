@@ -6,6 +6,15 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- OAuth sign-in for integrations. Hosted MCP servers that need you to sign
+  in (Notion, Linear, Sentry, Atlassian and others) can be connected:
+  `add_integration` takes `auth: "oauth"`, Thicket finds the server's
+  authorization server from its metadata, registers itself, and posts a
+  PKCE sign-in link (written by Thicket, never the model). The browser
+  returns to the new `GET /oauth/callback`, the tokens go into the
+  encrypted store as `oauth_<name>`, and they're refreshed on expiry and
+  after a 401. Servers without automatic registration take a client id
+  and secret. Removing the integration deletes the tokens.
 - MCP server. `thicket mcp` serves the Model Context Protocol on stdio,
   so Claude Desktop, Claude Code, Cursor and other agents can talk to
   sprigs (`ask_sprig`, `list_sprigs`, `list_jobs`, `run_job`, `stop`)

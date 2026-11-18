@@ -37,6 +37,8 @@ type Routes struct {
 	API         http.Handler // /api/v1/ (the web app owns the rest of /api/)
 	Dashboard   http.Handler // /dashboard
 	App         http.Handler // the web app, at "/"
+	// OAuthCallback finishes an integration's sign-in (GET /oauth/callback).
+	OAuthCallback http.Handler
 	// Avatar draws a sprig's SVG avatar in a state ("" = its live state);
 	// false if there's no such sprig.
 	Avatar func(ctx context.Context, id, state string) (string, bool)
@@ -46,6 +48,9 @@ func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Ser
 	mux := http.NewServeMux()
 	if rt.API != nil {
 		mux.Handle("/api/v1/", rt.API)
+	}
+	if rt.OAuthCallback != nil {
+		mux.Handle("GET /oauth/callback", rt.OAuthCallback)
 	}
 	if rt.Dashboard != nil {
 		mux.Handle("/dashboard", rt.Dashboard)

@@ -46,8 +46,10 @@ type Engine struct {
 	Settings *settings.Settings
 	Secrets  *secrets.Store
 	MCP      *mcp.Registry
-	Budget   *budget.Guard
-	Log      *slog.Logger
+	// OAuth signs in to integrations that use OAuth.
+	OAuth  *mcp.OAuth
+	Budget *budget.Guard
+	Log    *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only

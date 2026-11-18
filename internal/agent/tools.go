@@ -388,13 +388,16 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRequestSecret,
 		},
 		{
-			Name:        "add_integration",
-			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. After connecting, grant sprigs access with grant_tools.",
-			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}}},"required":["name","transport","target"]}`,
-			Scope:       "admin",
-			AdminOnly:   true,
-			ChatOnly:    true,
-			Run:         e.toolAddIntegration,
+			Name: "add_integration",
+			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
+				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
+				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
+			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
+				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
+			Scope:     "admin",
+			AdminOnly: true,
+			ChatOnly:  true,
+			Run:       e.toolAddIntegration,
 		},
 		{
 			Name:        "list_integrations",
@@ -1080,12 +1083,21 @@ func (e *Engine) toolRequestSecret(ctx context.Context, t *turn, args json.RawMe
 }
 
 func (e *Engine) toolAddIntegration(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-	a, err := decode[store.MCPServer](args)
+	in, err := decode[struct {
+		store.MCPServer
+		Auth         string `json:"auth"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}](args)
 	if err != nil {
 		return "", err
 	}
+	a := in.MCPServer
 	if !secrets.ValidName(a.Name) || strings.Contains(a.Name, "__") {
 		return "", errors.New("integration names are lowercase letters, digits and single underscores")
+	}
+	if in.Auth == "oauth" {
+		return e.addOAuthIntegration(ctx, t, a, in.ClientID, in.ClientSecret)
 	}
 	for k, v := range a.Headers {
 		if secrets.LooksLikeSecret(v) {
@@ -1162,6 +1174,9 @@ func (e *Engine) toolRemoveIntegration(ctx context.Context, t *turn, args json.R
 	e.MCP.Disconnect(a.Name)
 	if err := e.DB.DeleteMCPServer(ctx, a.Name); err != nil {
 		return "", err
+	}
+	if e.OAuth != nil {
+		_ = e.OAuth.Forget(ctx, a.Name)
 	}
 	e.logActivity(ctx, "info", "tool", t.char.ID, t.user.ID, "integration "+a.Name+" removed", "")
 	return "Removed " + a.Name + ". Character files still list its scope; that's harmless.", nil

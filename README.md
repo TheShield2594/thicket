@@ -202,6 +202,10 @@ cookies (`Secure` over HTTPS).
   Desktop, Claude Code or Cursor can ask your sprigs things and run jobs.
   They can't approve risky actions: that stays with you. See
   [Thicket as an MCP server](docs/mcp-server.md).
+- Connect services you sign in to: "Connect Notion at
+  https://mcp.notion.com/mcp" gets you a sign-in link, and the tokens are
+  stored encrypted and refreshed for you. See
+  [Integrations](docs/mcp.md#services-you-sign-in-to-oauth).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**. Each sprig's access to
   each tool can be set to `read`, `draft` (write it up, don't do it), `ask`
@@ -258,7 +262,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
 | `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
-| `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
+| `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
 | `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
 | `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
