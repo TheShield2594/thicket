@@ -55,9 +55,10 @@ jobs:
             http://127.0.0.1:7070/mcp | grep -q 42
           docker rm -f sb
 
-  # Publish the image docker-compose.yml points at, only on pushes to main
-  # (never from pull requests) and only after tests pass. Uses the repo's
-  # own GITHUB_TOKEN.
+  # Publish what's on main as the `edge` tag (plus the commit), only on
+  # pushes to main (never from pull requests) and only after tests pass.
+  # `latest` and version tags come from the release workflow, on a vX.Y.Z
+  # tag. Uses the repo's own GITHUB_TOKEN.
   publish:
     if: github.event_name == 'push'
     needs: [test, docker]
@@ -67,14 +68,19 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # Only the sandbox image's apt step runs emulated; the Go builds
+      # cross-compile.
+      - uses: docker/setup-qemu-action@v3
+        with: { platforms: arm64 }
+      - uses: docker/setup-buildx-action@v3
       - name: log in to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: build and push
         run: |
           IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          docker build --build-arg VERSION=${{ github.sha }} -t "$IMAGE:latest" -t "$IMAGE:${{ github.sha }}" .
-          docker push "$IMAGE:latest"
-          docker push "$IMAGE:${{ github.sha }}"
-          docker build -f sandbox/Dockerfile -t "$IMAGE-sandbox:latest" -t "$IMAGE-sandbox:${{ github.sha }}" .
-          docker push "$IMAGE-sandbox:latest"
-          docker push "$IMAGE-sandbox:${{ github.sha }}"
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            --build-arg VERSION=edge-${{ github.sha }} \
+            -t "$IMAGE:edge" -t "$IMAGE:${{ github.sha }}" .
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -f sandbox/Dockerfile \
+            -t "$IMAGE-sandbox:edge" -t "$IMAGE-sandbox:${{ github.sha }}" .

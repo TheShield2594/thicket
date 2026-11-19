@@ -150,7 +150,7 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, username, hash stri
 	if uid == 0 {
 		ext, _ := NewToken()
 		dbr, kid := dbRole(inv.Role)
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at) VALUES ('web', ?, ?, ?, ?, ?)",
+		res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at, timezone) VALUES ('web', ?, ?, ?, ?, ?, "+householdTimezone+")",
 			"w-"+ext[:16], inv.Name, dbr, kid, now)
 		if err != nil {
 			return nil, err

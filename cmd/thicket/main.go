@@ -36,11 +36,19 @@ const usage = `thicket: a small, self-hosted family of AI companions.
 
 Usage:
   thicket [serve]                     run Thicket (default)
+  thicket init [--from-env] [--no-verify]
+                                      first-run setup: asks for the model, chat tokens, timezone,
+                                      spend caps and owner, checks each, and stores keys encrypted
+                                      (run it again to change something; --from-env doesn't ask)
   thicket check                       first-run check: say exactly what's missing
   thicket healthcheck                 exit 0 if the running server is healthy (for Docker)
-  thicket export [-o FILE] [--include-key]
-                                      export the database and character files
-  thicket restore FILE [--force]      restore an export into the data directory
+  thicket backup [-o FILE] [--include-key]
+                                      back up everything: the database (safe while Thicket runs)
+                                      and every sprig's files ("export" is the old name)
+  thicket restore FILE [--force]      restore a backup into the data directory (stop Thicket first)
+  thicket settings [list]             every setting and its current value
+  thicket settings set NAME [VALUE]   change one (no VALUE: back to the default), e.g.
+                                      backup_dir /backups, backup_schedule "0 3 * * *", backup_keep 14
   thicket character list              list character files and any problems
   thicket character export ID [-o FILE]
   thicket character import FILE|FOLDER [--from FORMAT] [--memories] [--yes]
@@ -69,6 +77,12 @@ Usage:
   thicket secrets delete NAME         remove a stored secret
   thicket secrets rotate-key [--out FILE]
                                       re-encrypt every stored secret under a new master key
+  thicket update [--yes] [--to VERSION] [--force]
+                                      move the data to this version: shows what changed, backs up,
+                                      migrates and checks; if the check fails, puts everything back.
+                                      Run it from the new version with Thicket stopped
+                                      (docker compose run --rm thicket update)
+  thicket update history              past updates and how each went
   thicket migrate                     apply pending database migrations (startup does this too) and list them
   thicket doctor                      check everything: database, secrets, model server, chat tokens,
                                       each MCP server, and the running server's live connections
@@ -89,6 +103,7 @@ Usage:
   thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
   thicket mcp                         an MCP server on stdin/stdout, so Claude Desktop, Cursor and
                                       other agents can talk to your sprigs (needs THICKET_API_TOKEN)
+  thicket changelog [VERSION]         what changed in this build, or in one released version
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -104,12 +119,16 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve()
+	case "init", "setup":
+		err = initCmd(args, os.Stdin, os.Stdout)
 	case "check":
 		err = check()
 	case "healthcheck":
 		err = healthcheck()
-	case "export":
+	case "backup", "export":
 		err = export(args)
+	case "settings", "setting":
+		err = settingsCmd(args, os.Stdout)
 	case "restore":
 		err = restore(args)
 	case "character", "characters":
@@ -124,6 +143,8 @@ func main() {
 		err = userCmd(args, os.Stdin, os.Stdout)
 	case "secrets", "secret":
 		err = secretsCmd(args, os.Stdin, os.Stdout)
+	case "update", "upgrade":
+		err = updateCmd(args, os.Stdin, os.Stdout)
 	case "migrate":
 		err = migrateCmd(os.Stdout)
 	case "costs", "cost":
@@ -146,6 +167,8 @@ func main() {
 		err = stopCmd(args)
 	case "mcp":
 		err = mcpCmd()
+	case "changelog":
+		err = changelogCmd(args, os.Stdout)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":
@@ -269,15 +292,15 @@ func openStore(cfg *config.Config) (*store.Store, error) {
 }
 
 func export(args []string) error {
-	fs := flag.NewFlagSet("export", flag.ContinueOnError)
-	out := fs.String("o", "", "output file (default thicket-export-DATE.tar.gz)")
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	out := fs.String("o", "", "output file (default thicket-backup-DATE.tar.gz)")
 	withKey := fs.Bool("include-key", false, "include secret.key so stored API keys survive the move (keep the file safe!)")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 0 {
-		return errors.New("usage: thicket export [-o FILE] [--include-key]")
+		return errors.New("usage: thicket backup [-o FILE] [--include-key]")
 	}
 	cfg := loadConfig()
 	db, err := openStore(cfg)
@@ -287,7 +310,7 @@ func export(args []string) error {
 	defer db.Close()
 	path := *out
 	if path == "" {
-		path = "thicket-export-" + time.Now().Format("20060102-150405") + ".tar.gz"
+		path = "thicket-backup-" + time.Now().Format("20060102-150405") + ".tar.gz"
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
@@ -301,7 +324,10 @@ func export(args []string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	fmt.Println("exported to", path)
+	fmt.Println("backed up to", path)
+	if *withKey {
+		fmt.Println("WARNING: this file contains secret.key, which unlocks every stored API key and token. Keep it as safe as a password.")
+	}
 	if !*withKey {
 		fmt.Println("note: secret.key was not included; stored API keys will need re-entering after a restore unless you keep THICKET_SECRET_KEY or the key file.")
 	}
@@ -324,6 +350,9 @@ func restore(args []string) error {
 		return err
 	}
 	defer f.Close()
+	if *force && backup.ServerRunning(cfg.DataDir) {
+		fmt.Fprintln(os.Stderr, "warning: Thicket looks like it is running on this data directory. Restart it right after this restore; anything it writes in between is lost.")
+	}
 	if err := backup.Restore(f, cfg.DataDir, cfg.CharactersDir, *force); err != nil {
 		return err
 	}

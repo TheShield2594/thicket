@@ -168,7 +168,7 @@ notes: A plain hello. Short, warm, a question back. At most one garden word.
 Juni ships with five. For your own sprigs, write prompts only and run
 `thicket voice-check pip --record` once when you're happy with how Pip
 sounds: replies are saved as the references for tests that have none.
-Voice tests are included in `thicket export` and restored with it.
+Voice tests are included in `thicket backup` and restored with it.
 
 ## People and sign-in
 
@@ -223,6 +223,95 @@ Values never reach logs, the trail, the inbox, conversations, prompts, API
 responses, the web app or the dashboard: every one of those passes
 through the redactor, which knows each stored value and credential-shaped
 strings, and a test plants each known secret and checks every sink.
+
+## `thicket init`
+
+First-run setup at a terminal, as an alternative to environment variables
+and to Juni asking in chat: `docker compose run --rm thicket init` (or
+`thicket init` outside Docker). It asks, in order, for the model (an
+OpenRouter key, or your own server's address and which of its models to
+use), the Discord and Telegram bot tokens, the household's timezone, the
+daily and monthly spend caps, and the owner's chat account
+(`discord:USER_ID` or `telegram:USER_ID`).
+
+Each answer is checked before it is stored: the key against OpenRouter,
+a local server by listing its models, the tokens against Discord and
+Telegram, the timezone by name. A wrong answer is explained and asked
+again; Enter skips. Keys and tokens go into the encrypted store and are
+never shown again; the rest are ordinary settings
+(`thicket settings list`). Nothing is written to a plain config file.
+
+- `--from-env` doesn't ask: it checks and stores what the environment has
+  (`OPENROUTER_API_KEY`, `THICKET_MODEL_URL`, `DISCORD_TOKEN`,
+  `TELEGRAM_TOKEN`, `TZ`, the budget variables, `THICKET_OWNER_*`) and
+  exits non-zero, naming the variable, if one fails its check.
+- `--no-verify` stores without checking, for a machine that's offline.
+- Run it again any time. It shows what's set (secrets only as "stored")
+  and changes what you type.
+
+It ends with how to start Thicket and a one-time sign-in link for the web
+app. Juni's onboarding doesn't ask again for what's already set: with a
+key stored she greets you straight away, and with a timezone set she asks
+only your name. Naming the owner here also means nobody else can claim a
+fresh install by messaging the bot first.
+
+## `thicket update`
+
+Updates are manual, and run from the version you're moving **to**, with
+Thicket stopped:
+
+```bash
+docker compose pull                      # after changing THICKET_VERSION, if you pin one
+docker compose stop thicket
+docker compose run --rm thicket update
+docker compose up -d
+```
+
+Outside Docker, replace the binary and run `thicket update` before
+starting it. The command:
+
+1. Shows the changelog between the version that last ran this data and
+   this one, and asks to continue (`--yes` skips the question).
+2. Sets the database files and sprig folders aside untouched, and writes
+   a full backup to `/data/backups/pre-update-DATE.tar.gz` in the same
+   format as `thicket backup`.
+3. Applies the migrations.
+4. Runs the doctor's checks. The ones about your data (configuration,
+   database integrity, stored secrets) decide the outcome; a model server
+   or chat app that can't be reached is shown as a warning and doesn't
+   undo anything.
+
+If a migration or a data check fails, the database files and sprig
+folders are put back byte for byte, the reason is printed, and the
+command exits non-zero: keep running the previous version. The backup is
+kept either way.
+
+It refuses to run while Thicket is running on the data, to go back
+across a schema change (start the newer version again, or restore the
+pre-update backup with the older one), and to go to an older version on
+the same schema without `--force`. `--to VERSION` is a guard: it refuses
+unless this binary is that version.
+
+Each successful update is recorded in the trail. Every attempt, including
+ones that were rolled back, is a line in `/data/update.log`:
+`thicket update history` prints them.
+
+Starting a new version without running `thicket update` still works as
+before (startup applies pending migrations after taking a snapshot), but
+nothing is checked and nothing rolls back by itself.
+
+## Releasing
+
+Versions are tags. To release `v0.2.0`: rename the top section of
+`CHANGELOG.md` to `## v0.2.0: ...` (and start a new `## Unreleased` above
+it for what comes next), commit, then `git tag v0.2.0 && git push origin
+v0.2.0`. The **release** workflow runs the tests, builds images for
+amd64 and arm64 tagged `0.2.0`, `0.2` and `latest`, checks that each
+reports the version, and creates the GitHub release with that changelog
+section as its notes. A tag with no section in the changelog fails before
+anything is published (`thicket changelog v0.2.0` is the same check).
+Pre-release tags such as `v0.2.0-rc.1` publish only their own tag. Pushes
+to `main` publish the `edge` tag.
 
 ## `thicket migrate`
 

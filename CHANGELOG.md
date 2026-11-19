@@ -4,6 +4,42 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: releases, backups, setup and updates
+
+- Releases. A `vX.Y.Z` tag publishes images for amd64 and arm64 tagged
+  `X.Y.Z`, `X.Y` and `latest`, and a GitHub release whose notes are that
+  version's section of this file (a tag without a section fails before
+  anything is published). Pushes to `main` publish `edge`. The compose
+  file takes `THICKET_VERSION` to stay on one version. `thicket
+  changelog [VERSION]` prints the notes the binary was built with.
+- Backups. `thicket backup` (the new name for `export`) writes the
+  database and every file in each sprig's folder (avatar settings were
+  missing before). `thicket restore` checks the archive's manifest and
+  schema version before touching anything and refuses while Thicket is
+  running. Scheduled full backups: settings `backup_dir`,
+  `backup_schedule` and `backup_keep`; failures go to the needs-you
+  inbox, and Health shows the last backup and its size.
+- `thicket settings [list | set NAME VALUE]` changes settings without
+  the server.
+- `thicket init`: first-run setup at a terminal. It asks for the model
+  (an OpenRouter key, or your own server and which of its models), the
+  Discord and Telegram tokens, timezone, spend caps and the owner's chat
+  account, checks each against the real service, and stores keys and
+  tokens encrypted. `--from-env` checks and stores what the environment
+  has without asking; `--no-verify` is for a machine that's offline.
+  Running it again shows what's set (secrets only as "stored") and
+  changes what you type. New setting `timezone`: the household's
+  timezone, which new people start with, so Juni doesn't ask.
+- `thicket update`: run from the new version with Thicket stopped. It
+  shows the changelog since the version that last ran the data, takes a
+  full backup, migrates, and runs the doctor's data checks. If a
+  migration or check fails, the database files and sprig folders are put
+  back byte for byte. It refuses to run under a live server or to go back
+  across a schema change. Successful updates are in the trail; every
+  attempt is in `update.log` (`thicket update history`). The version that
+  last ran a database is now recorded in it.
+- README quick start rebuilt on the release image and `thicket init`.
+
 ## Unreleased: households, calendar and the app API (schema v16)
 
 - Settings in the web app. Owners and admins get a **Settings** screen

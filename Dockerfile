@@ -1,12 +1,15 @@
 # Build a static binary, then ship it on distroless (no shell, no package
-# manager, runs as non-root UID 65532).
-FROM golang:1.26-alpine AS build
+# manager, runs as non-root UID 65532). The build stage always runs on the
+# builder's own architecture and cross-compiles (the binary is pure Go), so
+# a multi-arch build needs no emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN mkdir -p /out/data /out/sandbox-auth && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/thicket ./cmd/thicket
+ARG TARGETOS TARGETARCH
+RUN mkdir -p /out/data /out/sandbox-auth && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/thicket ./cmd/thicket
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/thicket /usr/local/bin/thicket
