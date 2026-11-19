@@ -92,14 +92,12 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 	case !reply && deleteLastRe.MatchString(text):
 		do = func() (string, error) { return e.deleteLast(ctx, in, user, addressed) }
 	case voiceCmdRe.MatchString(text):
-		// For the sprig spoken to: by name, by its web thread, or the
-		// one talking in this chat.
-		if c, ok := e.Chars.Get(in.Character); addressed == nil && ok && c.UsableBy(user) {
-			addressed = c
-		}
-		target := addressed
-		if target == nil {
-			target = e.chatSprig(in.ChatRef())
+		// For the sprig that would answer this message (by name, by its
+		// web thread, the one talking in this chat, else a kid's own
+		// sprig), which also says the answer.
+		target, _ := e.replySprig(in, user, addressed)
+		if target != nil {
+			who = target
 		}
 		do = func() (string, error) { return e.voiceCommand(ctx, user, text, target) }
 	default:

@@ -100,7 +100,7 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			}
 			f.sent = append(f.sent, p)
 			ok(map[string]any{"message_id": 1})
-		case "sendVoice", "sendAudio":
+		case "sendVoice", "sendAudio", "sendDocument":
 			if f.noVoice && method == "sendVoice" {
 				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: VOICE_MESSAGES_FORBIDDEN"}`))
 				return

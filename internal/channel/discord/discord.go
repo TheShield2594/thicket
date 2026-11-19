@@ -260,15 +260,18 @@ func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona,
 	return ids, nil
 }
 
+// The engine finds spoken replies by this interface: keep it implemented.
+var _ channel.VoiceSender = (*Adapter)(nil)
+
 // SpeechFormat asks for MP3, which every Discord client plays inline.
 func (a *Adapter) SpeechFormat() string { return "mp3" }
 
 // SendVoice posts a spoken reply as an audio attachment: through the
 // sprig's webhook in server channels (its name and avatar), else as a bot
-// message naming the sprig.
-func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) error {
+// message naming the sprig. It returns the id of the message.
+func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) ([]string, error) {
 	if a.s == nil {
-		return fmt.Errorf("discord is not connected")
+		return nil, fmt.Errorf("discord is not connected")
 	}
 	format := v.Format
 	if format == "" {
@@ -285,19 +288,30 @@ func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Person
 		}
 		if hook, err := a.webhook(parent); err == nil {
 			params := &discordgo.WebhookParams{Username: p.Name, AvatarURL: p.AvatarURL, Files: file(), AllowedMentions: allowedMentions}
+			var m *discordgo.Message
 			if thread != "" {
-				_, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, true, thread, params)
+				m, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, true, thread, params)
 			} else {
-				_, err = a.s.WebhookExecute(hook.ID, hook.Token, true, params)
+				m, err = a.s.WebhookExecute(hook.ID, hook.Token, true, params)
 			}
 			if err == nil {
-				return nil
+				return messageIDs(m), nil
 			}
 			a.log.Warn("webhook voice send failed, falling back to bot message", "channel", chatID, "err", err)
 		}
 	}
-	_, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{Content: "**" + p.Name + "**", Files: file(), AllowedMentions: allowedMentions})
-	return err
+	m, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{Content: "**" + p.Name + "**", Files: file(), AllowedMentions: allowedMentions})
+	if err != nil {
+		return nil, err
+	}
+	return messageIDs(m), nil
+}
+
+func messageIDs(m *discordgo.Message) []string {
+	if m == nil || m.ID == "" {
+		return nil
+	}
+	return []string{m.ID}
 }
 
 func (a *Adapter) channel(id string) *discordgo.Channel {

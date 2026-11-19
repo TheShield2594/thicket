@@ -20,7 +20,9 @@ type SpeechRequest struct {
 	Voice string
 	Input string
 	// Format is the response_format: "opus" (Ogg Opus, what Telegram
-	// voice notes are), "mp3", "wav" and so on.
+	// voice notes are), "mp3", "wav" and so on. OpenRouter takes only mp3
+	// and pcm, so it is asked for mp3 instead of anything else; what came
+	// back is told by the audio itself (channel.VoiceFormat).
 	Format string
 }
 
@@ -66,7 +68,11 @@ func (s *SpeechClient) Speak(ctx context.Context, req SpeechRequest) (*Speech, e
 		}
 		key = k
 	}
-	body, err := json.Marshal(map[string]any{"model": req.Model, "input": req.Input, "voice": req.Voice, "response_format": req.Format})
+	format := req.Format
+	if hosted && format != "mp3" && format != "pcm" {
+		format = "mp3"
+	}
+	body, err := json.Marshal(map[string]any{"model": req.Model, "input": req.Input, "voice": req.Voice, "response_format": format})
 	if err != nil {
 		return nil, err
 	}

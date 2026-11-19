@@ -6,8 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestSpeechClient(t *testing.T) {
 	var got map[string]any
@@ -62,6 +67,16 @@ func TestSpeechClient(t *testing.T) {
 		Key: func(context.Context, string) (string, error) { return "", nil }}
 	if _, err := or.Speak(ctx, SpeechRequest{Input: "x"}); !errors.Is(err, ErrNoKey) {
 		t.Fatalf("no key: %v", err)
+	}
+	// OpenRouter takes mp3 or pcm only: a channel's opus becomes mp3.
+	or = &SpeechClient{URL: func(context.Context) string { return DefaultURL },
+		Key: func(context.Context, string) (string, error) { return "sk-or", nil },
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host, r.URL.Path = "http", strings.TrimPrefix(srv.URL, "http://"), "/v1/audio/speech"
+			return http.DefaultTransport.RoundTrip(r)
+		})}}
+	if sp, err := or.Speak(ctx, SpeechRequest{Voice: "alloy", Input: "Hi.", Format: "opus"}); err != nil || !sp.Hosted || got["response_format"] != "mp3" {
+		t.Fatalf("hosted speech: %+v %v (asked %v)", sp, err, got["response_format"])
 	}
 	none := &SpeechClient{URL: func(context.Context) string { return "" }}
 	if _, err := none.Speak(ctx, SpeechRequest{Input: "x"}); err == nil {

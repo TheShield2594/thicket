@@ -323,22 +323,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 	in.Text = strings.TrimSpace(typed)
 
-	char := e.defaultSprigFor(user)
+	char, chosen := e.replySprig(in, user, addressed)
 	if char == nil {
 		return e.send(ctx, in.ChatRef(), host, "There's no sprig set up for you yet. Ask a grown-up to set one up for you!")
-	}
-	chosen := true // the user picked the sprig: by name, or by its thread
-	if addressed != nil {
-		char = addressed
-	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user) {
-		char = c // a per-sprig web thread
-	} else {
-		chosen = false
-		if id, ok := e.active.Load(in.ChatRef()); ok {
-			if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user) {
-				char = c
-			}
-		}
 	}
 
 	conv, err := e.DB.OpenConversation(ctx, user.ID, in.ChatRef(), e.Cfg.IdleAfter)
@@ -371,6 +358,26 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	return e.respond(ctx, t, "")
 }
 
+// replySprig is the sprig that answers this message, before any
+// auto-routing: the one named, the web thread's own, the one talking in
+// this chat, else the user's default (a kid's own sprig, or the host).
+// chosen says the user picked it (by name or by its thread). nil means
+// no sprig is set up for this user.
+func (e *Engine) replySprig(in channel.Incoming, user *store.User, addressed *character.Character) (char *character.Character, chosen bool) {
+	if addressed != nil {
+		return addressed, true
+	}
+	if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user) {
+		return c, true // a per-sprig web thread
+	}
+	if id, ok := e.active.Load(in.ChatRef()); ok {
+		if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user) {
+			return c, false
+		}
+	}
+	return e.defaultSprigFor(user), false
+}
+
 // respond runs a turn, posts the reply, and follows any handoff.
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
@@ -389,15 +396,20 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	var sendErr error
 	if reply != "" {
 		var ids []string
+		var msgID int64
 		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
 			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
+				msgID = id
 				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
 			}
 		}
 		// Out loud too, if this sprig speaks here (after the text, which
-		// is always sent). Never a failure message.
+		// is always sent). Never a failure message. The audio's messages
+		// belong to the reply: "delete that" takes them too.
 		if sendErr == nil && err == nil {
-			e.speak(ctx, t, reply, ids)
+			if voiceIDs := e.speak(ctx, t, reply, ids); len(voiceIDs) > 0 && msgID != 0 {
+				_ = e.DB.AddMessageRefs(ctx, msgID, t.chatRef, voiceIDs...)
+			}
 		}
 	}
 	// Approval prompts go out even if the reply failed. An approval is

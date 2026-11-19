@@ -110,7 +110,10 @@ type VoiceSender interface {
 	// SpeechFormat is the speech server response_format the channel
 	// wants: "opus" for Telegram voice notes, "mp3" elsewhere.
 	SpeechFormat() string
-	SendVoice(ctx context.Context, chatID string, p Persona, v Voice) error
+	// SendVoice returns the ids of any messages the audio became (none
+	// when it was attached to the text message), so deleting the reply
+	// deletes the audio too.
+	SendVoice(ctx context.Context, chatID string, p Persona, v Voice) ([]string, error)
 }
 
 // VoiceFormat names the format of audio from its first bytes, falling

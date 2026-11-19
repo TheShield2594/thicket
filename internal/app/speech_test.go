@@ -87,10 +87,14 @@ func (b *botAPI) handler(t *testing.T) http.Handler {
 			ok(ups)
 		case "getFile":
 			ok(map[string]any{"file_path": "voice/file_1.oga"})
-		case "sendMessage", "sendVoice", "sendAudio":
+		case "sendMessage", "sendVoice", "sendAudio", "sendDocument":
 			b.nextID++
+			p["id"] = fmt.Sprint(1000 + b.nextID)
 			b.posts = append(b.posts, p)
 			ok(map[string]any{"message_id": 1000 + b.nextID})
+		case "deleteMessage":
+			b.posts = append(b.posts, p)
+			ok(true)
 		default:
 			t.Errorf("unexpected Bot API method %s", method)
 		}
@@ -267,6 +271,13 @@ func TestVoiceNoteGetsVoiceNoteBack(t *testing.T) {
 	if reqs := speech.take(); len(reqs) != 1 || reqs[0]["voice"] != "nova" || reqs[0]["input"] != "Pip here! I'll sort your calendar." {
 		t.Fatalf("Pip's speech: %v", reqs)
 	}
+	// "delete that" takes the spoken copy with the text.
+	a.Engine.HandleIncoming(ctx, tgText(42, "delete that"))
+	dels := bot.take()
+	if len(dels) != 2 || dels[0]["method"] != "deleteMessage" || dels[0]["message_id"] != posts[0]["id"] ||
+		dels[1]["method"] != "deleteMessage" || dels[1]["message_id"] != posts[1]["id"] {
+		t.Fatalf("delete that: %v (posted %v)", dels, posts)
+	}
 
 	// The person turns Pip's voice off: text only, even for a voice note.
 	a.Engine.HandleIncoming(ctx, tgText(42, "Pip, voice off"))
@@ -364,6 +375,23 @@ Bramble likes games.
 	if _, err := a.Chars.Write(ctx, c); err != nil {
 		t.Fatal(err)
 	}
+
+	// Before any sprig has talked in the kid's chat, "voice off" is for
+	// the sprig that would answer: the kid's own, not the host.
+	a.Engine.HandleIncoming(ctx, tgText(77, "voice off"))
+	if posts := bot.take(); len(posts) != 1 || !strings.Contains(posts[0]["text"], "only write") || strings.Contains(posts[0]["text"], "Juni") {
+		t.Fatalf("kid's voice off: %v", posts)
+	}
+	if mode, _ := a.DB.SpeechMode(ctx, kid.ID, "bramble"); mode != store.SpeechOff {
+		t.Fatalf("bramble's mode = %q", mode)
+	}
+	if host, _ := a.Chars.Host(); host != nil {
+		if mode, _ := a.DB.SpeechMode(ctx, kid.ID, host.ID); mode != store.SpeechFull {
+			t.Fatalf("voice off went to the host: %q", mode)
+		}
+	}
+	a.Engine.HandleIncoming(ctx, tgText(77, "voice full"))
+	bot.take()
 
 	a.Engine.HandleIncoming(ctx, tgText(77, "hello!"))
 	if posts := bot.take(); len(posts) != 1 || posts[0]["method"] != "sendMessage" {

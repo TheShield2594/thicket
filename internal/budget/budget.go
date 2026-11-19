@@ -190,13 +190,16 @@ func (g *Guard) Speak(ctx context.Context, req llm.SpeechRequest) (*llm.Speech, 
 	if err != nil {
 		return nil, err
 	}
+	// The rate is read first: once the audio is made, a cancelled ctx
+	// would make this read fall back to the default rate.
+	rate := g.Settings.Float(ctx, "speech_usd_per_1k_chars")
 	sp, err := g.Voice.Speak(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	cost := 0.0
 	if sp.Hosted {
-		cost = g.Settings.Float(ctx, "speech_usd_per_1k_chars") * float64(len([]rune(req.Input))) / 1000
+		cost = rate * float64(len([]rune(req.Input))) / 1000
 	}
 	g.record(ctx, cs, store.Usage{UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
 		Origin: llm.OriginOf(m), Model: sp.Model, CostUSD: cost})

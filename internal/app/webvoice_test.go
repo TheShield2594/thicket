@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -73,6 +74,23 @@ func TestWebAppSpokenReplies(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 200 || string(body) != "OggS voice=nova" || res.Header.Get("Content-Type") != "audio/ogg" {
 		t.Fatalf("audio: %d %q %q", res.StatusCode, body, res.Header.Get("Content-Type"))
+	}
+	if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("personal audio may be cached: %q", cc)
+	}
+
+	// A reply deleted while its speech was being made stays deleted; with
+	// no reply named, the audio is a message of its own.
+	pip := channel.Persona{ID: "pip", Name: "Pip"}
+	if ids, err := a.Web.SendVoice(ctx, chat, pip, channel.Voice{Audio: []byte("ID3"), Format: "mp3", Text: "Gone.", With: "999999"}); err != nil || len(ids) != 0 {
+		t.Fatalf("voice for a deleted reply: %v %v", ids, err)
+	}
+	if got, _ := a.DB.WebMessages(ctx, chat, 0, 10); len(got) != 2 {
+		t.Fatalf("a deleted reply came back: %+v", got)
+	}
+	ids, err := a.Web.SendVoice(ctx, chat, pip, channel.Voice{Audio: []byte("ID3"), Format: "mp3", Text: "On its own."})
+	if got, _ := a.DB.WebMessages(ctx, chat, 0, 10); err != nil || len(got) != 3 || !got[2].Audio || len(ids) != 1 || ids[0] != strconv.FormatInt(got[2].ID, 10) {
+		t.Fatalf("standalone voice: %v %v %+v", ids, err, got)
 	}
 	// Signed out, or someone else's chat: no audio.
 	if res, _ := http.Get(srv.URL + "/api/chats/" + chat + "/messages/" + strconv.FormatInt(msgs[1].ID, 10) + "/audio"); res.StatusCode != http.StatusUnauthorized {

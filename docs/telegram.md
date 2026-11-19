@@ -59,9 +59,11 @@ are gathered into one message.
 A voice message gets a voice note back, after the text reply, in the
 sprig's own voice (see [Speaking out loud](characters.md#speaking-out-loud)).
 Thicket asks the speech server for Ogg Opus, which Telegram shows as a
-voice note; if a server sends another format, or you've blocked voice
-messages from bots in Telegram's privacy settings, it arrives as an audio
-file instead. Send `/voice brief`, `/voice full` or `/voice off` to choose
+voice note (OpenRouter only makes MP3, so with it you get an audio file
+Telegram plays inline). If a server sends another format, or you've
+blocked voice messages from bots in Telegram's privacy settings, it
+arrives as a file instead. "Delete that" deletes the spoken copy along
+with the text. Send `/voice brief`, `/voice full` or `/voice off` to choose
 how the sprig you're talking to answers out loud.
 
 When a message looks like a key or password, Thicket deletes it. Telegram

@@ -64,12 +64,14 @@ func (e *Engine) speechModeFor(ctx context.Context, t *turn) (string, channel.Vo
 }
 
 // speak reads a reply aloud in the sprig's voice and posts it after the
-// text (with, the ids the text became). Failures are logged and reported
-// to admins, never to the person: they already have the text.
-func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string) {
+// text (with, the ids the text became). It returns the ids of the
+// messages the audio became, kept with the reply so deleting it deletes
+// them too. Failures are logged and reported to admins, never to the
+// person: they already have the text.
+func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string) []string {
 	mode, vs, chatID := e.speechModeFor(ctx, t)
 	if mode == "" {
-		return
+		return nil
 	}
 	ctx = llm.WithPurpose(ctx, "speech")
 	text := speakable(e.Secrets.Redact(reply))
@@ -78,7 +80,7 @@ func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string
 	}
 	text = cutSpeech(text, maxSpeechChars)
 	if strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	voice := t.char.Voice.SoundsLike
 	if voice == "" {
@@ -87,12 +89,13 @@ func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string
 	sp, err := e.Speech.Speak(ctx, llm.SpeechRequest{
 		Model: e.Settings.String(ctx, "speech_model"), Voice: voice, Input: text, Format: vs.SpeechFormat(),
 	})
+	var ids []string
 	if err == nil {
 		v := channel.Voice{Audio: sp.Audio, Format: channel.VoiceFormat(sp.Audio, sp.ContentType), Text: text}
 		if len(with) > 0 {
 			v.With = with[0]
 		}
-		err = vs.SendVoice(ctx, chatID, e.persona(t.char), v)
+		ids, err = vs.SendVoice(ctx, chatID, e.persona(t.char), v)
 	}
 	if err != nil {
 		e.Log.Warn("spoken reply failed", "character", t.char.ID, "err", err)
@@ -102,6 +105,7 @@ func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string
 				"Check the speech settings: speech_url (a speech server, or empty for the model server), speech_model and speech_voice.")
 		}
 	}
+	return ids
 }
 
 const briefPrompt = "You turn a chat reply into what its author would say out loud in a short voice note: one to three sentences, " +

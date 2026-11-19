@@ -631,13 +631,18 @@ func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Perso
 	return userID, err
 }
 
+// The engine finds spoken replies by this interface: keep it implemented.
+var _ channel.VoiceSender = (*Adapter)(nil)
+
 // SpeechFormat asks for Ogg Opus: what Telegram voice notes are.
 func (a *Adapter) SpeechFormat() string { return "opus" }
 
 // SendVoice posts a spoken reply. Ogg Opus goes out as a voice note
-// (sendVoice); anything else (a speech server that ignored the format)
-// as an audio file (sendAudio), which Telegram plays inline too.
-func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) error {
+// (sendVoice); MP3 as an audio file (sendAudio), which Telegram plays
+// inline. Anything else (a speech server that ignored the format), and a
+// voice note for someone who blocks them, goes as a file (sendDocument):
+// sendAudio takes only MP3 and M4A. It returns the id of the message.
+func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) ([]string, error) {
 	format := v.Format
 	if format == "" {
 		format = channel.VoiceFormat(v.Audio, "")
@@ -647,30 +652,42 @@ func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Person
 		params["caption"] = "<b>" + escape(p.Name) + "</b>"
 		params["parse_mode"] = "HTML"
 	}
-	method, field, name := "sendVoice", "voice", "voice.ogg"
-	if format != "ogg" {
-		ext := format
-		if ext == "" {
-			ext = "mp3"
-		}
-		method, field, name = "sendAudio", "audio", "voice."+ext
+	ext := format
+	if ext == "" {
+		ext = "bin"
+	}
+	method, field, name := "sendDocument", "document", "voice."+ext
+	switch format {
+	case "ogg":
+		method, field, name = "sendVoice", "voice", "voice.ogg"
+	case "mp3", "m4a":
+		method, field = "sendAudio", "audio"
 		if p.Name != "" {
 			params["title"] = p.Name
 		}
 	}
-	err := retry(ctx, func() error {
-		return a.upload(ctx, method, params, field, name, channel.VoiceContentType(format), v.Audio, nil)
-	})
+	var sent struct {
+		MessageID int64 `json:"message_id"`
+	}
+	send := func() error {
+		return a.upload(ctx, method, params, field, name, channel.VoiceContentType(format), v.Audio, &sent)
+	}
+	err := retry(ctx, send)
 	var ae *apiError
 	if method == "sendVoice" && errors.As(err, &ae) && ae.Code == 400 && strings.Contains(strings.ToUpper(ae.Desc), "VOICE_MESSAGES_FORBIDDEN") {
 		// The person turned off receiving voice messages: send a file.
 		delete(params, "parse_mode")
 		params["caption"] = p.Name
-		err = retry(ctx, func() error {
-			return a.upload(ctx, "sendAudio", params, "audio", "voice.ogg", "audio/ogg", v.Audio, nil)
-		})
+		method, field = "sendDocument", "document"
+		err = retry(ctx, send)
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	if sent.MessageID == 0 {
+		return nil, nil
+	}
+	return []string{strconv.FormatInt(sent.MessageID, 10)}, nil
 }
 
 func (a *Adapter) Delete(ctx context.Context, chatID, messageID string) error {
