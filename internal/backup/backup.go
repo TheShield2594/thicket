@@ -21,13 +21,20 @@ import (
 )
 
 type Manifest struct {
+	// Format 2 archives carry every file in a sprig's folder (avatar
+	// settings as well as voice tests); format 1 had voice tests only.
 	Format        int       `json:"format"`
 	SchemaVersion int       `json:"schema_version"`
 	CreatedAt     time.Time `json:"created_at"`
 	IncludesKey   bool      `json:"includes_key"`
 }
 
-// Export writes a .tar.gz with the database, character files and avatars.
+// Format is the archive format this build writes; Restore reads this and
+// anything older.
+const Format = 2
+
+// Export writes a .tar.gz with the database (a consistent copy, safe to
+// take while Thicket runs), every character file and every sprig folder.
 // The secret key is only included if asked: without it the encrypted
 // secrets in the database can't be read, which is usually what you want
 // for an off-site copy.
@@ -47,7 +54,7 @@ func Export(ctx context.Context, db *store.Store, dataDir, charsDir string, incl
 	}
 	gz := gzip.NewWriter(out)
 	tw := tar.NewWriter(gz)
-	man, _ := json.MarshalIndent(Manifest{Format: 1, SchemaVersion: ver, CreatedAt: time.Now().UTC(), IncludesKey: includeKey}, "", "  ")
+	man, _ := json.MarshalIndent(Manifest{Format: Format, SchemaVersion: ver, CreatedAt: time.Now().UTC(), IncludesKey: includeKey}, "", "  ")
 	if err := addBytes(tw, "manifest.json", man, 0o644); err != nil {
 		return err
 	}
@@ -63,12 +70,24 @@ func Export(ctx context.Context, db *store.Store, dataDir, charsDir string, incl
 			continue
 		}
 		if e.IsDir() {
-			// A sprig's folder: its voice tests travel with it.
-			tests, _ := filepath.Glob(filepath.Join(charsDir, e.Name(), "voice_tests", "*.yaml"))
-			for _, path := range tests {
-				if err := addFile(tw, path, "characters/"+e.Name()+"/voice_tests/"+filepath.Base(path), 0o644); err != nil {
+			// A sprig's folder travels whole: voice tests, avatar settings
+			// and whatever else it keeps there.
+			root := filepath.Join(charsDir, e.Name())
+			err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
 					return err
 				}
+				if !d.Type().IsRegular() || strings.HasSuffix(d.Name(), ".tmp") {
+					return nil
+				}
+				rel, err := filepath.Rel(charsDir, path)
+				if err != nil {
+					return err
+				}
+				return addFile(tw, path, "characters/"+filepath.ToSlash(rel), 0o644)
+			})
+			if err != nil {
+				return err
 			}
 			continue
 		}
@@ -114,11 +133,11 @@ func addFile(tw *tar.Writer, path, name string, mode int64) error {
 	return err
 }
 
-// voiceTestPath matches a sprig's voice test in an archive.
-// The file name may be anything Export includes (any *.yaml name, hidden
-// ones too) except separators and control characters; ".." is refused
+// sprigFilePath matches a file in a sprig's folder in an archive, up to
+// six folders deep. Names may be anything Export includes (hidden ones
+// too) except separators and control characters; ".." is refused
 // separately.
-var voiceTestPath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*/voice_tests/[^/\\\x00-\x1f]+\.yaml$`)
+var sprigFilePath = regexp.MustCompile(`^characters/[a-z0-9][a-z0-9_-]*(/[^/\\\x00-\x1f]+){1,6}$`)
 
 // maxEntry bounds any single file in an archive.
 const maxEntry int64 = 64 << 30
@@ -130,6 +149,9 @@ const maxEntry int64 = 64 << 30
 // consistent. An existing database is only replaced with force.
 func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 	dbPath := filepath.Join(dataDir, "thicket.db")
+	if !force && ServerRunning(dataDir) {
+		return fmt.Errorf("Thicket is running on %s: stop it first (docker compose stop thicket), then restore with --force to replace its data", dataDir)
+	}
 	if _, err := os.Stat(dbPath); err == nil && !force {
 		return fmt.Errorf("%s already exists; stop Thicket and pass --force to replace it (the current files are kept as .before-restore)", dbPath)
 	}
@@ -145,6 +167,7 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 	// 1. Extract everything into staging.
 	type item struct{ staged, dest string }
 	var items []item
+	var man *Manifest
 	gz, err := gzip.NewReader(archive)
 	if err != nil {
 		return err
@@ -168,9 +191,19 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 			dest = dbPath
 		case name == "secret.key":
 			dest = filepath.Join(dataDir, "secret.key")
-		case voiceTestPath.MatchString(filepath.ToSlash(name)) && h.Typeflag == tar.TypeReg:
+		case name == "manifest.json" && h.Typeflag == tar.TypeReg && h.Size <= 1<<20:
+			b, err := io.ReadAll(io.LimitReader(tr, h.Size))
+			if err != nil {
+				return fmt.Errorf("manifest.json in the archive is unreadable: %w", err)
+			}
+			man = &Manifest{}
+			if err := json.Unmarshal(b, man); err != nil {
+				return fmt.Errorf("manifest.json in the archive is not valid: %w", err)
+			}
+			continue
+		case sprigFilePath.MatchString(filepath.ToSlash(name)) && h.Typeflag == tar.TypeReg:
 			parts := strings.Split(filepath.ToSlash(name), "/")
-			dest = filepath.Join(charsDir, parts[1], "voice_tests", parts[3])
+			dest = filepath.Join(append([]string{charsDir}, parts[1:]...)...)
 		case strings.HasPrefix(name, "characters/") && strings.Count(filepath.ToSlash(name), "/") == 1 && h.Typeflag == tar.TypeReg:
 			dest = filepath.Join(charsDir, filepath.Base(name))
 		default:
@@ -214,7 +247,18 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 		}
 	}
 	if !hasDB {
-		return errors.New("archive has no thicket.db; is this a Thicket export?")
+		return errors.New("archive has no thicket.db; is this a Thicket backup?")
+	}
+	if man == nil {
+		return errors.New("archive has no manifest.json; is this a Thicket backup?")
+	}
+	if man.Format > Format {
+		return fmt.Errorf("this backup is format %d and this Thicket reads up to %d: restore it with the Thicket version that made it, or a newer one", man.Format, Format)
+	}
+	if known, err := store.KnownMigrations(); err != nil {
+		return err
+	} else if man.SchemaVersion > known {
+		return fmt.Errorf("this backup's database is schema v%d and this Thicket only knows up to v%d: restore it with a newer Thicket", man.SchemaVersion, known)
 	}
 
 	// 3. Swap files in, remembering how to undo each step.
@@ -288,4 +332,124 @@ func Snapshot(ctx context.Context, db *store.Store, dir string, keep int) (strin
 		snaps = snaps[1:]
 	}
 	return path, nil
+}
+
+// --- is the server running? ---
+
+// The server touches this file while it runs, so a command in another
+// process (or another container on the same volume) can tell.
+const aliveFile = "server.alive"
+
+// aliveFor is how long a heartbeat counts: a few missed beats, so a
+// crashed server stops blocking a restore within minutes.
+const aliveFor = 2 * time.Minute
+
+// Heartbeat marks the server as running on dataDir. Call it at start and
+// about every 30 seconds.
+func Heartbeat(dataDir string) error {
+	return os.WriteFile(filepath.Join(dataDir, aliveFile), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+}
+
+// ClearHeartbeat marks the server as stopped.
+func ClearHeartbeat(dataDir string) { os.Remove(filepath.Join(dataDir, aliveFile)) }
+
+// ServerRunning reports whether a server marked dataDir recently.
+func ServerRunning(dataDir string) bool {
+	info, err := os.Stat(filepath.Join(dataDir, aliveFile))
+	return err == nil && time.Since(info.ModTime()) < aliveFor
+}
+
+// --- scheduled backups ---
+
+// Info describes a backup archive on disk.
+type Info struct {
+	Path string
+	Size int64
+	At   time.Time
+}
+
+const (
+	scheduledPrefix = "thicket-backup-"
+	scheduledSuffix = ".tar.gz"
+)
+
+// Scheduled writes a full backup into dir (never the key: the folder may
+// be a share or a sync target) and keeps the newest keep. The archive is
+// written under a temporary name and renamed, so a half-written file is
+// never mistaken for a backup.
+func Scheduled(ctx context.Context, db *store.Store, dataDir, charsDir, dir string, keep int) (Info, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Info{}, err
+	}
+	final := filepath.Join(dir, scheduledPrefix+time.Now().UTC().Format("20060102-150405")+scheduledSuffix)
+	f, err := os.CreateTemp(dir, ".backup-*.tmp")
+	if err != nil {
+		return Info{}, err
+	}
+	tmp := f.Name()
+	err = Export(ctx, db, dataDir, charsDir, false, f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, final)
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return Info{}, err
+	}
+	if keep < 1 {
+		keep = 1
+	}
+	all := list(dir)
+	for len(all) > keep {
+		os.Remove(all[0].Path)
+		all = all[1:]
+	}
+	info, err := os.Stat(final)
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{Path: final, Size: info.Size(), At: info.ModTime()}, nil
+}
+
+// Latest returns the newest scheduled backup in dir.
+func Latest(dir string) (Info, bool) {
+	all := list(dir)
+	if len(all) == 0 {
+		return Info{}, false
+	}
+	return all[len(all)-1], true
+}
+
+// LatestSnapshot returns the newest daily database snapshot in dir.
+func LatestSnapshot(dir string) (Info, bool) {
+	var best Info
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "thicket-") || !strings.HasSuffix(e.Name(), ".db") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().After(best.At) {
+			best = Info{Path: filepath.Join(dir, e.Name()), Size: info.Size(), At: info.ModTime()}
+		}
+	}
+	return best, best.Path != ""
+}
+
+// list returns the scheduled backups in dir, oldest first (the names sort
+// by time).
+func list(dir string) []Info {
+	entries, _ := os.ReadDir(dir)
+	var out []Info
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), scheduledPrefix) || !strings.HasSuffix(e.Name(), scheduledSuffix) {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			out = append(out, Info{Path: filepath.Join(dir, e.Name()), Size: info.Size(), At: info.ModTime()})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }

@@ -5,7 +5,7 @@ A short tour for contributors.
 ## Layout
 
 ```
-cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, export, restore, character, memory, migrate
+cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, backup, restore, settings, changelog, character, memory, migrate
 internal/app         wires everything together (also used by the smoke test)
 internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
 internal/character   character files: parse, validate, load, write without clobbering
@@ -19,7 +19,7 @@ internal/web         the web app: channel adapter, sign-in, JSON API, event stre
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL
 internal/settings    chat-changeable settings over env defaults
-internal/backup      export, restore, daily snapshots, character import
+internal/backup      backup, restore, scheduled backups, daily snapshots
 internal/server      /health, /avatars, /hooks, /api/v1, /dashboard, and mounts the web app at /
 internal/api         local HTTP API (/api/v1): an internal "api" channel plus token auth
 internal/websearch   page fetching (public addresses only) and SearXNG search

@@ -168,7 +168,7 @@ notes: A plain hello. Short, warm, a question back. At most one garden word.
 Juni ships with five. For your own sprigs, write prompts only and run
 `thicket voice-check pip --record` once when you're happy with how Pip
 sounds: replies are saved as the references for tests that have none.
-Voice tests are included in `thicket export` and restored with it.
+Voice tests are included in `thicket backup` and restored with it.
 
 ## People and sign-in
 

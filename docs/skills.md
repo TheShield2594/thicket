@@ -194,6 +194,6 @@ Importing a skill whose id exists adds a new version; the old ones stay.
 Read a skill file before you import it: its steps will be followed by
 every sprig.
 
-Skills live in the database, so `thicket export` backs them up. A library
+Skills live in the database, so `thicket backup` backs them up. A library
 holds up to 100 skills; the first 40 are listed to sprigs, and they can
 read the rest by id.

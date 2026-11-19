@@ -300,14 +300,28 @@ by asking Juni (as the owner), and the chat value wins.
 ## Backups and moving house
 
 ```bash
-docker compose exec thicket thicket export -o /data/backup.tar.gz
+docker compose exec thicket thicket backup -o /data/backup.tar.gz
 ```
 
-This writes the database and character files. Add `--include-key` to bring
-the encryption key too; without it, stored API keys must be re-entered
-after a restore. Restore into an empty data directory with
-`thicket restore FILE` (`--force` to replace an existing one; the old files
-are kept).
+This writes one archive with the database (a consistent copy, safe to take
+while Thicket runs) and every sprig's files: character file, avatar
+settings and voice tests. Add `--include-key` to bring the encryption key
+too; without it, stored API keys must be re-entered after a restore, and
+with it the file is as sensitive as a password.
+
+Restore into an empty data directory with `thicket restore FILE`. The
+archive is checked first (its manifest, that its database isn't from a
+newer Thicket) and nothing is touched if it doesn't pass. Stop Thicket
+before restoring over an existing install, then pass `--force`; the old
+files are kept beside the new ones.
+
+For backups on a schedule, give Thicket a folder (ask Juni, or
+`thicket settings set backup_dir /backups`). In Docker it has to be a
+mounted folder, such as `- /mnt/nas/thicket:/backups` under `volumes:`.
+`backup_schedule` is a cron line (default `0 3 * * *`, 03:00 daily) and
+`backup_keep` is how many to keep (default 7). A backup that fails goes to
+your needs-you list and Juni tells you; the dashboard's Health section
+shows when the last one ran and how big it was.
 
 Thicket also keeps a daily database snapshot in `/data/backups` (last 7),
 and snapshots before any schema migration. Memory reviews can be undone

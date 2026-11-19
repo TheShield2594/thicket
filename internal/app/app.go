@@ -74,6 +74,8 @@ type App struct {
 
 	mu        sync.Mutex
 	startErrs []string
+	// backupErr is why the last scheduled backup failed ("" if it worked).
+	backupErr string
 }
 
 func (a *App) startErr(msg string) {
@@ -391,6 +393,7 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 		}
 		out["mcp."+name] = c
 	}
+	out["backup"] = a.backupCheck(ctx)
 	for k, c := range out { // /health is public
 		c.Detail = a.Secrets.Redact(c.Detail)
 		out[k] = c
@@ -482,6 +485,7 @@ func (a *App) Run(parent context.Context) error {
 		})
 	})
 	goRun("maintenance", func() { a.maintenance(ctx) })
+	goRun("backups", func() { a.backups(ctx) })
 	goRun("startup-report", func() { a.reportStartup(ctx, mcpDone, interrupted) })
 	goRun("first-run-link", func() { a.firstRunLink(ctx) })
 
@@ -589,6 +593,7 @@ func (a *App) maintenance(ctx context.Context) {
 }
 
 func (a *App) Close() {
+	backup.ClearHeartbeat(a.Cfg.DataDir)
 	if a.MCP != nil {
 		a.MCP.Close()
 	}
