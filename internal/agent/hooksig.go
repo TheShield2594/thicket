@@ -192,7 +192,7 @@ func (e *Engine) rotateHookSecret(ctx context.Context, t *turn, j *store.Job, st
 
 // dmAs sends a code-written DM that stays out of the conversation history.
 func (e *Engine) dmAs(ctx context.Context, u *store.User, c *character.Character, msg string) error {
-	ch := e.channels[u.Channel]
+	ch := e.channelFor(u.Channel)
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
 	}

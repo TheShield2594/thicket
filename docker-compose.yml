@@ -20,8 +20,9 @@ services:
     environment:
       # Optional chat apps. Leave both empty to use only the web app.
       # Tokens and keys set here are stored encrypted on first start; after
-      # that you can delete them from this file (or never put them here:
-      # `docker compose exec thicket thicket secrets set discord_token`).
+      # that you can delete them from this file. Or never put them here: send
+      # the bot token to Juni in the web app and she connects it on the spot
+      # (or `docker compose exec thicket thicket secrets set discord_token`).
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
       # Optional. Your user id on either app; otherwise the first person to DM the bot becomes the owner.

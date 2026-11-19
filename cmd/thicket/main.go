@@ -219,15 +219,17 @@ func serve() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	a, err := app.New(ctx, cfg, version, app.Options{Channels: func(log *slog.Logger) []channel.Channel {
-		var chs []channel.Channel
-		if cfg.DiscordToken != "" {
-			chs = append(chs, discord.New(cfg.DiscordToken, cfg.DiscordListenChannels, log))
+	// Discord and Telegram start if their tokens are stored, and connect
+	// while Thicket runs when a token arrives in chat; without either,
+	// it's the web app alone.
+	a, err := app.New(ctx, cfg, version, app.Options{NewChannel: func(name, token string, log *slog.Logger) channel.Channel {
+		switch name {
+		case "discord":
+			return discord.New(token, cfg.DiscordListenChannels, log)
+		case "telegram":
+			return telegram.New(token, cfg.TelegramListenChats, log)
 		}
-		if cfg.TelegramToken != "" {
-			chs = append(chs, telegram.New(cfg.TelegramToken, cfg.TelegramListenChats, log))
-		}
-		return chs // none: the web app alone
+		return nil
 	}})
 	if err != nil {
 		return err

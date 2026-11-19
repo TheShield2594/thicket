@@ -101,3 +101,23 @@ func (d Deletion) ChatRef() string { return d.Channel + ":" + d.ChatID }
 type DeleteWatcher interface {
 	OnDelete(func(ctx context.Context, d Deletion))
 }
+
+// Bot is the account a chat adapter is signed in as.
+type Bot struct {
+	Name string
+	// URL is where someone adds the bot to a server (Discord) or opens a
+	// chat with it (Telegram).
+	URL string
+}
+
+// Identity is implemented by chat adapters that know their bot account.
+type Identity interface {
+	// Bot reports the account once the adapter has connected.
+	Bot() (Bot, bool)
+}
+
+// Checker is implemented by chat adapters that can test their token
+// without connecting, so a bad one is refused before anything changes.
+type Checker interface {
+	Check(ctx context.Context) error
+}

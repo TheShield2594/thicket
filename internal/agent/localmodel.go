@@ -128,7 +128,7 @@ func (e *Engine) bootstrap(ctx context.Context, in channel.Incoming, user *store
 // connectLocal tries each candidate server, and on the first with a chat
 // model, switches Thicket to it and carries on with onboarding.
 func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *store.User, host *character.Character, cands []string, saveURL bool) error {
-	if ch := e.channels[in.Channel]; ch != nil {
+	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
 	var tried []string

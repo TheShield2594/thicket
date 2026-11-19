@@ -24,6 +24,16 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return false, err
 	}
+	// A chat app's bot token from an admin: Thicket connects the app itself.
+	if in.IsDM && user.IsAdmin() {
+		app, token := chatToken(in.Text)
+		if v := strings.TrimSpace(in.Text); app == nil && pending != nil && !strings.ContainsAny(v, " \n") && !strings.EqualFold(v, "cancel") {
+			app, token = chatAppBySecret(pending.Name), v // asked for by connect_chat_app
+		}
+		if app != nil {
+			return true, e.connectChatToken(ctx, in, user, host, app, token)
+		}
+	}
 	if pending != nil {
 		if !in.IsDM {
 			if secrets.LooksLikeSecret(in.Text) {
@@ -52,6 +62,9 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 	// Credential-shaped, or a value Thicket already holds as a secret
 	// (a pasted bot token, say).
 	known := e.Secrets.Redact(in.Text) != in.Text
+	if app, _ := chatToken(in.Text); app != nil {
+		known = true
+	}
 	if !known && !secrets.LooksLikeSecret(in.Text) && !openRouterKeyRe.MatchString(in.Text) {
 		return false, nil
 	}
@@ -91,7 +104,7 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 // scrub deletes a message containing a secret, best effort (Discord won't
 // let bots delete user messages in DMs).
 func (e *Engine) scrub(ctx context.Context, in channel.Incoming) {
-	if ch := e.channels[in.Channel]; ch != nil && in.MessageID != "" {
+	if ch := e.channelFor(in.Channel); ch != nil && in.MessageID != "" {
 		if err := ch.Delete(ctx, in.ChatID, in.MessageID); err != nil {
 			e.Log.Debug("couldn't delete secret message", "err", err)
 		}

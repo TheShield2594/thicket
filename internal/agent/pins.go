@@ -290,7 +290,7 @@ func (e *Engine) removeMessage(ctx context.Context, chatRef string, m *store.Mes
 		return err
 	}
 	name, chatID := splitRef(chatRef)
-	if ch := e.channels[name]; ch != nil {
+	if ch := e.channelFor(name); ch != nil {
 		for _, ref := range refs {
 			if err := ch.Delete(ctx, chatID, ref); err != nil {
 				e.Log.Debug("delete message in chat", "chat", chatRef, "err", err)

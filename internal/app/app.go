@@ -46,7 +46,12 @@ type Options struct {
 	KeyCheck func(ctx context.Context, key string) error
 	// Channels builds the chat adapters with Thicket's (redacting) logger.
 	Channels func(log *slog.Logger) []channel.Channel
-	LogOut   io.Writer
+	// NewChannel builds the adapter for a chat app ("discord", "telegram")
+	// from its bot token; nil for an app it doesn't know. With it set,
+	// Thicket starts the apps it has tokens for, and can connect one while
+	// it runs (a token sent in chat).
+	NewChannel func(name, token string, log *slog.Logger) channel.Channel
+	LogOut     io.Writer
 	// NoHTTP skips the HTTP server.
 	NoHTTP bool
 }
@@ -70,12 +75,37 @@ type App struct {
 	Dashboard *dashboard.Dashboard
 	HTTP      *http.Server
 	Web       *web.Adapter
-	channels  []channel.Channel
+
+	newChannel func(name, token string, log *slog.Logger) channel.Channel
+	connectMu  sync.Mutex // one chat app connects at a time
 
 	mu        sync.Mutex
 	startErrs []string
 	// backupErr is why the last scheduled backup failed ("" if it worked).
 	backupErr string
+	channels  []channel.Channel    // chat adapters, the web app included
+	live      map[string]*liveChan // the running ones, by name
+	startTok  map[string]string    // tokens of the apps built at startup
+	runCtx    context.Context      // set by Run
+	stopping  bool
+	wg        sync.WaitGroup
+}
+
+// goRun runs a background task that Run waits for. A crash is reported,
+// not fatal.
+func (a *App) goRun(name string, f func()) {
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		defer func() {
+			if p := recover(); p != nil {
+				a.Log.Error("background task crashed", "task", name, "panic", p)
+				a.Engine.Notify(context.Background(), "crash:"+name, time.Hour, "error",
+					fmt.Sprintf("Part of me (%s) crashed: %v. Restarting Thicket should fix it; the logs have details.", name, p))
+			}
+		}()
+		f()
+	}()
 }
 
 func (a *App) startErr(msg string) {
@@ -101,7 +131,8 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		out = os.Stdout
 	}
 	log := NewLogger(cfg.LogLevel, out, red)
-	a := &App{Cfg: cfg, Version: version, Log: log}
+	a := &App{Cfg: cfg, Version: version, Log: log, newChannel: opts.NewChannel,
+		live: map[string]*liveChan{}, startTok: map[string]string{}}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
@@ -138,6 +169,17 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	cfg.TelegramToken = a.storedToken(ctx, secrets.TelegramToken, cfg.TelegramToken)
 	if opts.Channels != nil {
 		a.channels = opts.Channels(log)
+	}
+	if opts.NewChannel != nil {
+		for _, t := range []struct{ name, token string }{{"discord", cfg.DiscordToken}, {"telegram", cfg.TelegramToken}} {
+			if t.token == "" {
+				continue
+			}
+			if ch := opts.NewChannel(t.name, t.token, log); ch != nil {
+				a.channels = append(a.channels, ch)
+				a.startTok[t.name] = t.token
+			}
+		}
 	}
 	a.Settings = settings.New(db, cfg)
 
@@ -176,6 +218,9 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	}
 
 	a.Engine = &agent.Engine{Cfg: cfg, DB: db, Chars: a.Chars, Settings: a.Settings, Secrets: sec, Log: log, KeyCheck: keyCheck}
+	if opts.NewChannel != nil {
+		a.Engine.ConnectChat = a.ConnectChat
+	}
 	router := &llm.Router{
 		Client:   base,
 		Primary:  func(ctx context.Context) string { return a.Settings.String(ctx, "model") },
@@ -365,7 +410,7 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 	} else {
 		out["database"] = server.Check{OK: true}
 	}
-	for _, ch := range a.channels {
+	for _, ch := range a.chanList() {
 		if ch == channel.Channel(a.Web) {
 			continue // the web app is up whenever /health answers
 		}
@@ -406,7 +451,7 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 
 func (a *App) webStatus(ctx context.Context, admin bool) web.Status {
 	st := web.Status{Channels: map[string]bool{}, ModelKey: a.Engine.ModelReady(ctx)}
-	for _, ch := range a.channels {
+	for _, ch := range a.chanList() {
 		st.Channels[ch.Name()] = ch.Connected()
 	}
 	if admin {
@@ -432,31 +477,28 @@ func (a *App) Run(parent context.Context) error {
 	// cut short (reported once the chat apps are up).
 	interrupted := a.Engine.RecoverInterrupted(ctx)
 	a.Scheduler.RecoverStale(ctx)
-	var wg sync.WaitGroup
-	errc := make(chan error, len(a.channels)+1)
+	startChans := a.chanList()
+	errc := make(chan error, len(startChans)+1)
 	mcpDone := make(chan struct{})
-	goRun := func(name string, f func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				if p := recover(); p != nil {
-					a.Log.Error("background task crashed", "task", name, "panic", p)
-					a.Engine.Notify(context.Background(), "crash:"+name, time.Hour, "error",
-						fmt.Sprintf("Part of me (%s) crashed: %v. Restarting Thicket should fix it; the logs have details.", name, p))
-				}
-			}()
-			f()
-		}()
-	}
+	goRun := a.goRun
+	a.mu.Lock()
+	a.runCtx = ctx
+	a.mu.Unlock()
 
-	for _, ch := range a.channels {
-		ch := ch
-		goRun("channel "+ch.Name(), func() {
-			if err := ch.Run(ctx, a.Engine.HandleIncoming); err != nil && ctx.Err() == nil {
-				errc <- fmt.Errorf("%s: %w", ch.Name(), err)
+	// A chat app that fails at startup stops Thicket (the container
+	// restarts and the logs say why).
+	for _, ch := range startChans {
+		lc, err := a.launch(ch, a.startTok[ch.Name()], true, func(lc *liveChan) {
+			if lc.err != nil && ctx.Err() == nil && lc.kept.Load() {
+				errc <- fmt.Errorf("%s: %w", lc.ch.Name(), lc.err)
 			}
 		})
+		if err != nil {
+			return err
+		}
+		a.mu.Lock()
+		a.live[ch.Name()] = lc
+		a.mu.Unlock()
 	}
 	if a.HTTP != nil {
 		goRun("http", func() {
@@ -500,12 +542,15 @@ func (a *App) Run(parent context.Context) error {
 		a.Log.Error("fatal", "err", err)
 	}
 	cancel()
+	a.mu.Lock()
+	a.stopping = true // nothing new starts once Run is waiting
+	a.mu.Unlock()
 	if a.HTTP != nil {
 		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = a.HTTP.Shutdown(sctx)
 		scancel()
 	}
-	wg.Wait()
+	a.wg.Wait()
 	a.Engine.WaitTasks()
 	return err
 }
@@ -516,7 +561,7 @@ func (a *App) reportStartup(ctx context.Context, mcpDone <-chan struct{}, interr
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		ok := true
-		for _, ch := range a.channels {
+		for _, ch := range a.chanList() {
 			ok = ok && ch.Connected()
 		}
 		if ok {

@@ -78,7 +78,7 @@ func (e *Engine) toolLinkAccount(ctx context.Context, t *turn, _ json.RawMessage
 	e.linkMu.Unlock()
 
 	var apps []string
-	for name := range e.channels {
+	for name := range e.Channels() {
 		if name == "discord" || name == "telegram" {
 			apps = append(apps, strings.ToUpper(name[:1])+name[1:])
 		}
@@ -86,7 +86,7 @@ func (e *Engine) toolLinkAccount(ctx context.Context, t *turn, _ json.RawMessage
 	sort.Strings(apps)
 	msg := fmt.Sprintf("🔑 Your link code: `%s`\nSend it to me in a private chat on the other app (%s) within 15 minutes, and that account joins this profile: same sprigs, same memories. "+
 		"Don't share it: whoever sends it becomes you.", code, strings.Join(apps, " or "))
-	ch := e.channels[t.user.Channel]
+	ch := e.channelFor(t.user.Channel)
 	if ch == nil {
 		return "", fmt.Errorf("no channel %q", t.user.Channel)
 	}

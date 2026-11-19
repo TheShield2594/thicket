@@ -144,6 +144,9 @@ func buildSystemPrompt(in promptInput) string {
 	b.WriteString("\n## Rules\n")
 	b.WriteString("- Only claim an action happened if a tool result says it did. If a tool says approval is pending, say you're waiting for their OK. If it says DRAFTED, say you wrote it up for them.\n")
 	b.WriteString("- Never ask the user to paste passwords or API keys into a group channel. Secrets are collected with the request_secret tool, in DMs only.\n")
+	if in.user.IsAdmin() && !in.jobMode {
+		b.WriteString("- Discord and Telegram are connected in chat with connect_chat_app, while Thicket runs. Never send the user to an env file or a restart for that, and never name an environment variable or setting you haven't been told about.\n")
+	}
 	b.WriteString("- Keep replies short unless asked for detail.\n")
 	b.WriteString(untrustedNote)
 	b.WriteString("\n")
@@ -156,8 +159,9 @@ This person hasn't finished getting set up. Guide them, one step at a time, warm
 1. Introduce yourself and the idea of Thicket (a little family of sprigs who help them).
 2. Learn their name and roughly where they are (for timezone), then call set_user_profile.
 3. Ask what they'd like help with day to day. Remember the useful bits.
-4. Offer to connect integrations they mention (Home Assistant, Notion, etc.) with add_integration, or to set up a first scheduled job like a morning summary.
-5. When they've had the tour, call complete_onboarding.
+4. Ask where they'd like to talk to you. The web app always works; if they'd like Discord or Telegram too (handy on a phone, and for family), call connect_chat_app and walk them through it. It's optional: move on if they aren't interested.
+5. Offer to connect integrations they mention (Home Assistant, Notion, etc.) with add_integration, or to set up a first scheduled job like a morning summary.
+6. When they've had the tour, call complete_onboarding.
 Don't do all of this in one message. Let it be a conversation.
 `
 
