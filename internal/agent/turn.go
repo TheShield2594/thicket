@@ -33,6 +33,8 @@ type turn struct {
 	// the model with it, this turn only.
 	images []llm.Image
 	pdfs   []llm.File
+	// packages are sprig packages sent with the newest message.
+	packages map[string][]byte
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
 	annotations []json.RawMessage
 	// budgetChars overrides the history budget (after the model said its
@@ -52,6 +54,14 @@ type turn struct {
 	taskFrom        *character.Character // background task given by this sprig
 	afterReply      []post               // canned posts after the reply (approval prompts)
 	noTools         bool
+
+	// Taint (taint.go): the outside sources that entered this turn, and
+	// the person's own words for it.
+	taintedBy  []string
+	userText   string // the newest user message, as stored
+	request    string // set when the words come from another turn
+	requestSet bool
+	askedCache map[string]bool
 }
 
 type post struct {
@@ -241,6 +251,9 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 			}
 			content = content[:cut] + " […cut to fit]"
 		}
+		if origin && h.Role == "user" {
+			t.userText = h.Content
+		}
 		switch {
 		case h.Role == "user":
 			m := llm.Message{Role: "user", Content: content}
@@ -283,6 +296,12 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	if event != "" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] " + event})
+	}
+	if t.jobMode() && t.taskFrom == nil && (t.job.Kind == store.JobWebhook || t.job.Payload != "") {
+		t.addTaint("webhook or event: " + t.job.Name) // tainted from the start
+	}
+	for _, m := range msgs[1:] {
+		t.taintFrom(m.Content)
 	}
 	// Models need the conversation to end on a user turn.
 	if last := msgs[len(msgs)-1]; last.Role != "user" {
@@ -356,6 +375,7 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	// Tool output goes back to the model: no secret values in it.
 	out = e.Secrets.Redact(out)
 	if tool.Untrusted {
+		t.addTaint(tool.Label())
 		return wrapUntrusted(name, out)
 	}
 	return out

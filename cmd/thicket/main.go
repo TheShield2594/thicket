@@ -55,6 +55,11 @@ Usage:
                                       bring in a character: a Thicket file, a character card
                                       (.json/.png), an OpenClaw workspace, a Hermes Agent home,
                                       or a Grok persona / instruction file (shown before it's written)
+  thicket export-sprig ID [-o FILE] [--skill ID]...
+                                      one shareable file for a sprig: character, routines, skills it
+                                      uses, avatar and voice tests (never memories or secrets)
+  thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--yes]
+                                      add a sprig from a package (shown first; tools start at draft)
   thicket web link [--user ID] [--ttl 24h]
                                       print a one-time sign-in link for the web app
                                       (default: the owner; on a fresh install it makes you the owner)
@@ -133,6 +138,10 @@ func main() {
 		err = restore(args)
 	case "character", "characters":
 		err = characterCmd(args)
+	case "export-sprig":
+		err = exportSprigCmd(loadConfig(), args, os.Stdout)
+	case "import-sprig":
+		err = importSprigCmd(loadConfig(), args, os.Stdin, os.Stdout)
 	case "memory":
 		err = memoryCmd(args)
 	case "skill", "skills":

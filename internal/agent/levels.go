@@ -60,6 +60,8 @@ func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *To
 // run now; otherwise msg is what the model is told instead.
 func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok bool) {
 	switch lv := e.toolLevel(ctx, t.char, tool); {
+	case lv == store.LevelAct && e.holdTainted(ctx, t, tool, args):
+		return e.holdAction(ctx, t, tool, args), false
 	case lv == store.LevelAct:
 		return "", true
 	case lv == store.LevelAsk:

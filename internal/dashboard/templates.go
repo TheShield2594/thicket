@@ -75,7 +75,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 </section>
 
 {{if not .User.IsKid}}<section id="changes"><h2>Changes</h2><p class="muted small">Permission changes and what sprigs put on the calendar{{if not .Admin}} for you{{end}}. Each can be undone.</p>
-<table>{{range .Changes}}<tr><td class="small muted" style="white-space:nowrap">{{.At}}</td><td>{{if .Sprig}}<span class="tag">{{.Sprig}}</span>{{end}}<span class="tag{{if eq .Kind "safety"}} bad{{end}}">{{.Kind}}</span></td><td>{{.Summary}}{{if .Detail}} <span class="muted small">{{.Detail}}</span>{{end}}</td>
+<table>{{range .Changes}}<tr><td class="small muted" style="white-space:nowrap">{{.At}}</td><td>{{if .Sprig}}<span class="tag">{{.Sprig}}</span>{{end}}<span class="tag{{if or (eq .Kind "safety") (eq .Kind "held")}} bad{{end}}">{{.Kind}}</span></td><td>{{.Summary}}{{if .Detail}} <span class="muted small">{{.Detail}}</span>{{end}}</td>
 <td>{{if .Undoable}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="trail"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="undo">Undo</button></form>{{else if .Undone}}<span class="muted small">undone</span>{{end}}</td></tr>{{else}}<tr><td class="muted">No changes yet.</td></tr>{{end}}</table></section>{{end}}
 
 <section id="trail"><h2>Trail</h2><p class="muted small">What sprigs did{{if not .Admin}} for you{{end}}, newest first.</p>

@@ -272,3 +272,8 @@ func (s *Store) JobRunsBetween(ctx context.Context, userID int64, from, to time.
 	}
 	return out, rows.Err()
 }
+
+// CharacterJobs lists one sprig's jobs, for every user.
+func (s *Store) CharacterJobs(ctx context.Context, character string) ([]Job, error) {
+	return s.listJobs(ctx, "SELECT "+jobCols+" FROM jobs WHERE character = ? ORDER BY id", character)
+}

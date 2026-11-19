@@ -339,7 +339,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, userMsgID: msgID}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, packages: media.packages, userMsgID: msgID}
 	if user.IsKid() {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
@@ -420,6 +420,8 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 			_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", note)
 		}
 		next := &turn{user: t.user, char: target, chatRef: t.chatRef, conv: t.conv, isDM: t.isDM, depth: t.depth + 1, query: h.message + " " + t.query}
+		next.inherit(t)
+		next.addTaint("sprig " + t.char.ID) // the handoff note is a sprig's words
 		return e.respond(ctx, next, fmt.Sprintf("%s just handed this to you: %q. Pick it up and reply to the user directly.", t.char.DisplayName(), h.message))
 	}
 	return nil

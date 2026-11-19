@@ -364,10 +364,12 @@ and snapshots before any schema migration. Memory reviews can be undone
 one by one: `thicket memory runs`, then `thicket memory rollback RUN_ID`
 (or ask Juni).
 
-Share a sprig with `thicket character export pip` and add someone else's
-with `thicket character import pip.md`. Memories never travel with an
-exported sprig. Imported sprigs lose integration and admin access until you
-grant it.
+Share a sprig with `thicket export-sprig pip`: one `pip.sprig` file with
+its character, routines, the skills it uses, avatar and voice tests. Add
+someone else's with `thicket import-sprig pip.sprig`, or send the file to
+Juni in chat. Memories, secrets and chats never travel with a sprig;
+imported sprigs start at draft and lose integration and admin access until
+you grant it. See [Sharing a sprig](docs/characters.md#sharing-a-sprig).
 
 Coming from another app? `thicket character import` also reads character
 cards (`.json` or `.png`), an OpenClaw workspace, a Hermes Agent home, and

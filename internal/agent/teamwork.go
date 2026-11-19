@@ -79,6 +79,8 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 	// (approvals it raises go out with this reply, or by DM in a job).
 	sub := &turn{user: t.user, char: target, chatRef: t.chatRef, isDM: t.isDM,
 		consult: &consult{from: t.char, question: q}, query: q, depth: t.depth}
+	sub.inherit(t)
+	sub.addTaint("sprig " + t.char.ID) // the question is a sprig's words
 	sctx := llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
 	answer, err := e.runTurn(sctx, sub, "")
 	// Approval prompts the asked sprig raised go out with this reply.
@@ -92,9 +94,10 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 	}
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", fmt.Sprintf("%s asked %s: %s\n%s answered: %s",
-			t.char.DisplayName(), target.DisplayName(), q, target.DisplayName(), truncate(answer, 2000)))
+			t.char.DisplayName(), target.DisplayName(), q, target.DisplayName(), wrapUntrusted("sprig "+target.ID, truncate(answer, 2000))))
 	}
 	e.logActivity(ctx, "info", "sprig", t.char.ID, t.user.ID, fmt.Sprintf("%s asked %s a question", t.char.DisplayName(), target.DisplayName()), q)
+	t.addTaint("sprig " + target.ID)
 	return fmt.Sprintf("%s answered (pass on what matters, in your own words):\n%s", target.DisplayName(), wrapUntrusted("sprig "+target.ID, answer)), nil
 }
 
@@ -157,6 +160,11 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 		e.taskMu.Unlock()
 		return "", fmt.Errorf("couldn't record the task: %w", err)
 	}
+	// The task carries this turn's taint and the person's words; the task
+	// itself is a sprig's words.
+	origin := &turn{}
+	origin.inherit(t)
+	origin.addTaint("sprig " + from.ID)
 	e.tasks.Add(1)
 	go func() {
 		defer e.tasks.Done()
@@ -165,7 +173,7 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 			e.taskUse[t.user.ID]--
 			e.taskMu.Unlock()
 		}()
-		e.runTask(context.WithoutCancel(ctx), taskID, t.user, from, target, task, name)
+		e.runTask(context.WithoutCancel(ctx), taskID, t.user, from, target, task, name, origin)
 	}()
 	e.logActivity(ctx, "info", "sprig", from.ID, t.user.ID, fmt.Sprintf("%s gave %s a background task", from.DisplayName(), target.DisplayName()), task)
 	who := target.DisplayName() + " is"
@@ -183,7 +191,7 @@ func (e *Engine) SetLifetime(ctx context.Context) {
 }
 
 // runTask does delegated work like a one-off job and delivers the result.
-func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, from, target *character.Character, task, name string) {
+func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, from, target *character.Character, task, name string, origin *turn) {
 	e.lifeMu.Lock()
 	life := e.lifetime
 	e.lifeMu.Unlock()
@@ -199,6 +207,9 @@ func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, fr
 	defer cancel()
 	job := &store.Job{UserID: user.ID, Character: target.ID, Name: name, Prompt: task, Kind: "task"}
 	t := &turn{user: user, char: target, job: job, query: task, taskFrom: from}
+	if origin != nil {
+		t.inherit(origin)
+	}
 	out, err := e.runTurn(llm.WithMeta(ctx, llm.Meta{UserID: user.ID, Character: target.ID, Purpose: "task"}), t, "")
 	bg := context.WithoutCancel(ctx)
 	ref := fmt.Sprintf("task:%d", taskID)
