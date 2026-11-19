@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -60,8 +61,18 @@ func TestWeeklyDigest(t *testing.T) {
 	if _, err := a.DB.DB().ExecContext(ctx, "DELETE FROM usage"); err != nil {
 		t.Fatal(err)
 	}
-	for sprig, usd := range map[string]float64{"juniper": 0.10, "hal": 0.20, "ledger": 0.40, "wren": 0.80, "bramble": 0.05} {
-		if err := a.DB.RecordUsage(ctx, store.Usage{Character: sprig, Purpose: "chat", Model: "fake", CostUSD: usd}); err != nil {
+	// Family sprigs' spend is split between the owner, Kim and nobody in
+	// particular (a household job): Juni $0.10 in all, Hal $0.30.
+	for _, u := range []struct {
+		sprig string
+		user  int64
+		usd   float64
+	}{
+		{"juniper", h.owner.ID, 0.06}, {"juniper", h.kim.ID, 0.04},
+		{"hal", h.owner.ID, 0.05}, {"hal", h.kim.ID, 0.15}, {"hal", 0, 0.10},
+		{"ledger", h.owner.ID, 0.40}, {"wren", h.kim.ID, 0.80}, {"bramble", h.kid.ID, 0.05},
+	} {
+		if err := a.DB.RecordUsage(ctx, store.Usage{UserID: u.user, Character: u.sprig, Purpose: "chat", Model: "fake", CostUSD: u.usd}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,10 +173,10 @@ func TestWeeklyDigest(t *testing.T) {
 	}
 	for _, want := range []string{
 		"**Juni** · $0.10, no cap of its own", "2 job runs (1 failed)", "Needs you: approve send_email",
-		"**Hal** · $0.20 of $7.00 cap ($1.00 a day)", "Changed: put Bins night on the calendar",
+		"**Hal** · $0.30 of a $7.00 week (7 × $1.00 daily cap)", "Changed: put Bins night on the calendar",
 		"**Ledger** (yours) · $0.40", "Needs you: Ledger drafted: pay the LEDGERSECRET bill", "Changed: put LEDGERSECRET on the calendar",
 		"**Bramble** (for Max) · $0.05", "replies to Max", "1 safety alert",
-		"Total: $0.75 for these sprigs this week.", "/dashboard",
+		"Total: $0.85 for these sprigs this week.", "/dashboard",
 	} {
 		if !strings.Contains(mine, want) {
 			t.Errorf("owner's digest lacks %q:\n%s", want, mine)
@@ -192,8 +203,8 @@ func TestWeeklyDigest(t *testing.T) {
 		t.Fatalf("only Kim's digest is due: %+v", out)
 	}
 	for _, want := range []string{
-		"**Juni** · $0.10", "**Hal** · $0.20 of $7.00 cap", "1 job run", "Needs you: Job “Lights check” failed",
-		"**Wren** (yours) · $0.80", "WRENSECRET", "Total: $1.10 for these sprigs this week.",
+		"**Juni** · your share $0.04", "**Hal** · your share $0.15", "1 job run", "Needs you: Job “Lights check” failed",
+		"**Wren** (yours) · $0.80", "WRENSECRET", "Total: $0.99 this week, with your share of the family sprigs.",
 	} {
 		if !strings.Contains(hers, want) {
 			t.Errorf("Kim's digest lacks %q:\n%s", want, hers)
@@ -201,10 +212,18 @@ func TestWeeklyDigest(t *testing.T) {
 	}
 	// Not the owner's private sprig, not the kid sprig (she isn't its
 	// parent), not the owner's own items, nor the owner's change to a
-	// family sprig (she isn't an admin).
-	for _, never := range []string{"Ledger", "LEDGERSECRET", "$0.40", "Bramble", "Max", "send_email", "Bins night", "Morning news"} {
+	// family sprig (she isn't an admin). She isn't an admin, so no family
+	// sprig's total, nor its cap, nor anything to work them out from: the
+	// only amounts are her shares, her own sprig and their sum.
+	for _, never := range []string{"Ledger", "LEDGERSECRET", "$0.40", "Bramble", "Max", "send_email", "Bins night", "Morning news",
+		"$0.10", "$0.30", "$0.06", "$0.05", "$7.00", "$1.00", "daily cap", "week (7"} {
 		if strings.Contains(hers, never) {
 			t.Errorf("Kim's digest shows %q:\n%s", never, hers)
+		}
+	}
+	for _, amount := range regexp.MustCompile(`\$[0-9.]+`).FindAllString(hers, -1) {
+		if amount != "$0.04" && amount != "$0.15" && amount != "$0.80" && amount != "$0.99" {
+			t.Errorf("Kim's digest shows the amount %s, which isn't hers:\n%s", amount, hers)
 		}
 	}
 

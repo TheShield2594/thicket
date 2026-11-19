@@ -405,6 +405,25 @@ async function showAccount() {
   }, nameL, tzL, h('datalist', { id: 'tz-list' }, zones.map((z) => h('option', { value: z }))),
   !me.timezone && here && h('small.hint', {}, 'This device is on ', h('button.linkish', { type: 'button', onclick: () => { tzI.value = here; } }, here), '.'),
   pErr, pBtn);
+  // The weekly digest (adults): how they want it. The day and time are
+  // household settings.
+  let digest = null;
+  if (me.role !== 'kid') {
+    try {
+      const d = await api('/api/digest');
+      const labels = { always: 'Every week (one line in a quiet week)', skip_empty: 'Only weeks with something in it', off: 'Off' };
+      const sel = h('select.field', {
+        'aria-label': 'Weekly digest',
+        onchange: async () => {
+          try { await api('/api/digest', { method: 'PUT', body: { mode: sel.value } }); d.mode = sel.value; toast('Saved.'); }
+          catch (e) { toast('Couldn’t save it: ' + e.message); sel.value = d.mode; }
+        },
+      }, d.modes.map((m) => h('option', { value: m, selected: m === d.mode }, labels[m] || m)));
+      const when = !d.day || d.day === 'off' ? 'The household has the digest switched off.'
+        : `It comes ${d.day[0].toUpperCase() + d.day.slice(1)}s at ${d.time}, your time: what each sprig did, what needs you, what it cost.`;
+      digest = [h('h3', {}, 'Weekly digest'), h('label.field-label', {}, h('span', {}, 'Send it'), sel), h('p.muted', {}, when)];
+    } catch { /* not available: leave it out */ }
+  }
   const rows = acct.sessions.map((s) => h('li.session', {},
     h('div', {}, h('b', {}, s.device), s.current && h('span.tag', {}, 'this one'),
       h('small', {}, `${{ link: 'sign-in link', password: 'password', oidc: 'single sign-on', invite: 'invite' }[s.method] || s.method} · active ${relTime(s.last_seen)}`)),
@@ -418,6 +437,7 @@ async function showAccount() {
     h('div.sheet-card', {},
       h('div.sheet-head', {}, h('h2', {}, 'Your account'), h('button.icon-btn', { 'aria-label': 'Close', onclick: close }, icon('x'))),
       profile,
+      digest,
       h('h3', {}, 'Signing in'),
       acct.username ? h('p.muted', {}, 'Username: ', h('b', {}, acct.username)) : h('p.muted', {}, 'Set a username and password to sign in without a link.'),
       acct.oidc && h('p.muted', {}, 'You can also sign in with single sign-on.'),

@@ -32,6 +32,13 @@ import (
 // family sprig are the person's own unless they are an admin, as on the
 // dashboard. Kids get no digest.
 //
+// Costs follow the dashboard, where only admins see what a sprig costs
+// in all: an admin sees a family sprig's whole week against its cap;
+// anyone else sees only their own share of it (the spend recorded for
+// them), never the family total or the cap it is measured against. The
+// owner of a solo sprig and the parents of a kid sprig see its whole
+// cost. The total is the sum of what the person was shown.
+//
 // It is proactive (it reaches people where set_reach says, waits out the
 // host's quiet hours, and nothing goes out while Thicket or the host is
 // paused) but exempt from the daily budget: it never waits for it and
@@ -52,8 +59,18 @@ type Digest struct {
 	// Other is open inbox items and approvals of the person's that belong
 	// to no sprig in the digest.
 	Other []string
-	// TotalUSD is what the sprigs listed cost this week, together.
+	// TotalUSD is the sum of the sprigs' CostUSD: what the person is shown.
 	TotalUSD float64
+}
+
+// Shares reports whether any sprig's cost is only the person's share.
+func (d *Digest) Shares() bool {
+	for _, s := range d.Sprigs {
+		if s.Share {
+			return true
+		}
+	}
+	return false
 }
 
 // DigestSprig is one sprig's week, as one person may see it.
@@ -61,15 +78,19 @@ type DigestSprig struct {
 	ID, Name string
 	Tier     string
 	// For names whose sprig it is ("yours", or the kids it talks to).
-	For      string
-	Runs     int // job runs that started this week (the person's jobs)
-	Failed   int // of them, failed
-	Replies  int // replies it wrote to the person (to the kids, for a kid sprig)
-	Changes  []string
-	Safety   int      // safety alerts (kid sprigs)
-	Waiting  []string // open inbox items and approvals
+	For     string
+	Runs    int // job runs that started this week (the person's jobs)
+	Failed  int // of them, failed
+	Replies int // replies it wrote to the person (to the kids, for a kid sprig)
+	Changes []string
+	Safety  int      // safety alerts (kid sprigs)
+	Waiting []string // open inbox items and approvals
+	// CostUSD is its whole week's spend, or, when Share is set (a family
+	// sprig, for someone who isn't an admin), only what was spent for
+	// the person. A share comes with no cap.
 	CostUSD  float64
-	WeekCap  float64 // its daily cap × 7; 0 = no cap of its own
+	Share    bool
+	WeekCap  float64 // its daily cap × 7 (there is no weekly cap setting); 0 = no cap of its own
 	DailyCap float64
 }
 
@@ -125,9 +146,17 @@ func (e *Engine) BuildDigest(ctx context.Context, u *store.User, from, to time.T
 		case character.TierKid:
 			s.For = "for " + e.kidNames(ctx, c.Kids)
 		}
-		lim := e.Settings.Float(ctx, "budget.character."+c.ID+".daily_usd")
-		s.DailyCap, s.WeekCap = lim, 7*lim
-		cost, err := e.DB.SpendBetween(ctx, c.ID, from, to)
+		var cost float64
+		var err error
+		if c.Tier() == character.TierFamily && !u.IsAdmin() {
+			// Only their share, as the dashboard shows costs to admins only.
+			s.Share = true
+			cost, err = e.DB.UserSpendBetween(ctx, c.ID, u.ID, from, to)
+		} else {
+			lim := e.Settings.Float(ctx, "budget.character."+c.ID+".daily_usd")
+			s.DailyCap, s.WeekCap = lim, 7*lim
+			cost, err = e.DB.SpendBetween(ctx, c.ID, from, to)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("spend for %s: %w", c.ID, err)
 		}
@@ -278,11 +307,13 @@ func (d *Digest) Text(link string) string {
 		if s.For != "" {
 			b.WriteString(" (" + s.For + ")")
 		}
-		b.WriteString(" · " + money(s.CostUSD))
-		if s.WeekCap > 0 {
-			b.WriteString(fmt.Sprintf(" of %s cap (%s a day)", money(s.WeekCap), money(s.DailyCap)))
-		} else {
-			b.WriteString(", no cap of its own")
+		switch {
+		case s.Share:
+			b.WriteString(" · your share " + money(s.CostUSD))
+		case s.WeekCap > 0:
+			b.WriteString(fmt.Sprintf(" · %s of a %s week (7 × %s daily cap)", money(s.CostUSD), money(s.WeekCap), money(s.DailyCap)))
+		default:
+			b.WriteString(" · " + money(s.CostUSD) + ", no cap of its own")
 		}
 		b.WriteString("\n")
 		var did []string
@@ -316,7 +347,11 @@ func (d *Digest) Text(link string) string {
 	if len(d.Other) > 0 {
 		b.WriteString("\nAlso waiting on you: " + digestList(d.Other) + "\n")
 	}
-	b.WriteString("\nTotal: " + money(d.TotalUSD) + " for these sprigs this week.")
+	if d.Shares() {
+		b.WriteString("\nTotal: " + money(d.TotalUSD) + " this week, with your share of the family sprigs.")
+	} else {
+		b.WriteString("\nTotal: " + money(d.TotalUSD) + " for these sprigs this week.")
+	}
 	b.WriteString(more)
 	return b.String()
 }
@@ -371,6 +406,32 @@ func (e *Engine) digestSchedule(ctx context.Context) (day time.Weekday, minute i
 		h, m, _ = settings.Clock(e.Settings.Default("digest.time"))
 	}
 	return day, h*60 + m, true
+}
+
+// DigestSchedule is the household's digest day ("sunday") and time
+// ("18:00"), or "off" and "" when it's off. For the API and the web app.
+func (e *Engine) DigestSchedule(ctx context.Context) (day, at string) {
+	d, minute, on := e.digestSchedule(ctx)
+	if !on {
+		return "off", ""
+	}
+	return strings.ToLower(d.String()), fmt.Sprintf("%02d:%02d", minute/60, minute%60)
+}
+
+// SetDigestModeFor stores how u wants the weekly digest, as the
+// weekly_digest tool does, outside chat (the API and the web app).
+func (e *Engine) SetDigestModeFor(ctx context.Context, u *store.User, mode string) error {
+	if u.IsKid() {
+		return fmt.Errorf("the weekly digest is for adults")
+	}
+	if !store.ValidDigestMode(mode) {
+		return fmt.Errorf("mode is always, skip_empty or off, not %q", mode)
+	}
+	if err := e.DB.SetDigestMode(ctx, u.ID, mode); err != nil {
+		return err
+	}
+	e.logActivity(ctx, "info", "system", "", u.ID, "weekly digest: "+mode, "")
+	return nil
 }
 
 // lastDigestTime is the latest digest time at or before now, in loc.

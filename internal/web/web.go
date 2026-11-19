@@ -96,6 +96,9 @@ type Adapter struct {
 	PingEvery time.Duration
 	// Memories serves the memory screen (the engine).
 	Memories MemoryKeeper
+	// Digest is the weekly digest's schedule and each person's choice of
+	// it (the engine).
+	Digest DigestPrefs
 
 	onDelete func(ctx context.Context, d channel.Deletion)
 
@@ -334,6 +337,8 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("POST /api/account/password", a.auth(a.changePassword))
 	mux.HandleFunc("POST /api/account/profile", a.auth(a.saveProfile))
 	mux.HandleFunc("DELETE /api/account/sessions/{id}", a.auth(a.revokeSession))
+	mux.HandleFunc("GET /api/digest", a.auth(a.getDigest))
+	mux.HandleFunc("PUT /api/digest", a.auth(a.setDigest))
 	mux.HandleFunc("GET /api/settings", a.auth(a.adminOnly(a.getSettings)))
 	mux.HandleFunc("POST /api/settings", a.auth(a.adminOnly(a.setSetting)))
 	mux.HandleFunc("GET /api/integrations", a.auth(a.adminOnly(a.getIntegrations)))

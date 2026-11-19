@@ -66,13 +66,20 @@ stated.
   adult's own timezone by default (`digest.day`, `digest.time`; `off`
   stops it), Juni sends each adult one short message: per sprig, what it
   did (job runs, replies, changes from the trail), what's waiting on them
-  (open inbox items and approvals) and what it cost that week against its
-  cap, with a total and a dashboard link. Each adult sees their own solo
-  sprigs and the family sprigs, parents also their kid sprigs, and nobody
-  another adult's solo sprig. Built in code from the database, never by
-  a model; it respects quiet hours and pauses but not the daily budget.
-  A quiet week sends one line, or nothing for whoever asks Juni for that
-  (new `weekly_digest` tool, which also shows the digest on request).
+  (open inbox items and approvals) and what it cost that week, with a
+  total and a dashboard link. Each adult sees their own solo sprigs and
+  the family sprigs, parents also their kid sprigs, and nobody another
+  adult's solo sprig. Costs follow the dashboard: admins see a family
+  sprig's whole week against its week (labelled "7 × daily cap": there
+  is no weekly cap setting), everyone else only their own share of it;
+  solo sprigs' owners and kid sprigs' parents see the whole cost, and
+  the total is the sum of what each person is shown. Built in code from
+  the database, never by a model; it waits out quiet hours (sent once
+  they end, within a day) and pauses but not the daily budget. A quiet
+  week sends one line, or nothing for whoever asks for that: tell Juni
+  (new `weekly_digest` tool, which also shows the digest on request),
+  pick it under **Weekly digest** in your web app account, or
+  `GET`/`PUT /api/v2/digest`; each person sets only their own.
   Migration 0026 keeps each person's choice. See
   [The weekly digest](docs/household.md#the-weekly-digest).
 - Relationship memory, apart from facts: how things are going between

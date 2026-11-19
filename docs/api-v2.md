@@ -40,6 +40,18 @@ Replies arrive on the event stream (or poll the history). Each sprig in
 `/me` has `speaks` (`never`, `when_spoken_to`, `always`) and `voice_mode`
 (`brief`, `full`, `off`).
 
+## The weekly digest
+
+The signed-in person's own choice of the [weekly digest](household.md#the-weekly-digest).
+Nobody reads or changes anyone else's; kids get a 403 (they get no digest).
+
+| | |
+|---|---|
+| `GET /api/v2/digest` | `{"mode": "always" \| "skip_empty" \| "off", "modes": [...], "day": "sunday" \| … \| "off", "time": "18:00", "timezone": "Europe/London"}`. `day` and `time` are the household's (`digest.day`, `digest.time`), in the person's own timezone; `day` `"off"` means the household has it switched off |
+| `PUT /api/v2/digest` | `{"mode": "skip_empty"}`: `always` (a quiet week gets one line), `skip_empty` (a quiet week sends nothing) or `off`. Returns the same as `GET` |
+
+The web app uses the same endpoints under `/api/`.
+
 ## Approvals and the trail
 
 | | |

@@ -69,6 +69,15 @@ func (s *Store) SpendBetween(ctx context.Context, character string, from, to tim
 	return v.Float64, err
 }
 
+// UserSpendBetween is the part of a sprig's model spend in [from, to)
+// recorded for one person (usage.user_id): their share of a family sprig.
+func (s *Store) UserSpendBetween(ctx context.Context, character string, userID int64, from, to time.Time) (float64, error) {
+	var v sql.NullFloat64
+	err := s.db.QueryRowContext(ctx, "SELECT SUM(cost_usd) FROM usage WHERE character = ? AND user_id = ? AND at >= ? AND at < ?",
+		character, userID, from.Unix(), to.Unix()).Scan(&v)
+	return v.Float64, err
+}
+
 // RepliesBetween counts the replies a sprig wrote in conversations of
 // the given people in [from, to).
 func (s *Store) RepliesBetween(ctx context.Context, character string, users []int64, from, to time.Time) (int, error) {

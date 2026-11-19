@@ -478,8 +478,12 @@ last day, waits out the host's quiet hours and pauses, claims
 `BuildDigest` gathered from `job_runs`, `trail`, `inbox`, `approvals`,
 `messages` and `usage`, through `sendToUser` (no `RecordProactive`). Who
 sees which sprig is `UsableBy` or `IsParent`, never `PrivateFrom`; the
-text is built in code. `digest_prefs` (migration 0026) holds each person's
-`always`, `skip_empty` or `off`.
+text is built in code. A family sprig's cost is `SpendBetween` for
+admins and `UserSpendBetween` (`usage.user_id`) for everyone else, as
+the dashboard shows costs to admins only. `digest_prefs` (migration 0026)
+holds each person's `always`, `skip_empty` or `off`, set by the
+`weekly_digest` tool or `GET`/`PUT /api/v2/digest` (and `/api/digest`
+for the web app; `internal/web/digest.go`).
 
 Before that gate, every proactive message passes the worth-saying gate
 (`internal/agent/worth.go`) once it's written: in `RunJob` for job and
