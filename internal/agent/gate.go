@@ -139,6 +139,13 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			e.logActivity(ctx, "warn", "initiative", char.ID, user.ID, fmt.Sprintf("dropped held %s: it was more than a day old; it's in the inbox", h.Title), "")
 			continue
 		}
+		// Paused since the check above: keep it for resume. (The pause and
+		// the send aren't one transaction; this narrows the window to the
+		// send itself.)
+		if e.paused(ctx, char.ID) != nil {
+			_ = e.DB.ReleaseHeld(ctx, h.ID)
+			continue
+		}
 		text := h.Text + "\n" + heldNote(h, user)
 		if err := e.sendProactive(ctx, user, char, text); err != nil {
 			e.Log.Error("deliver held message", "id", h.ID, "err", err)

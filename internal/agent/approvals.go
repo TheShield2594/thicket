@@ -162,8 +162,12 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 	if err := e.paused(ctx, t.char.ID); err != nil {
 		return "Error: " + err.Error() + ", so it wasn't run."
 	}
-	if msg := e.rateLimited(ctx, t, tool, false); msg != "" {
-		return msg
+	// A draft was admitted by RunDraft before it was claimed, so a limit
+	// can't leave it resolved but not done.
+	if !fromDraft {
+		if msg := e.rateLimited(ctx, t, tool, false); msg != "" {
+			return msg
+		}
 	}
 	if changes(tool) {
 		if lv := e.toolLevel(ctx, t.char, tool); lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
@@ -231,6 +235,10 @@ func (e *Engine) RunDraft(ctx context.Context, user *store.User, id int64) error
 	}
 	if err := e.paused(ctx, char.ID); err != nil {
 		return fmt.Errorf("%w: resume it first", err)
+	}
+	// Rate limits before the claim: a draft over a limit stays open.
+	if msg := e.rateLimited(ctx, t, tool, false); msg != "" {
+		return errors.New(strings.TrimPrefix(msg, "Error: "))
 	}
 	if err := e.DB.ResolveInbox(ctx, it.ID, user.ID); err != nil {
 		return errors.New("that draft was already dealt with")

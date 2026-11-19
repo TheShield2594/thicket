@@ -532,8 +532,9 @@ func (a *App) Run(parent context.Context) error {
 			}
 		})
 	}
-	a.ensureSandbox(ctx)
-	a.keepExecGrants(ctx)
+	if a.ensureSandbox(ctx) {
+		a.keepExecGrants(ctx) // else next start: the sandbox may not be marked exec yet
+	}
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {

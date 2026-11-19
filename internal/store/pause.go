@@ -78,3 +78,11 @@ func (s *Store) PausedFor(ctx context.Context, character string) (Pause, bool, e
 	p.PausedAt = time.Unix(at, 0)
 	return p, true, nil
 }
+
+// PausedExactly reports whether this scope itself is paused ("*", or one
+// sprig regardless of a pause of everything).
+func (s *Store) PausedExactly(ctx context.Context, scope string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pauses WHERE scope = ?", scope).Scan(&n)
+	return n > 0, err
+}

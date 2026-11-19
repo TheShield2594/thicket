@@ -5,6 +5,11 @@
 -- a shell server). Its tools are offered only to sprigs with exec on.
 ALTER TABLE mcp_servers ADD COLUMN exec INTEGER NOT NULL DEFAULT 0;
 
+-- The sandbox computer runs commands. Thicket creates this row itself
+-- (app/sandbox.go), and exec is a new column, so nobody can have turned
+-- it off yet.
+UPDATE mcp_servers SET exec = 1 WHERE name = 'sandbox';
+
 -- Per-sprig opt-in to exec-capable tools. No row means off.
 CREATE TABLE sprig_access (
     character  TEXT    PRIMARY KEY,

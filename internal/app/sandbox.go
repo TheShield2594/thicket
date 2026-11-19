@@ -27,13 +27,16 @@ const (
 
 // ensureSandbox shares a token with the sandbox (through a file both
 // containers mount) and keeps the integration's settings current.
-func (a *App) ensureSandbox(ctx context.Context) {
+// It reports whether the sandbox's settings are known to be current.
+func (a *App) ensureSandbox(ctx context.Context) bool {
 	if a.Cfg.SandboxURL == "" {
-		return
+		return true
 	}
 	if err := a.setUpSandbox(ctx); err != nil {
 		a.startErr("The sandbox computer isn't set up: " + shortErr(err))
+		return false
 	}
+	return true
 }
 
 func (a *App) sandboxTokenFile() string {

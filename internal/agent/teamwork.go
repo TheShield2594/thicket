@@ -81,8 +81,16 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 		consult: &consult{from: t.char, question: q}, query: q, depth: t.depth}
 	sub.inherit(t)
 	sub.addTaint("sprig " + t.char.ID) // the question is a sprig's words
-	sctx := llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
+	// The answer is the asked sprig's own work: tracked as its own, so
+	// pausing it cancels the answer. It still ends with the asking turn.
+	fctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("consult:%d", e.taskSeq.Add(1)), t.user.ID, target.DisplayName()+"'s answer")
+	flight.setChar(target.ID)
+	sctx := llm.WithMeta(fctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
 	answer, err := e.runTurn(sctx, sub, "")
+	done()
+	if flight.paused.Load() {
+		err = fmt.Errorf("%s was paused", target.DisplayName())
+	}
 	// Approval prompts the asked sprig raised go out with this reply.
 	t.afterReply = append(t.afterReply, sub.afterReply...)
 	t.done = append(t.done, sub.done...)

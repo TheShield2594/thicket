@@ -201,7 +201,12 @@ func (e *Engine) SetExec(ctx context.Context, by *store.User, c *character.Chara
 	if c.IsKid() && on {
 		return fmt.Errorf("%s is a kid sprig: it can never run commands", c.DisplayName())
 	}
-	prev := e.execAllowed(ctx, c)
+	// The stored value itself, read errors included: execAllowed's
+	// fail-closed "no" would make turning exec off a silent no-op.
+	prev, err := e.DB.ExecAllowed(ctx, c.ID)
+	if err != nil {
+		return fmt.Errorf("couldn't read %s's exec setting: %w", c.DisplayName(), err)
+	}
 	if prev == on {
 		return nil
 	}

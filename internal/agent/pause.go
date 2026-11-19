@@ -25,8 +25,9 @@ import (
 // ErrPaused is the error of anything refused because of a pause.
 var ErrPaused = errors.New("paused")
 
-// pausedError says what is paused.
-type pausedError struct{ msg string }
+// pausedError says what is paused; sprig is the paused sprig's id, or ""
+// for everything.
+type pausedError struct{ msg, sprig string }
 
 func (p *pausedError) Error() string { return p.msg }
 func (p *pausedError) Unwrap() error { return ErrPaused }
@@ -50,15 +51,15 @@ func (e *Engine) paused(ctx context.Context, charID string) error {
 	p, ok, err := e.DB.PausedFor(context.WithoutCancel(ctx), charID)
 	if err != nil {
 		e.Log.Error("check pause; treating as paused", "err", err)
-		return &pausedError{"Thicket couldn't check whether it's paused, so nothing runs until it can"}
+		return &pausedError{msg: "Thicket couldn't check whether it's paused, so nothing runs until it can"}
 	}
 	if !ok {
 		return nil
 	}
 	if p.Scope == store.PauseAll {
-		return &pausedError{"Thicket is paused"}
+		return &pausedError{msg: "Thicket is paused"}
 	}
-	return &pausedError{e.charName(p.Scope) + " is paused"}
+	return &pausedError{e.charName(p.Scope) + " is paused", p.Scope}
 }
 
 // Paused implements the budget guard's model-call check.
@@ -67,7 +68,12 @@ func (e *Engine) Paused(ctx context.Context, charID string) error { return e.pau
 // pausedReply is what a person is told when their message can't be
 // answered because of a pause.
 func pausedReply(err error) string {
-	return "⏸️ " + err.Error() + ", so nothing is running. It resumes with `thicket resume`, from the dashboard, or through the API."
+	cmd := "`thicket resume`"
+	var pe *pausedError
+	if errors.As(err, &pe) && pe.sprig != "" {
+		cmd = "`thicket resume --sprig " + pe.sprig + "`"
+	}
+	return "⏸️ " + err.Error() + ", so nothing is running. It resumes with " + cmd + ", from the dashboard, or through the API."
 }
 
 // mayPause checks who may pause or resume: everything, only the owner
@@ -105,7 +111,7 @@ func (e *Engine) pauseLabel(c *character.Character) string {
 // where it came from ("from the command line"), for the trail.
 func (e *Engine) Pause(ctx context.Context, by *store.User, sprig, how string) error {
 	ctx = context.WithoutCancel(ctx)
-	c, err := e.pauseTarget(by, sprig)
+	c, err := e.pauseTarget(ctx, by, sprig, "pause")
 	if err != nil {
 		return err
 	}
@@ -128,7 +134,7 @@ func (e *Engine) Pause(ctx context.Context, by *store.User, sprig, how string) e
 // pause of everything.
 func (e *Engine) Resume(ctx context.Context, by *store.User, sprig, how string) error {
 	ctx = context.WithoutCancel(ctx)
-	c, err := e.pauseTarget(by, sprig)
+	c, err := e.pauseTarget(ctx, by, sprig, "resume")
 	if err != nil {
 		return err
 	}
@@ -154,13 +160,15 @@ func pauseChar(c *character.Character) string {
 }
 
 // pauseTarget finds the sprig a pause is about ("" is everything).
-// Someone else's private sprig isn't found.
-func (e *Engine) pauseTarget(by *store.User, sprig string) (*character.Character, error) {
+// Someone else's private sprig isn't found, and the attempt is recorded
+// without naming it.
+func (e *Engine) pauseTarget(ctx context.Context, by *store.User, sprig, what string) (*character.Character, error) {
 	if sprig == "" || sprig == store.PauseAll {
 		return nil, nil
 	}
 	c, err := e.findSprig(nil, sprig)
 	if err == nil && by != nil && c.PrivateFrom(by.ID) {
+		e.refused(ctx, by, c.ID, "tried to "+what+" someone else's private sprig")
 		err = fmt.Errorf("there's no sprig called %q", sprig)
 	}
 	return c, err
@@ -187,7 +195,7 @@ func (e *Engine) PausesFor(ctx context.Context, viewer *store.User) ([]PauseInfo
 		in := PauseInfo{Scope: p.Scope, Name: "everything", Reason: p.Reason, PausedAt: p.PausedAt}
 		if p.Scope != store.PauseAll {
 			c, ok := e.Chars.Get(p.Scope)
-			if ok && viewer != nil && c.PrivateFrom(viewer.ID) {
+			if viewer != nil && (!ok || c.PrivateFrom(viewer.ID)) {
 				continue
 			}
 			in.Name = e.charName(p.Scope)

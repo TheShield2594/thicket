@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -97,7 +98,7 @@ func TestStdioServersRunPerSprigWithScrubbedEnv(t *testing.T) {
 	}
 	ask := func(sprig string) where {
 		t.Helper()
-		res, err := r.CallAs(ctx, sprig, "local", "whoami", json.RawMessage(`{}`), true)
+		res, err := r.CallAs(ctx, sprig, "local", "whoami", json.RawMessage(`{}`), true, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,6 +123,24 @@ func TestStdioServersRunPerSprigWithScrubbedEnv(t *testing.T) {
 	}
 	if len(r.Tools()) != 1 {
 		t.Fatalf("per-sprig processes are listed as tools: %v", r.Tools())
+	}
+	// Re-marked exec while connected: the connection that serves the call
+	// decides, so a sprig without exec is refused, and one with it isn't.
+	s.Exec = true
+	if err := db.PutMCPServer(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Connect(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CallAs(ctx, "pip", "local", "whoami", json.RawMessage(`{}`), true, false); !errors.Is(err, ErrExec) {
+		t.Fatalf("exec integration without exec access: %v", err)
+	}
+	if _, err := r.CallReadOnlyAs(ctx, "pip", "local", "whoami", json.RawMessage(`{}`), false); !errors.Is(err, ErrExec) {
+		t.Fatalf("read-only call to an exec integration without exec access: %v", err)
+	}
+	if _, err := r.CallAs(ctx, "pip", "local", "whoami", json.RawMessage(`{}`), true, true); err != nil {
+		t.Fatalf("exec integration with exec access: %v", err)
 	}
 	r.Disconnect("local")
 	r.mu.Lock()

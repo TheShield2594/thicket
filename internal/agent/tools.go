@@ -133,7 +133,9 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 							return "", err
 						}
 					}
-					res, err := e.MCP.CallAs(ctx, t.char.ID, st.Server, st.Tool.Name, args, st.Tool.ReadOnly())
+					// Exec is checked again on the connection that serves the
+					// call: the integration may have been re-marked since.
+					res, err := e.MCP.CallAs(ctx, t.char.ID, st.Server, st.Tool.Name, args, st.Tool.ReadOnly(), e.execAllowed(ctx, t.char))
 					if err != nil {
 						return "", err
 					}
@@ -1286,6 +1288,23 @@ func (e *Engine) toolAddIntegration(ctx context.Context, t *turn, args json.RawM
 	a := in.MCPServer
 	if !secrets.ValidName(a.Name) || strings.Contains(a.Name, "__") {
 		return "", errors.New("integration names are lowercase letters, digits and single underscores")
+	}
+	// Re-adding an integration keeps its exec mark unless exec is given:
+	// leaving it out mustn't quietly offer its commands to every sprig.
+	var given struct {
+		Exec *bool `json:"exec"`
+	}
+	_ = json.Unmarshal(args, &given)
+	if given.Exec == nil {
+		if servers, err := e.DB.MCPServers(ctx); err != nil {
+			return "", err
+		} else {
+			for _, s := range servers {
+				if s.Name == a.Name {
+					a.Exec = s.Exec
+				}
+			}
+		}
 	}
 	if in.Auth == "oauth" {
 		return e.addOAuthIntegration(ctx, t, a, in.ClientID, in.ClientSecret)

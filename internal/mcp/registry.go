@@ -326,27 +326,37 @@ func (r *Registry) Status() map[string]string {
 // after a transport failure: only for read-only tools, since a dropped
 // connection doesn't mean the server didn't act.
 func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
-	return r.call(ctx, server, "", tool, args, retrySafe, false)
+	return r.call(ctx, server, "", tool, args, retrySafe, false, true)
 }
+
+// ErrExec means a call reached an integration marked exec for a sprig
+// that may not use one.
+var ErrExec = errors.New("runs commands, and this sprig's exec access is off")
 
 // CallAs invokes a tool for a sprig. A stdio server runs a process of its
 // own for each sprig, in that sprig's folder; other servers share one
-// connection.
-func (r *Registry) CallAs(ctx context.Context, sprig, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
-	return r.call(ctx, server, sprig, tool, args, retrySafe, false)
+// connection. With allowExec false, a call is refused if the connection
+// that would serve it (after any reconnect) is marked exec.
+func (r *Registry) CallAs(ctx context.Context, sprig, server, tool string, args json.RawMessage, retrySafe, allowExec bool) (*CallResult, error) {
+	return r.call(ctx, server, sprig, tool, args, retrySafe, false, allowExec)
+}
+
+// CallReadOnlyAs is CallReadOnly for a sprig, as CallAs.
+func (r *Registry) CallReadOnlyAs(ctx context.Context, sprig, server, tool string, args json.RawMessage, allowExec bool) (*CallResult, error) {
+	return r.call(ctx, server, sprig, tool, args, true, true, allowExec)
 }
 
 // CallReadOnly calls a tool only if the very connection used lists it as
 // read-only (for automatic callers, like trigger polls, that must never
 // run a tool that changes things). It's retried like any read-only call.
 func (r *Registry) CallReadOnly(ctx context.Context, server, tool string, args json.RawMessage) (*CallResult, error) {
-	return r.call(ctx, server, "", tool, args, true, true)
+	return r.call(ctx, server, "", tool, args, true, true, true)
 }
 
 // ErrNotReadOnly means a tool isn't (or is no longer) listed as read-only.
 var ErrNotReadOnly = errors.New("is not listed as read-only")
 
-func (r *Registry) call(ctx context.Context, server, sprig, tool string, args json.RawMessage, retrySafe, onlyReadOnly bool) (*CallResult, error) {
+func (r *Registry) call(ctx context.Context, server, sprig, tool string, args json.RawMessage, retrySafe, onlyReadOnly, allowExec bool) (*CallResult, error) {
 	r.mu.Lock()
 	var c *conn
 	if b := r.conns[server]; sprig != "" && b != nil && b.transport == "stdio" {
@@ -360,6 +370,10 @@ func (r *Registry) call(ctx context.Context, server, sprig, tool string, args js
 		if c, err = r.reconnect(ctx, server, sprig); err != nil {
 			return nil, err
 		}
+	}
+	if c.exec && !allowExec {
+		r.release(c)
+		return nil, fmt.Errorf("%s %w", server, ErrExec)
 	}
 	if onlyReadOnly && !listsReadOnly(c.tools, tool) {
 		r.release(c)
@@ -389,6 +403,10 @@ func (r *Registry) call(ctx context.Context, server, sprig, tool string, args js
 		if rerr != nil {
 			err = rerr
 			continue
+		}
+		if c2.exec && !allowExec {
+			r.release(c2)
+			return nil, fmt.Errorf("%s %w", server, ErrExec)
 		}
 		// The server may have changed on reconnect: replay only if this
 		// connection still lists the tool as read-only.

@@ -56,7 +56,7 @@ func (e *Engine) mayManage(ctx context.Context, by *store.User, c *character.Cha
 		}
 		// Someone else's private sprig: don't even confirm it exists.
 		e.refused(ctx, by, c.ID, "tried to "+what+" on someone else's private sprig")
-		return fmt.Errorf("there's no sprig called %q", c.ID)
+		return errNoSuchSprig
 	case by.IsAdmin():
 		return nil
 	}
@@ -66,6 +66,10 @@ func (e *Engine) mayManage(ctx context.Context, by *store.User, c *character.Cha
 	}
 	return fmt.Errorf("%s is shared by the household, so only the owner or an admin can change what it may do", c.DisplayName())
 }
+
+// errNoSuchSprig is the answer about someone else's private sprig: it
+// names nothing, not even the id the name resolved to.
+var errNoSuchSprig = errors.New("there's no sprig by that name")
 
 // refused records an attempt to change a sprig that wasn't the person's
 // to change: in the activity log and the trail (no undo).

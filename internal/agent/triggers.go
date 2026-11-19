@@ -198,11 +198,32 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 			Title: fmt.Sprintf("Trigger for “%s” is on hold", j.Name), Detail: why})
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, pollCallTimeout)
-	// CallReadOnly re-checks on the connection actually used, so a change
-	// between pollRefusal and the call can't slip through.
-	res, err := e.MCP.CallReadOnly(cctx, tr.Server, tr.Tool, json.RawMessage(tr.Args))
+	char, ok := e.Chars.Get(j.Character)
+	if !ok {
+		return // pollRefusal reports a missing sprig
+	}
+	// The poll runs as its sprig: its own process of a local integration,
+	// its file policy on the arguments, and its exec access.
+	if e.localServer(tr.Server) {
+		if err := e.checkLocalPaths(ctx, char, json.RawMessage(tr.Args)); err != nil {
+			_ = e.DB.SavePollError(ctx, tr.JobID, err.Error())
+			e.deadLetter(ctx, store.InboxItem{UserID: j.UserID, Character: j.Character, Kind: store.InboxFailed, Ref: fmt.Sprintf("job:%d", j.ID),
+				Title: fmt.Sprintf("Trigger for “%s” is on hold", j.Name), Detail: err.Error()})
+			return
+		}
+	}
+	// Tracked like a job, so pausing the sprig cancels a poll in flight.
+	tctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("poll:%d", tr.JobID), j.UserID, j.Name)
+	defer done()
+	flight.setChar(j.Character)
+	cctx, cancel := context.WithTimeout(tctx, pollCallTimeout)
+	// The read-only and exec checks run on the connection actually used,
+	// so a change between pollRefusal and the call can't slip through.
+	res, err := e.MCP.CallReadOnlyAs(cctx, j.Character, tr.Server, tr.Tool, json.RawMessage(tr.Args), e.execAllowed(ctx, char))
 	cancel()
+	if flight.paused.Load() {
+		return // stopped by a pause: nothing seen is saved, so it's offered again
+	}
 	if err == nil && res.IsError {
 		err = errors.New(res.Text)
 	}
@@ -396,4 +417,17 @@ func describeTrigger(tr *store.Trigger) string {
 		s += "; last check: " + tr.LastError
 	}
 	return s
+}
+
+// localServer reports whether an integration is a local (stdio) one.
+func (e *Engine) localServer(name string) bool {
+	if e.MCP == nil {
+		return false
+	}
+	for _, st := range e.MCP.Tools() {
+		if st.Server == name {
+			return st.Local
+		}
+	}
+	return false
 }

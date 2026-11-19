@@ -461,9 +461,7 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		p.Name = "you"
 	}
 	p.Model = d.Settings.String(ctx, "model")
-	if ps, ok, _ := d.DB.PausedFor(ctx, ""); ok && ps.Scope == store.PauseAll {
-		p.PausedAll = true
-	}
+	p.PausedAll, _ = d.DB.PausedExactly(ctx, store.PauseAll)
 	p.CanPauseAll = u.Role == store.RoleOwner && d.Pause != nil
 	if url := d.Settings.String(ctx, "model_url"); !strings.Contains(url, "openrouter.ai") {
 		p.Model += " on " + url
@@ -509,8 +507,11 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		// Inline renders only validated parts and escapes the label.
 		svg := template.HTML(avatar.Inline(look, st, "av-"+c.ID, c.DisplayName()+" is "+st))
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg}
-		if ps, ok, _ := d.DB.PausedFor(ctx, c.ID); ok && ps.Scope == c.ID {
-			v.Paused, v.State = true, "paused"
+		// Its own pause decides the button, even under a pause of everything;
+		// either kind shows it as paused.
+		v.Paused, _ = d.DB.PausedExactly(ctx, c.ID)
+		if _, any, _ := d.DB.PausedFor(ctx, c.ID); any {
+			v.State = "paused"
 		}
 		v.CanPause = !c.IsKid() && (c.BelongsTo == u.ID || c.BelongsTo == 0 && u.IsAdmin()) || c.IsKid() && u.IsAdmin()
 		if !c.IsKid() && c.UsableBy(u) {

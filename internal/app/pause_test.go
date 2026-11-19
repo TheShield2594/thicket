@@ -57,7 +57,11 @@ func TestPauseStopsAJobAndHoldsAcrossRestart(t *testing.T) {
 	if err := a.Scheduler.Fire(*j); err != nil {
 		t.Fatal(err)
 	}
-	<-fm.entered
+	select {
+	case <-fm.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the job never started")
+	}
 
 	// What `thicket pause` does: write the pause into the database, from
 	// outside the server. The running server notices and stops the job.

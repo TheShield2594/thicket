@@ -45,6 +45,9 @@ func (e *Engine) addOAuthIntegration(ctx context.Context, t *turn, a store.MCPSe
 	if err := e.DB.PutMCPServer(ctx, a); err != nil {
 		return "", err
 	}
+	// Its tools are withheld until sign-in reconnects it with these
+	// settings (exec included), rather than offered as they were.
+	e.MCP.Disconnect(a.Name)
 	user, chatRef, server := t.user, t.chatRef, a
 	link, err := e.OAuth.Start(ctx, a.Name, a.Target, clientID, secret, func(ctx context.Context, err error) {
 		e.oauthDone(ctx, user, chatRef, server, err)

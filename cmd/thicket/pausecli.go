@@ -68,7 +68,11 @@ func pauseCmd(cfg *config.Config, args []string, out io.Writer, on bool) error {
 	switch {
 	case on && changed:
 		_ = db.AddTrail(ctx, store.TrailEntry{Character: char, Kind: store.TrailPause, Summary: "paused " + label, Detail: how})
-		fmt.Fprintf(out, "Paused %s. A running Thicket stops what it covers within a second; nothing runs until `thicket resume`.\n", label)
+		resume := "thicket resume"
+		if scope != store.PauseAll {
+			resume += " --sprig " + scope
+		}
+		fmt.Fprintf(out, "Paused %s. A running Thicket stops what it covers within a second; nothing runs until `%s`.\n", label, resume)
 	case on:
 		fmt.Fprintf(out, "%s was already paused.\n", label)
 	case changed:
