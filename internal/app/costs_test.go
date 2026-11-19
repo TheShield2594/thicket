@@ -221,3 +221,41 @@ func TestSprigCapEdgeCases(t *testing.T) {
 		t.Fatalf("the newer cap was overwritten: %v", v)
 	}
 }
+
+// A kid's request that's too costly for what's left of the cap is refused,
+// and the parents hear it was turned down: not that the cap is used up
+// (smaller things still work, and the real cap notice stays separate).
+func TestKidEstimateRefusalWithHeadroom(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	a.Engine.FetchAttachment = fakeFetch
+	if err := a.Settings.Set(ctx, "pdf_engine", "mistral-ocr"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 0.05); err != nil {
+		t.Fatal(err)
+	}
+	in := from("max", "dm-max", "read this to me")
+	in.Attachments = []channel.Attachment{{Name: "manual.pdf", URL: "https://cdn.example/manual.pdf", ContentType: "application/pdf", Size: 800}}
+	a.Engine.HandleIncoming(ctx, in)
+	out := h.fc.take()
+	var kid, parent string
+	for _, s := range out {
+		switch s.chat {
+		case "dm-max":
+			kid += s.text
+		case "dm-owner":
+			parent += s.text
+		}
+	}
+	if !strings.Contains(kid, "too big a job for my allowance") {
+		t.Fatalf("kid: %q", kid)
+	}
+	if !strings.Contains(parent, "Bramble turned down something Max asked for") || strings.Contains(parent, "resting until") {
+		t.Fatalf("parent note should say it was turned down, not that the cap is used: %q", parent)
+	}
+	// A small message still gets an answer.
+	if out := h.kidSays("hi"); personas(out) != "Bramble" || strings.Contains(sentText(out), "allowance") {
+		t.Fatalf("small request after a refusal: %+v", out)
+	}
+}

@@ -179,7 +179,7 @@ func (e *Engine) checkTurnCost(ctx context.Context, t *turn, msgs []llm.Message,
 		_, _ = e.DB.AddEstimate(ctx, est)
 		e.logActivity(ctx, "warn", "budget", t.char.ID, t.user.ID, "refused a costly reply: "+why, what)
 		if t.user.IsKid() {
-			e.tellParentsCap(ctx, t.char, t.user, tight, resetsWhen(tight, t.user))
+			e.tellParentsRefused(ctx, t.char, t.user, tight, what, why)
 			return &costHold{msg: "That's too big a job for my allowance right now. Ask a grown-up if you need it!"}
 		}
 		return &costHold{msg: fmt.Sprintf("I didn't start on that: %s, %s. You can raise the cap, or ask me something smaller.", what, why)}
@@ -403,6 +403,46 @@ func (e *Engine) tellParentsCap(ctx context.Context, c *character.Character, kid
 		}
 	}
 	e.logActivity(ctx, "warn", "budget", c.ID, kid.ID, fmt.Sprintf("%s hit %s; its parents were told", c.DisplayName(), capDesc), "")
+}
+
+// tellParentsRefused tells a kid sprig's parents (else the admins) that it
+// turned down something too costly for what's left of a cap: unlike
+// tellParentsCap, the cap isn't used up, and smaller things still work.
+// Once a day per sprig, apart from the cap-reached notice.
+func (e *Engine) tellParentsRefused(ctx context.Context, c *character.Character, kid *store.User, be *llm.BudgetError, what, why string) {
+	if be == nil || be.Period == "" {
+		return
+	}
+	key := fmt.Sprintf("kidrefused:%s:%s", c.ID, e.now().In(kid.Location()).Format("2006-01-02"))
+	if ok, err := e.DB.ClaimNotice(ctx, key, 36*time.Hour); err != nil || !ok {
+		return
+	}
+	host, ok := e.Chars.Host()
+	if !ok {
+		return
+	}
+	text := fmt.Sprintf("%s turned down something %s asked for (%s): %s. It still helps with smaller things.", c.DisplayName(), nameOr(kid.Name, "your kid"), what, why)
+	if be.Sprig != "" {
+		text += fmt.Sprintf(" To give it more, tell me \"set %s's %s cap to $%s\" (only a parent can raise it).", c.DisplayName(), be.Period, strconv.FormatFloat(be.Limit*2, 'f', -1, 64))
+	}
+	e.notifyParents(ctx, c, host, text)
+	e.logActivity(ctx, "info", "budget", c.ID, kid.ID, c.DisplayName()+" turned down a costly request; its parents were told", "")
+}
+
+// notifyParents sends a notice to a kid sprig's parents, else the admins.
+func (e *Engine) notifyParents(ctx context.Context, c *character.Character, host *character.Character, text string) {
+	told := 0
+	for _, id := range c.Parents {
+		if p, err := e.DB.UserByID(ctx, id); err == nil && e.sendNotice(ctx, p, host, text) == nil {
+			told++
+		}
+	}
+	if told == 0 {
+		admins, _ := e.DB.Admins(ctx)
+		for _, a := range admins {
+			_ = e.sendNotice(ctx, &a, host, text)
+		}
+	}
 }
 
 // budgetReply is what an adult hears when a cap stops a reply.
