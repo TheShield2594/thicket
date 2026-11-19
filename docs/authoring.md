@@ -258,7 +258,7 @@ startersprigs/meal-planner/
   voice_tests/*.yaml    five or six, with references
   skills/*.skill.md     the skills it needs
   routines.json         suggested routines (optional)
-  starter.yaml          what a package can't say: tiers, levels, spend cap, when to offer it
+  starter.yaml          what a package can't say: tiers, levels, spend cap, suggested check-ins, when to offer it
 ```
 
 At startup each folder is assembled into a `.sprig` package with the
@@ -271,25 +271,43 @@ thicket sprig starter                               # list them
 thicket sprig starter meal-planner chore-chart      # add two (shown first)
 thicket sprig starter reading-buddy --kid Mia       # a kid sprig, for Mia
 thicket sprig starter bill-tracker --tier family    # shared instead of yours alone
+thicket sprig starter chore-chart --check-ins       # with its suggested check-ins on
 ```
 
 Or ask Juni: she offers the one that fits what you've told her ("you
 said you have a 9-year-old: want a reading buddy?") and shows you every
 file before anything is added. Added starters differ from an imported
-package in three ways: suggested routines arrive **paused** (turn them
-on in chat or on the dashboard once you've tried the sprig), the
-starter's own levels and daily spend cap are set, and a kid starter can
-become a kid sprig. Only an owner or admin adds a kid starter; they
+package in four ways: suggested routines arrive **paused** (turn them
+on in chat or on the dashboard once you've tried the sprig), suggested
+[check-ins](characters.md) stay **off** unless you say yes as it's added
+(`--check-ins`, or tell Juni; later, `set_initiative`), the starter's
+own levels and daily spend cap are set, and a kid starter can become a
+kid sprig. Only an owner or admin adds a kid starter; they
 become its parent and see the parent preview first: everything it will
 say and be, who it talks to, and that it's read only.
 
-| Starter | Sprig | Tier | Tools | Levels | Routines (paused) | Cap a day |
-|---|---|---|---|---|---|---|
-| `homework-helper` | Sage | kid | none | read (always, for kids) | none | $0.25 |
-| `reading-buddy` | Poppy | kid | none | read (always, for kids) | none | $0.25 |
-| `meal-planner` | Basil | family | schedule, web | draft; scheduling asks | Sunday meal plan | $0.50 |
-| `bill-tracker` | Clover | solo or family | schedule, calendar | **read**; scheduling asks | bills this week, due tomorrow | $0.25 |
-| `chore-chart` | Thyme | family | schedule, calendar | draft; scheduling asks | Sunday chore chart | $0.50 |
+| Starter | Sprig | Tier | Tools | Levels | Routines (paused) | Check-ins (off) | Cap a day |
+|---|---|---|---|---|---|---|---|
+| `homework-helper` | Sage | kid | none | read (always, for kids) | none | none (kids never) | $0.25 |
+| `reading-buddy` | Poppy | kid | none | read (always, for kids) | none | none (kids never) | $0.25 |
+| `meal-planner` | Basil | family | schedule, web | draft; scheduling asks | Sunday meal plan | due reminders | $0.50 |
+| `bill-tracker` | Clover | solo or family | schedule, calendar | **read**; scheduling asks | bills this week, due tomorrow | due reminders | $0.25 |
+| `chore-chart` | Thyme | family | schedule, calendar | draft; scheduling asks | Sunday chore chart | morning brief 07:30, due reminders | $0.50 |
+
+Check-ins go in `starter.yaml`, never the character file (a test holds
+starters to that), because they message people unprompted:
+
+```yaml
+check_ins:
+  morning_brief: "07:30"   # each person's timezone
+  event_reminders: 30      # minutes before calendar events; 0 or left out = none
+  due_reminders: true      # when something noted as due is coming up
+```
+
+They're shown in the preview as suggested and off, or as on when the
+person asked for them. A shared sprig's check-ins message every adult,
+so only an admin turns them on, the same rule as `set_initiative`; a
+solo sprig's are its person's. Kid starters can't suggest any.
 
 What each one shows:
 

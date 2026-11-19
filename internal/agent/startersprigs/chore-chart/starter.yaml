@@ -8,3 +8,8 @@ daily_usd: 0.50
 levels:
   schedule_job: ask
   update_job: ask
+# Suggested, off until accepted: the day's calendar and chores each
+# morning, and a nudge when something noted as due is close.
+check_ins:
+  morning_brief: "07:30"
+  due_reminders: true

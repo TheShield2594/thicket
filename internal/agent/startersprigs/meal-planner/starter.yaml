@@ -8,3 +8,7 @@ daily_usd: 0.50
 levels:
   schedule_job: ask
   update_job: ask
+# Suggested, off until accepted: a nudge when something noted as due is
+# close ("take the chicken out to thaw by 4").
+check_ins:
+  due_reminders: true

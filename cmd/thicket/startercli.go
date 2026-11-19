@@ -18,11 +18,13 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-const sprigStarterUsage = `usage: thicket sprig starter [ID...] [--tier solo|family|kid] [--kid USER]... [--parent USER]... [--user USER] [--id ID] [--name NAME] [--yes]
+const sprigStarterUsage = `usage: thicket sprig starter [ID...] [--tier solo|family|kid] [--kid USER]... [--parent USER]... [--user USER] [--id ID] [--name NAME] [--check-ins] [--yes]
        thicket sprig starter --export DIR
 
 With no ID, lists the starter sprigs. With IDs, shows everything each one
-will get and adds it once you say yes. Suggested routines arrive paused.
+will get and adds it once you say yes. Suggested routines arrive paused,
+and suggested check-ins (a morning brief, reminders) stay off unless you
+pass --check-ins.
 
 Kid starters need --kid (a user id or name of a kid in the household) and
 are set up by --parent (default: the owner), who can read their chats.
@@ -47,6 +49,7 @@ func sprigStarterCmd(cfg *config.Config, args []string, in io.Reader, out io.Wri
 	id := fs.String("id", "", "")
 	name := fs.String("name", "", "")
 	yes := fs.Bool("yes", false, "")
+	checkIns := fs.Bool("check-ins", false, "")
 	export := fs.String("export", "", "")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
@@ -63,6 +66,9 @@ func sprigStarterCmd(cfg *config.Config, args []string, in io.Reader, out io.Wri
 		fmt.Fprintln(out, "Starter sprigs (add with: thicket sprig starter ID):")
 		for _, s := range all {
 			fmt.Fprintf(out, "  %-16s %-7s %s, %s. %s\n", s.ID, s.Char.DisplayName(), s.TierLabel(), fmt.Sprintf("$%.2f a day", s.DailyUSD), s.Summary)
+			if s.CheckIns.Any() {
+				fmt.Fprintf(out, "  %-16s %-7s suggested check-ins (with --check-ins): %s\n", "", "", s.CheckIns)
+			}
 		}
 		return nil
 	}
@@ -135,6 +141,11 @@ func sprigStarterCmd(cfg *config.Config, args []string, in io.Reader, out io.Wri
 		}
 		if so.Tier != "kid" {
 			so.Kids, so.Parents = nil, nil
+		}
+		// --check-ins applies to the starters that suggest some.
+		so.CheckIns = *checkIns && so.Tier != "kid" && s.CheckIns.Any()
+		if *checkIns && !so.CheckIns {
+			fmt.Fprintf(out, "%s has no check-ins to turn on.\n", s.ID)
 		}
 		st, err := agent.PrepareStarter(ctx, db, cfg.CharactersDir, taken, s, so)
 		if err != nil {

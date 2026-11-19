@@ -65,6 +65,51 @@ type StarterSprig struct {
 	VoiceTests []character.VoiceTest
 	Skills     []store.Skill
 	Routines   []sprigpkg.Routine
+	// CheckIns are its suggested check-in presets: off until the person
+	// accepts them (StarterOptions.CheckIns, or set_initiative later).
+	CheckIns StarterCheckIns
+}
+
+// StarterCheckIns are the check-in presets a starter suggests (see
+// checkins.go): a morning brief, heads-ups before calendar events,
+// reminders when something noted is due.
+type StarterCheckIns struct {
+	MorningBrief   string `yaml:"morning_brief"`
+	EventReminders int    `yaml:"event_reminders"`
+	DueReminders   bool   `yaml:"due_reminders"`
+}
+
+// Any reports whether it suggests any.
+func (k StarterCheckIns) Any() bool {
+	return k.MorningBrief != "" || k.EventReminders > 0 || k.DueReminders
+}
+
+// String describes them for people.
+func (k StarterCheckIns) String() string {
+	var p []string
+	if k.MorningBrief != "" {
+		p = append(p, "a morning brief at "+k.MorningBrief)
+	}
+	if k.EventReminders > 0 {
+		p = append(p, fmt.Sprintf("a heads-up %d minutes before calendar events", k.EventReminders))
+	}
+	if k.DueReminders {
+		p = append(p, "reminders when something noted is due")
+	}
+	return strings.Join(p, ", ")
+}
+
+func (k StarterCheckIns) check() []string {
+	var probs []string
+	if k.MorningBrief != "" {
+		if _, err := character.ParseClock(k.MorningBrief); err != nil {
+			probs = append(probs, "check_ins.morning_brief: "+err.Error())
+		}
+	}
+	if n := k.EventReminders; n != 0 && (n < character.MinEventReminders || n > character.MaxEventReminders) {
+		probs = append(probs, fmt.Sprintf("check_ins.event_reminders is minutes before an event, %d-%d", character.MinEventReminders, character.MaxEventReminders))
+	}
+	return probs
 }
 
 type starterMeta struct {
@@ -74,6 +119,7 @@ type starterMeta struct {
 	Offer    string            `yaml:"offer"`
 	DailyUSD float64           `yaml:"daily_usd"`
 	Levels   map[string]string `yaml:"levels"`
+	CheckIns StarterCheckIns   `yaml:"check_ins"`
 }
 
 // starterBuilt is when every starter package says it was made, so the
@@ -184,6 +230,11 @@ func buildStarter(fsys fs.FS, dir, id string) (*StarterSprig, error) {
 	if slices.Contains(meta.Tiers, character.TierKid) && len(routines) > 0 {
 		return nil, errors.New("a kid starter can't have routines: kid sprigs never run anything on their own")
 	}
+	if hasPresets(c) {
+		// Check-ins message people unprompted: they're suggested in
+		// starter.yaml and stay off until the person says yes.
+		return nil, errors.New("character.md turns on check-in presets: suggest them in starter.yaml check_ins instead, so they start off")
+	}
 	p := &sprigpkg.Package{
 		Manifest: sprigpkg.Manifest{Kind: sprigpkg.Kind, Format: 1, ID: c.ID, Name: c.DisplayName(), ThicketVersion: "starter", CreatedAt: starterBuilt},
 		Char:     c, Files: files, Skills: skills, Routines: routines,
@@ -197,7 +248,7 @@ func buildStarter(fsys fs.FS, dir, id string) (*StarterSprig, error) {
 		return nil, fmt.Errorf("the assembled package doesn't read back: %w", err)
 	}
 	s := &StarterSprig{ID: id, Summary: meta.Summary, Tiers: meta.Tiers, Ages: meta.Ages, Offer: meta.Offer,
-		DailyUSD: meta.DailyUSD, Levels: meta.Levels, Char: back.Char, Package: raw, Routines: back.Routines}
+		DailyUSD: meta.DailyUSD, Levels: meta.Levels, Char: back.Char, Package: raw, Routines: back.Routines, CheckIns: meta.CheckIns}
 	for _, k := range back.Skills {
 		s.Skills = append(s.Skills, store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body})
 	}
@@ -236,6 +287,10 @@ func (m *starterMeta) check() error {
 	if slices.Contains(m.Tiers, character.TierKid) && len(m.Tiers) > 1 {
 		probs = append(probs, "a kid starter is only ever a kid sprig")
 	}
+	if slices.Contains(m.Tiers, character.TierKid) && m.CheckIns.Any() {
+		probs = append(probs, "a kid starter can't suggest check-ins: kid sprigs never message anyone unprompted")
+	}
+	probs = append(probs, m.CheckIns.check()...)
 	if m.DailyUSD <= 0 || m.DailyUSD > 10 {
 		probs = append(probs, "daily_usd must be a spend cap between 0 and 10 dollars")
 	}
@@ -302,6 +357,9 @@ type StarterOptions struct {
 	// ID and Name add it under another id or name.
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
+	// CheckIns turns on its suggested check-in presets; otherwise they
+	// stay off.
+	CheckIns bool `json:"check_ins,omitempty"`
 	// CanWriteSkills: an owner or admin, who may add shared skills.
 	CanWriteSkills bool `json:"-"`
 }
@@ -398,6 +456,17 @@ func PrepareStarter(ctx context.Context, db *store.Store, charsDir string, nameT
 		c.BelongsTo, c.Household = o.Owner, ""
 	default:
 		c.BelongsTo, c.Household = 0, ""
+	}
+	if o.CheckIns {
+		switch {
+		case tier == character.TierKid:
+			return nil, errors.New("kid sprigs never message anyone unprompted, so they have no check-ins")
+		case !s.CheckIns.Any():
+			return nil, fmt.Errorf("%s doesn't suggest any check-ins", s.ID)
+		}
+		c.Initiative.MorningBrief = s.CheckIns.MorningBrief
+		c.Initiative.EventReminders = s.CheckIns.EventReminders
+		c.Initiative.DueReminders = s.CheckIns.DueReminders
 	}
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, errors.New(strings.Join(probs, "; "))
@@ -498,6 +567,17 @@ func (st *StarterSetup) Preview(canWriteSkills bool) (string, error) {
 		fmt.Fprintf(&b, "It's yours alone: nobody else in the household can talk to it or read what it knows.\n")
 	default:
 		fmt.Fprintf(&b, "It's a family sprig: every adult in the household can talk to it, and it shares family memory.\n")
+	}
+	if k := st.Starter.CheckIns; st.Tier != character.TierKid && k.Any() {
+		who := "you"
+		if st.Tier == character.TierFamily {
+			who = "every adult it's for"
+		}
+		if st.Opts.CheckIns {
+			fmt.Fprintf(&b, "Check-ins, **on**: %s, sent to %s like any message it starts (quiet hours and its daily limit apply).\n", k, who)
+		} else {
+			fmt.Fprintf(&b, "Suggested check-ins, **off** until you turn them on: %s.\n", k)
+		}
 	}
 	b.WriteString(st.levelLines() + "\n")
 	fmt.Fprintf(&b, "Spend cap: $%.2f a day for %s. No memories, chats or secrets come with it.\n", st.Starter.DailyUSD, c.DisplayName())
@@ -613,12 +693,13 @@ func (e *Engine) sprigNameTaken(s string) bool {
 
 func (e *Engine) toolStarterSprigs(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		Action  string   `json:"action"`
-		Starter string   `json:"starter"`
-		Tier    string   `json:"tier"`
-		Kids    []string `json:"kids"`
-		ID      string   `json:"id"`
-		Name    string   `json:"name"`
+		Action   string   `json:"action"`
+		Starter  string   `json:"starter"`
+		Tier     string   `json:"tier"`
+		Kids     []string `json:"kids"`
+		ID       string   `json:"id"`
+		Name     string   `json:"name"`
+		CheckIns bool     `json:"check_ins"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -633,9 +714,12 @@ func (e *Engine) toolStarterSprigs(ctx context.Context, t *turn, args json.RawMe
 	if err != nil {
 		return "", err
 	}
-	o := StarterOptions{Tier: strings.ToLower(strings.TrimSpace(a.Tier)), Owner: t.user.ID, ID: a.ID, Name: a.Name}
+	o := StarterOptions{Tier: strings.ToLower(strings.TrimSpace(a.Tier)), Owner: t.user.ID, ID: a.ID, Name: a.Name, CheckIns: a.CheckIns}
 	if o.Tier == "" {
 		o.Tier = s.Tiers[0]
+	}
+	if err := mayStartCheckIns(t.user, o); err != nil {
+		return "", err
 	}
 	switch o.Tier {
 	case character.TierKid:
@@ -687,13 +771,26 @@ func (e *Engine) listStarters() (string, error) {
 	b.WriteString("Starter sprigs (add one with action add):\n")
 	for _, s := range all {
 		fmt.Fprintf(&b, "- %s: %s (%s). %s Offer it %s.", s.ID, s.Char.DisplayName(), s.TierLabel(), s.Summary, s.Offer)
+		if s.CheckIns.Any() {
+			fmt.Fprintf(&b, " Suggested check-ins (off unless they want them): %s.", s.CheckIns)
+		}
 		if _, ok := e.Chars.Get(s.Char.ID); ok {
 			fmt.Fprintf(&b, " A sprig with the id %q is already here: add it only if they want another (with a different id and name).", s.Char.ID)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Kid starters need the kid invited as a kid first, and only the owner or an admin can add one: they become its parent and see it first (the parent preview). Routines arrive paused; offer to turn them on once they've tried it.\n")
+	b.WriteString("Kid starters need the kid invited as a kid first, and only the owner or an admin can add one: they become its parent and see it first (the parent preview). Routines arrive paused; offer to turn them on once they've tried it. Ask whether they'd like a starter's suggested check-ins before adding it (check_ins: true); a shared sprig's check-ins need an admin.\n")
 	return b.String(), nil
+}
+
+// mayStartCheckIns: like set_initiative, a shared sprig's check-ins (which
+// message every adult) are an admin's to turn on; a sprig of your own is
+// yours.
+func mayStartCheckIns(u *store.User, o StarterOptions) error {
+	if o.CheckIns && o.Tier == character.TierFamily && !u.IsAdmin() {
+		return errors.New("a family sprig's check-ins message every adult, so only an admin can turn them on: add it without check_ins, and an admin can turn them on later")
+	}
+	return nil
 }
 
 // resolveKids turns names or ids into the household's kids. With none
@@ -757,6 +854,9 @@ func (e *Engine) addStarter(ctx context.Context, user *store.User, args json.Raw
 	}
 	o := a.Opts
 	o.Owner, o.CanWriteSkills = user.ID, user.IsAdmin()
+	if err := mayStartCheckIns(user, o); err != nil {
+		return "", err
+	}
 	if o.Tier == character.TierKid {
 		if !user.IsAdmin() {
 			return "", errors.New("only the owner or an admin can set up a kid sprig")
@@ -797,6 +897,13 @@ func (e *Engine) addStarter(ctx context.Context, user *store.User, args json.Raw
 			ids[i] = fmt.Sprintf("#%d", id)
 		}
 		out += fmt.Sprintf(" Its suggested routines are paused (jobs %s): offer to turn them on (update_job resume) once they've tried it.", strings.Join(ids, ", "))
+	}
+	if k := s.CheckIns; st.Tier != character.TierKid && k.Any() {
+		if o.CheckIns {
+			out += " Its check-ins are on: " + k.String() + "."
+		} else {
+			out += fmt.Sprintf(" Its suggested check-ins are off (%s): offer them once (set_initiative with sprig %q).", k, c.ID)
+		}
 	}
 	if len(res.Skills) > 0 {
 		out += " Skills: " + strings.Join(res.Skills, ", ") + "."
