@@ -89,6 +89,7 @@ Usage:
   thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
   thicket mcp                         an MCP server on stdin/stdout, so Claude Desktop, Cursor and
                                       other agents can talk to your sprigs (needs THICKET_API_TOKEN)
+  thicket changelog [VERSION]         what changed in this build, or in one released version
   thicket version
 
 Configuration is through environment variables; see README.md.
@@ -146,6 +147,8 @@ func main() {
 		err = stopCmd(args)
 	case "mcp":
 		err = mcpCmd()
+	case "changelog":
+		err = changelogCmd(args, os.Stdout)
 	case "version", "--version", "-v":
 		fmt.Println("thicket", version)
 	case "help", "--help", "-h":
