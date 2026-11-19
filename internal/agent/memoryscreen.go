@@ -182,7 +182,10 @@ func (e *Engine) EditMemory(ctx context.Context, u *store.User, id int64, p memo
 		}
 		return e.memEntry(ctx, u, id)
 	}
-	content, kind := m.Content, m.Kind
+	// Only the fields the patch supplies are sent: the store fills in the
+	// rest from the memory as it is inside the transaction, so a kind-only
+	// edit can't put back content someone changed meanwhile.
+	var content, kind string
 	if p.Content != nil {
 		if content, err = memory.CleanContent(*p.Content); err != nil {
 			return nil, err
@@ -199,7 +202,7 @@ func (e *Engine) EditMemory(ctx context.Context, u *store.User, id int64, p memo
 	locked := p.Locked == nil || *p.Locked
 	ch := store.MemoryChange{Action: "update", Memory: store.Memory{ID: id, Content: content, Kind: kind, Locked: locked}, SetLock: true, By: u.ID}
 	switch {
-	case kind == m.Kind:
+	case kind == "" || kind == m.Kind:
 	case kind == "context":
 		ch.SetExpiry, ch.Memory.ExpiresAt = true, e.now().Add(memory.ContextTTL)
 	case m.Kind == "context":

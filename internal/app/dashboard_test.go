@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/store"
@@ -34,6 +35,10 @@ func TestDashboard(t *testing.T) {
 	a.Engine.HandleIncoming(ctx, dm("remember my dog is called Biscuit"))
 	if _, err := a.DB.DB().Exec("INSERT INTO memories (user_id, kind, content, source, created_at, updated_at) VALUES (?, 'fact', ?, 'user', 0, 0)",
 		owner.ID, `<script>alert(1)</script> likes tea`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.DB().Exec("INSERT INTO memories (user_id, kind, content, source, due_at, created_at, updated_at) VALUES (?, 'followup', 'Ask how the interview went.', 'auto', ?, 0, 0)",
+		owner.ID, time.Now().Add(time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "juniper", Name: "Morning digest", Schedule: "30 7 * * 1-5", Prompt: "x"})
@@ -67,6 +72,11 @@ func TestDashboard(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
+	}
+	// Editing a follow-up keeps it one: its own kind comes first, selected.
+	if i := strings.Index(body, "Ask how the interview went."); i < 0 ||
+		!strings.Contains(body[i:], `<select name="mkind" aria-label="Kind"><option value="followup" selected>followup</option><option value="`) {
+		t.Errorf("a follow-up's edit form doesn't keep its kind")
 	}
 	if strings.Contains(body, "<script>alert(1)</script>") || !strings.Contains(body, "&lt;script&gt;") {
 		t.Fatal("memory content isn't escaped")

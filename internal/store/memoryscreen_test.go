@@ -52,6 +52,47 @@ func TestUndoMemoryScreenChanges(t *testing.T) {
 		t.Fatalf("undone add still there: %v", err)
 	}
 
+	// Undoing an unlock keeps what the review wrote after it, and an
+	// undo that would throw a later change away is refused.
+	ids, _ = s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "add", By: u.ID,
+		Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Has a dog.", Source: "user", Locked: true, Origin: "person:1"}}})
+	id = ids[0]
+	if _, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "lock", By: u.ID, Memory: Memory{ID: id, Locked: false}}}); err != nil {
+		t.Fatal(err)
+	}
+	review, _ := s.CreateExtractionRun(ctx, 0, u.ID, "m")
+	if _, err := s.ApplyMemoryChanges(ctx, review, []MemoryChange{{Action: "update", Memory: Memory{ID: id, Content: "Has a dog named Biscuit."}}}); err != nil {
+		t.Fatal(err)
+	}
+	m, err = s.UndoMemoryChange(ctx, id, u.ID) // the unlock
+	if err != nil || !m.Locked || m.Content != "Has a dog named Biscuit." || m.Kind != "fact" {
+		t.Fatalf("undo unlock: %+v %v", m, err)
+	}
+	if _, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "update", By: u.ID, SetLock: true,
+		Memory: Memory{ID: id, Content: "Has two dogs.", Locked: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	// A sprig (no person, no run) rewrites it after the edit.
+	if _, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "update", Memory: Memory{ID: id, Content: "Has three dogs."}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UndoMemoryChange(ctx, id, u.ID); !errors.Is(err, ErrUndoConflict) {
+		t.Fatalf("undo over a later change: %v", err)
+	}
+	if m, _ := s.MemoryByID(ctx, id); m.Content != "Has three dogs." {
+		t.Fatalf("refused undo changed the memory: %+v", m)
+	}
+
+	// An update that leaves content out keeps the content as it is now,
+	// not as the editor last saw it.
+	if _, err := s.ApplyMemoryChanges(ctx, 0, []MemoryChange{{Action: "update", By: u.ID, SetLock: true,
+		Memory: Memory{ID: id, Kind: "preference", Locked: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := s.MemoryByID(ctx, id); m.Content != "Has three dogs." || m.Kind != "preference" {
+		t.Fatalf("kind-only edit: %+v", m)
+	}
+
 	// A review's changes are rolled back by run, not undone here.
 	run, _ := s.CreateExtractionRun(ctx, 0, u.ID, "m")
 	ids, _ = s.ApplyMemoryChanges(ctx, run, []MemoryChange{{Action: "add", Memory: Memory{UserID: u.ID, Kind: "fact", Content: "Likes tea.", Source: "auto", Origin: OriginReview}}})

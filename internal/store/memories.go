@@ -130,7 +130,11 @@ func (s *Store) KidSprigMemories(ctx context.Context, kids []int64, character st
 // through ApplyMemoryChanges so they are recorded for rollback.
 type MemoryChange struct {
 	Action string // add | update | expire | delete | touch | lock
-	Memory Memory // for add: the new memory; for update: ID + new Content/Kind/DueAt; for lock: ID + Locked
+	// Memory is, for add: the new memory; for update: ID + new
+	// Content/Kind/DueAt, where an empty field keeps the current value
+	// (read inside the transaction, so a concurrent edit survives); for
+	// lock: ID + Locked.
+	Memory Memory
 	// SetExpiry makes an update write Memory.ExpiresAt (zero clears it),
 	// e.g. when a memory changes to or from the short-lived "context" kind.
 	SetExpiry bool
@@ -188,7 +192,10 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 			if runID != 0 && before.Locked {
 				continue
 			}
-			kind := m.Kind
+			content, kind := m.Content, m.Kind
+			if content == "" {
+				content = before.Content
+			}
 			if kind == "" {
 				kind = before.Kind
 			}
@@ -205,7 +212,7 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 				locked, source = boolInt(m.Locked), lockSource(m.Locked)
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE memories SET content = ?, kind = ?, due_at = ?, expires_at = ?, locked = ?, source = ?, updated_at = ? WHERE id = ?",
-				s.clean(m.Content), kind, due, exp, locked, source, now, m.ID); err != nil {
+				s.clean(content), kind, due, exp, locked, source, now, m.ID); err != nil {
 				return nil, err
 			}
 		case "lock":
@@ -293,10 +300,20 @@ func (s *Store) UndoableMemories(ctx context.Context, ids []int64) (map[int64]bo
 // left to undo.
 var ErrNothingToUndo = errors.New("nothing to undo: only changes made on the memory screen can be undone")
 
+// ErrUndoConflict means what a change set has been changed again since
+// (by the review, a sprig or another edit), so undoing it would throw
+// that later change away.
+var ErrUndoConflict = errors.New("can't undo: this memory was changed again since; edit it instead")
+
 // UndoMemoryChange reverts the newest change a person made to a memory on
 // the memory screen that isn't undone yet, and records the undo. Undoing
 // an add removes the memory (nil is returned). Calling it again walks
 // further back. Deleting is never undoable: forgetting forgets.
+//
+// Only the fields that change touched are put back; anything else changed
+// since (say, the review rewording a memory after it was unlocked) stays.
+// If a field the change set has been changed again, the undo is refused
+// (ErrUndoConflict) rather than losing that later change.
 func (s *Store) UndoMemoryChange(ctx context.Context, memoryID, by int64) (*Memory, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -304,9 +321,9 @@ func (s *Store) UndoMemoryChange(ctx context.Context, memoryID, by int64) (*Memo
 	}
 	defer tx.Rollback()
 	var evID int64
-	var action, before string
-	err = tx.QueryRowContext(ctx, `SELECT id, action, COALESCE(before, '') FROM memory_events WHERE memory_id = ? AND by_user IS NOT NULL
-		AND undone_at IS NULL AND action != 'undo' ORDER BY id DESC LIMIT 1`, memoryID).Scan(&evID, &action, &before)
+	var action, before, evAfter string
+	err = tx.QueryRowContext(ctx, `SELECT id, action, COALESCE(before, ''), COALESCE(after, '') FROM memory_events WHERE memory_id = ? AND by_user IS NOT NULL
+		AND undone_at IS NULL AND action != 'undo' ORDER BY id DESC LIMIT 1`, memoryID).Scan(&evID, &action, &before, &evAfter)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNothingToUndo
 	} else if err != nil {
@@ -327,12 +344,19 @@ func (s *Store) UndoMemoryChange(ctx context.Context, memoryID, by int64) (*Memo
 		}
 		return nil, tx.Commit()
 	}
-	var b Memory
+	var b, a Memory
 	if err := json.Unmarshal([]byte(before), &b); err != nil {
 		return nil, fmt.Errorf("memory %d: unreadable history: %w", memoryID, err)
 	}
+	if err := json.Unmarshal([]byte(evAfter), &a); err != nil {
+		return nil, fmt.Errorf("memory %d: unreadable history: %w", memoryID, err)
+	}
+	r, err := undoFields(*cur, b, a)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE memories SET content = ?, kind = ?, due_at = ?, expires_at = ?, locked = ?, source = ?, updated_at = ? WHERE id = ?",
-		b.Content, b.Kind, unixOrNil(b.DueAt), unixOrNil(b.ExpiresAt), boolInt(b.Locked), b.Source, now, memoryID); err != nil {
+		r.Content, r.Kind, unixOrNil(r.DueAt), unixOrNil(r.ExpiresAt), boolInt(r.Locked), r.Source, now, memoryID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE memory_events SET undone_at = ? WHERE id = ?", now, evID); err != nil {
@@ -347,6 +371,47 @@ func (s *Store) UndoMemoryChange(ctx context.Context, memoryID, by int64) (*Memo
 		return nil, err
 	}
 	return after, tx.Commit()
+}
+
+// undoFields returns cur with each field that a change moved from before
+// to after put back to before. A field the change moved that no longer
+// holds what the change left is a conflict.
+func undoFields(cur, before, after Memory) (Memory, error) {
+	r := cur
+	conflict := false
+	str := func(dst *string, c, b, a string) {
+		if b == a {
+			return
+		}
+		if c != a {
+			conflict = true
+		}
+		*dst = b
+	}
+	tm := func(dst *time.Time, c, b, a time.Time) {
+		if b.Equal(a) {
+			return
+		}
+		if !c.Equal(a) {
+			conflict = true
+		}
+		*dst = b
+	}
+	str(&r.Content, cur.Content, before.Content, after.Content)
+	str(&r.Kind, cur.Kind, before.Kind, after.Kind)
+	tm(&r.DueAt, cur.DueAt, before.DueAt, after.DueAt)
+	tm(&r.ExpiresAt, cur.ExpiresAt, before.ExpiresAt, after.ExpiresAt)
+	// The lock and its source go together.
+	if before.Locked != after.Locked || before.Source != after.Source {
+		if cur.Locked != after.Locked || cur.Source != after.Source {
+			conflict = true
+		}
+		r.Locked, r.Source = before.Locked, before.Source
+	}
+	if conflict {
+		return cur, ErrUndoConflict
+	}
+	return r, nil
 }
 
 // LockMemory marks a memory as user-owned: automatic review won't touch it.

@@ -41,6 +41,22 @@ func TestRelationshipMemoryInPrompt(t *testing.T) {
 		t.Fatal("relationship memory listed as a fact to recite")
 	}
 
+	// An in-joke in the shared layer or family memory (kept from before
+	// these kinds were relationship memory) isn't this sprig's own: it
+	// stays with the facts, under its scope.
+	mems = append(mems, store.Memory{ID: 5, Kind: "inside_joke", Content: "Calls the car Old Rusty."},
+		store.Memory{ID: 6, Household: true, Kind: "shared_history", Content: "The whole family got lost in Wales."})
+	p = prompt()
+	rel, facts = strings.Index(p, "## How to be with this person"), strings.Index(p, "## What you remember")
+	relPart, factPart = p[rel:facts], p[facts:]
+	if strings.Contains(relPart, "Old Rusty") || !strings.Contains(factPart, "#5 shared/inside_joke: Calls the car Old Rusty.") {
+		t.Fatalf("a shared in-joke rendered as this sprig's own:\n%s", p)
+	}
+	if strings.Contains(relPart, "Wales") || !strings.Contains(factPart, "#6 family/shared_history: The whole family got lost in Wales.") {
+		t.Fatalf("family history rendered as this sprig's own:\n%s", p)
+	}
+	mems = mems[:4]
+
 	// The person edits it on the memory screen: the next prompt has the edit.
 	mems[1].Content = "Likes long, detailed answers with examples."
 	p = prompt()

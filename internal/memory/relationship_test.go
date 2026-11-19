@@ -49,11 +49,27 @@ func TestRelationshipOps(t *testing.T) {
 	if len(p.Changes) != 0 {
 		t.Fatalf("shared memory became relationship memory: %+v", p.Changes)
 	}
+
+	// Relationship ops reach relationship memory only: never a fact.
+	p = plan(Op{Op: "update", ID: 1, Content: "Prefers short answers, no emoji.", Rel: true},
+		Op{Op: "expire", ID: 1, Rel: true})
+	if len(p.Changes) != 0 || len(p.Skipped) != 2 {
+		t.Fatalf("relationship op changed a fact: %+v %v", p.Changes, p.Skipped)
+	}
+	p = plan(Op{Op: "update", ID: 3, Content: "Calls the office plant Gerald the Great.", Rel: true})
+	if len(p.Changes) != 1 || p.Changes[0].Action != "update" {
+		t.Fatalf("relationship update refused: %+v %v", p.Changes, p.Skipped)
+	}
+	p = plan(Op{Op: "expire", ID: 3, Rel: true})
+	if len(p.Changes) != 1 || p.Changes[0].Action != "expire" {
+		t.Fatalf("relationship expire refused: %+v %v", p.Changes, p.Skipped)
+	}
 }
 
 func TestSplitAndGroups(t *testing.T) {
-	facts, rel := Split([]store.Memory{{Kind: "fact"}, {Kind: "tone"}, {Kind: "inside_joke"}, {Kind: "followup"}})
-	if len(facts) != 2 || len(rel) != 2 {
+	facts, rel := Split([]store.Memory{{Kind: "fact"}, {Character: "juniper", Kind: "tone"}, {Character: "juniper", Kind: "inside_joke"}, {Kind: "followup"},
+		{Kind: "inside_joke"}, {Character: "juniper", Kind: "shared_history", Household: true}})
+	if len(facts) != 4 || len(rel) != 2 {
 		t.Fatalf("split: %d facts, %d relationship", len(facts), len(rel))
 	}
 	if GroupOf("dislikes") != GroupRelationship || GroupOf("person") != GroupFacts {

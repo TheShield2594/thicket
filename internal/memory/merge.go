@@ -49,10 +49,14 @@ func GroupOf(kind string) string {
 	return GroupFacts
 }
 
-// Split separates relationship memories from the rest.
+// Split separates relationship memories from the rest. Only a sprig's
+// own entries count: one of a relationship kind in the shared layer or
+// family memory (older memories kept their scope when these kinds became
+// relationship memory) stays with the facts, under its own scope, so it
+// is never taken for this sprig's private relationship with the person.
 func Split(mems []store.Memory) (facts, rel []store.Memory) {
 	for _, m := range mems {
-		if Relationship[m.Kind] {
+		if Relationship[m.Kind] && m.Character != "" && !m.Household {
 			rel = append(rel, m)
 		} else {
 			facts = append(facts, m)
@@ -218,6 +222,10 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				p.Skipped = append(p.Skipped, fmt.Sprintf("update: memory #%d was set by the user and is locked", op.ID))
 				continue
 			}
+			if op.Rel && !Relationship[old.Kind] {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: under relationship, but it is a %s, not relationship memory", op.ID, old.Kind))
+				continue
+			}
 			if touched[op.ID] {
 				continue
 			}
@@ -236,6 +244,10 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			effective := kind
 			if effective == "" {
 				effective = old.Kind
+			}
+			if op.Rel && !Relationship[effective] {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: under relationship, %q is a fact kind", op.ID, effective))
+				continue
 			}
 			if Relationship[effective] && !Relationship[old.Kind] && (old.Character == "" || old.Household) {
 				p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: a shared memory can't become relationship memory", op.ID))
@@ -270,6 +282,10 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			}
 			if old.Locked {
 				p.Skipped = append(p.Skipped, fmt.Sprintf("expire: memory #%d was set by the user and is locked", op.ID))
+				continue
+			}
+			if op.Rel && !Relationship[old.Kind] {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("expire #%d: under relationship, but it is a %s, not relationship memory", op.ID, old.Kind))
 				continue
 			}
 			if touched[op.ID] {
