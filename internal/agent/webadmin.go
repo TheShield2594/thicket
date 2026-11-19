@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/secrets"
@@ -106,6 +107,12 @@ func (e *Engine) AdminIntegrations(ctx context.Context) (any, error) {
 	return out, nil
 }
 
+// connectorMu makes adding a connector from the Settings screen one step:
+// the name and token checks, the writes, the connection attempt and any
+// undo. Without it two adds of the same name could both pass the checks,
+// and the one that failed would delete the other's token.
+var connectorMu sync.Mutex
+
 // AdminAddIntegration connects an MCP server over HTTP. A token, if given,
 // is stored encrypted as the secret NAME_token and sent as a bearer
 // header; it is never stored with the server or logged. Servers you sign
@@ -123,6 +130,8 @@ func (e *Engine) AdminAddIntegration(ctx context.Context, by *store.User, name, 
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return nil, errors.New("the address needs to be an http(s) URL, e.g. http://homeassistant.local:8123/api/mcp")
 	}
+	connectorMu.Lock()
+	defer connectorMu.Unlock()
 	servers, err := e.DB.MCPServers(ctx)
 	if err != nil {
 		return nil, err

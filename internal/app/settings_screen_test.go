@@ -118,6 +118,34 @@ func TestSettingsScreen(t *testing.T) {
 	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 0 {
 		t.Fatalf("a cancelled request left: %+v", servers)
 	}
+	// Two people adding the same name at once: one wins, and the loser
+	// neither replaces nor deletes the winner's token.
+	type result struct {
+		token string
+		err   error
+	}
+	results := make(chan result, 2)
+	for _, tok := range []string{"tok-first-123456", "tok-second-123456"} {
+		go func() {
+			_, err := a.Engine.AdminAddIntegration(ctx, owner, "twice", srv.URL, tok)
+			results <- result{tok, err}
+		}()
+	}
+	var won []string
+	for range 2 {
+		if r := <-results; r.err == nil {
+			won = append(won, r.token)
+		}
+	}
+	if len(won) != 1 {
+		t.Fatalf("%d of two simultaneous adds succeeded, want 1", len(won))
+	}
+	if v, err := a.Secrets.Get(ctx, "twice_token"); err != nil || v != won[0] {
+		t.Fatalf("token is %q (%v), want the winner's %q", v, err, won[0])
+	}
+	if err := a.Engine.AdminRemoveIntegration(ctx, owner, "twice"); err != nil {
+		t.Fatal(err)
+	}
 	for _, bad := range []string{"Has Space", "a", "two__under"} {
 		if _, err := a.Engine.AdminAddIntegration(ctx, owner, bad, srv.URL, ""); err == nil {
 			t.Fatalf("name %q was accepted", bad)
