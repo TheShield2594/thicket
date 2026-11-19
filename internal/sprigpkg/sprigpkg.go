@@ -942,6 +942,11 @@ type InstallOptions struct {
 	// CanWriteSkills is whether the importer is an owner or admin; others
 	// can't add or change shared skills.
 	CanWriteSkills bool
+	// BeforeLive, if set, runs after the files and routines are in place
+	// but before the character file makes the sprig live. If it fails,
+	// nothing is installed; it undoes its own partial changes before
+	// returning the error. Its rollback runs if a later step fails.
+	BeforeLive func(ctx context.Context) (rollback func(context.Context), err error)
 }
 
 // lockSuffix marks an id being imported, so two imports of one id can't
@@ -1079,6 +1084,19 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 		}
 		if err != nil {
 			return nil, undo(fmt.Errorf("routine %q: %w", r.Name, err))
+		}
+	}
+	if opts.BeforeLive != nil {
+		rollback, err := opts.BeforeLive(ctx)
+		if err != nil {
+			return nil, undo(err)
+		}
+		if rollback != nil {
+			inner := undo
+			undo = func(cause error) error {
+				rollback(bg)
+				return inner(cause)
+			}
 		}
 	}
 	md, err := character.Marshal(c)

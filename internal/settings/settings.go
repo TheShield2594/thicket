@@ -56,6 +56,17 @@ var Known = []Key{
 	{"speech_model", "model that reads replies aloud (an OpenRouter speech model id, or the local speech server's model, e.g. kokoro)", "string"},
 	{"speech_voice", "voice sprigs speak in when their character file names none (e.g. alloy, or af_heart on Kokoro)", "string"},
 	{"speech_usd_per_1k_chars", "what OpenRouter speech costs per 1,000 characters read aloud, for the spend caps (a local speech server costs nothing)", "float"},
+	{"digest.day", "the day the host sends each adult the weekly digest (what each sprig did, what needs them, what it cost), in their own timezone: sunday to saturday, or off", "choice"},
+	{"digest.time", "the time of day the weekly digest goes out, in each adult's own timezone, as HH:MM (24-hour)", "clock"},
+}
+
+// Clock reads a time of day, HH:MM in 24-hour time.
+func Clock(s string) (hour, minute int, err error) {
+	t, err := time.Parse("15:04", strings.TrimSpace(s))
+	if err != nil {
+		return 0, 0, err
+	}
+	return t.Hour(), t.Minute(), nil
 }
 
 // cronParser reads backup_schedule the way job schedules are read.
@@ -71,6 +82,7 @@ var intMax = map[string]int{"document_chars": 100000, "backup_keep": 365}
 var choices = map[string][]string{
 	"pdf_engine": {"auto", "native", "cloudflare-ai", "mistral-ocr"},
 	"web_search": {"auto", "openrouter", "searxng", "off"},
+	"digest.day": {"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "off"},
 }
 
 func lookup(name string) (Key, bool) {
@@ -129,6 +141,8 @@ func (s *Settings) defaults() map[string]string {
 		"speech_voice":                        "alloy",
 		// gpt-4o-mini-tts is about $0.015 a minute, ~1,000 characters.
 		"speech_usd_per_1k_chars": "0.015",
+		"digest.day":              "sunday",
+		"digest.time":             "18:00",
 	}
 }
 
@@ -227,6 +241,12 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 		if _, err := cronParser.Parse(value); err != nil {
 			return fmt.Errorf("%s needs a cron line such as \"0 3 * * *\" (minute hour day month weekday): %v", name, err)
 		}
+	case "clock":
+		if _, _, err := Clock(value); err != nil {
+			return fmt.Errorf("%s needs a time of day such as 18:00", name)
+		}
+		h, m, _ := Clock(value)
+		value = fmt.Sprintf("%02d:%02d", h, m)
 	case "choice":
 		value = strings.ToLower(value)
 		if !slices.Contains(choices[name], value) {

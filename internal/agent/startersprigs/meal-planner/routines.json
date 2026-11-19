@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Sunday meal plan",
+    "schedule": "0 16 * * 0",
+    "task": "Follow the weekly-meal-plan skill for the coming week, using family memory for diets, allergies and favourites. Send the plan, then the shopping-list skill's list. If someone already planned this week in chat, report nothing."
+  }
+]

@@ -70,7 +70,7 @@ func TestCharacterImportPreviewThenWrite(t *testing.T) {
 			t.Fatalf("wrong scope: %+v", m)
 		}
 	}
-	if lvl, _ := db.ToolLevel(context.Background(), "clawdia", "anything", true); lvl != store.LevelDraft {
+	if lvl, _ := db.ToolLevel(context.Background(), "clawdia", "anything", store.LevelFor{Granted: true}); lvl != store.LevelDraft {
 		t.Fatalf("level = %q", lvl)
 	}
 

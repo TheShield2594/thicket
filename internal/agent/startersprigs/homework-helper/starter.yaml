@@ -1,0 +1,7 @@
+# Starter metadata: what the package itself can't say (who it's for,
+# levels, spend cap). See docs/authoring.md#starter-sprigs.
+summary: A homework helper for kids that asks questions instead of giving answers. Read-only.
+tiers: [kid]
+ages: "7-13"
+offer: when a parent mentions a school-age kid, homework, or a kid stuck on maths or spelling
+daily_usd: 0.25

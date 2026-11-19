@@ -60,6 +60,9 @@ Usage:
                                       uses, avatar and voice tests (never memories or secrets)
   thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--yes]
                                       add a sprig from a package (shown first; tools start at draft)
+  thicket sprig starter [ID...] [--kid USER] [--tier T] [--yes]
+                                      list the starter sprigs (homework helper, reading buddy, meal
+                                      planner, bill tracker, chore chart), or add them (shown first)
   thicket web link [--user ID] [--ttl 24h]
                                       print a one-time sign-in link for the web app
                                       (default: the owner; on a fresh install it makes you the owner)
@@ -149,6 +152,8 @@ func main() {
 		err = exportSprigCmd(loadConfig(), args, os.Stdout)
 	case "import-sprig":
 		err = importSprigCmd(loadConfig(), args, os.Stdin, os.Stdout)
+	case "sprig", "sprigs":
+		err = sprigCmd(loadConfig(), args, os.Stdin, os.Stdout)
 	case "memory":
 		err = memoryCmd(args)
 	case "skill", "skills":

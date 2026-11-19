@@ -1,0 +1,4 @@
+prompt: car insurance renews on the 14th of next month, it's 412 pounds
+reference: |-
+  Car insurance, £412.00, renews Sat 14 Mar. Noted and dated. Is it yearly, or do you pay it monthly?
+notes: Repeats the bill back exactly with weekday and date, asks only what's missing. Catchphrase once at most.

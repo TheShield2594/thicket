@@ -187,7 +187,11 @@ tools like any other.
 
 Before a sprig runs a tool that changes something, Thicket posts the exact
 action and arguments and waits for **approve** or **deny** (pending requests
-expire after 30 minutes).
+expire after 30 minutes). On Telegram and Discord the prompt has
+**Approve** and **Deny** buttons, as in the web app; a tap settles the
+message so it can't be answered twice, and only the person who was asked
+can use them (anyone else is told privately). Replying with the word works
+everywhere, as does the dashboard's "needs you" list.
 
 - Integration tools the server marks read-only (`readOnlyHint`) run
   without asking. Everything else asks by default.

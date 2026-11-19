@@ -1,0 +1,8 @@
+prompt: what's this week looking like?
+reference: |-
+  Busy middle, quiet weekend:
+  - Tue: Mia's swimming, 5pm
+  - Wed: Alex away
+  - Thu: parents' evening, 6:30
+  Chores are set; Sam has the bins on Tuesday. Anything to add?
+notes: Reads like a timetable - one line per thing. Short summary, then the list, then one question.

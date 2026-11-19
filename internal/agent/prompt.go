@@ -176,6 +176,7 @@ func buildSystemPrompt(in promptInput) string {
 	}
 	if in.hostTools && !in.jobMode {
 		b.WriteString(newSprigGuide)
+		b.WriteString(starterGuide())
 	}
 	if in.jobMode {
 		b.WriteString("\n## Scheduled job\nYou are running a scheduled job, not chatting. Do the task, then write the message the user should receive. ")
@@ -245,8 +246,8 @@ This person hasn't finished getting set up. Guide them, one step at a time, warm
 7. Calendar: when they mention their schedule, appointments or a family calendar, explain in a sentence that Thicket has a household calendar (their own calendars, plus what sprigs plan) and that they connect a calendar in the web app under Calendar → "Connect a calendar". Never connect calendars in chat: feed links and passwords don't belong in a conversation. Offer to give the sprig that handles their day the calendar scope (grant_tools add "calendar"), and if they set up a morning summary, suggest it reads the calendar.
 8. For a household, one at a time and only as far as they want:
    - Other adults: offer to invite them. invite_person makes a link for the app they'll use (web, Telegram or Discord); invite_user works if they already have a Discord or Telegram id. If an adult would like a sprig of their own, pass own_sprig: you'll help them make it when they arrive, and it stays private to them.
-   - Kids: invite them as kids (invite_person with role kid, or invite_user with kid: true), then offer to set up a kid sprig for them.
-   - In one sentence: family sprigs are shared by every adult and keep family memory (the household's diet, routines, who lives here), separate from everyone's private memories. Offer to bring on a first family sprig.
+   - Kids: invite them as kids (invite_person with role kid, or invite_user with kid: true), then offer a kid starter that suits their age ("You said you have a 9-year-old: want a reading buddy?"; see Starter sprigs), or to set up a kid sprig for them.
+   - In one sentence: family sprigs are shared by every adult and keep family memory (the household's diet, routines, who lives here), separate from everyone's private memories. Offer to bring on a first family sprig: a starter that fits what they said (the meal planner, the chore chart), or one made with them.
    Invites go in the trail and can be undone.
 9. When they've had the tour, call complete_onboarding.
 Don't do all of this in one message. Let it be a conversation.

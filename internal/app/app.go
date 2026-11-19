@@ -285,6 +285,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.Admin = a.Engine
 	a.Chars.OnLoad(a.Web.RosterChanged)
 	a.Web.Memories = a.Engine
+	a.Web.Digest = a.Engine
 	a.Web.Calendar = a.Calendar
 	a.Web.BaseURL = cfg.WebBaseURL()
 	a.Web.Joined = a.Engine.WebJoined
@@ -556,6 +557,7 @@ func (a *App) Run(parent context.Context) error {
 		}
 	})
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
+	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })
 	goRun("memory", func() { a.Reviewer.Run(ctx) })
 	goRun("initiative", func() { a.Engine.RunInitiative(ctx) })

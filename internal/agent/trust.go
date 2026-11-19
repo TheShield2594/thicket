@@ -145,7 +145,7 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 	if tool.Risky {
 		def = store.LevelAsk
 	}
-	cur, err := e.DB.RaiseToolLevel(ctx, c.ID, r.Tool, granted(tool), def, r.From, r.Level)
+	cur, err := e.DB.RaiseToolLevel(ctx, c.ID, r.Tool, levelFor(c, tool), def, r.From, r.Level)
 	if errors.Is(err, store.ErrLevelChanged) {
 		return "", fmt.Errorf("%s's level for %s changed to %s since it asked (was %s), so nothing was changed; it can ask again", c.DisplayName(), r.Tool, cur, r.From)
 	}

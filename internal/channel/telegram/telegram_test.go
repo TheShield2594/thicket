@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -31,6 +32,12 @@ type fakeAPI struct {
 	rejectHTML bool
 	// noVoice refuses sendVoice, as for a user who blocks voice messages.
 	noVoice bool
+	// calls records answerCallbackQuery and edits, by method.
+	calls map[string][]map[string]any
+	// rejectEdit makes editMessageText fail.
+	rejectEdit bool
+	// poll is the last getUpdates request.
+	poll map[string]any
 }
 
 // multipartParams reads an upload's fields, and its file as "<field>"
@@ -86,6 +93,7 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			ok(true)
 		case "getUpdates":
 			f.allowed, _ = p["allowed_updates"].([]any)
+			f.poll = p
 			ups := f.updates
 			f.updates = nil
 			if ups == nil {
@@ -99,7 +107,7 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 				return
 			}
 			f.sent = append(f.sent, p)
-			ok(map[string]any{"message_id": 1})
+			ok(map[string]any{"message_id": len(f.sent), "text": p["text"]})
 		case "sendVoice", "sendAudio", "sendDocument":
 			if f.noVoice && method == "sendVoice" {
 				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: VOICE_MESSAGES_FORBIDDEN"}`))
@@ -108,6 +116,16 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			p["method"] = method
 			f.sent = append(f.sent, p)
 			ok(map[string]any{"message_id": 2})
+		case "answerCallbackQuery", "editMessageText", "editMessageReplyMarkup":
+			if f.calls == nil {
+				f.calls = map[string][]map[string]any{}
+			}
+			f.calls[method] = append(f.calls[method], p)
+			if method == "editMessageText" && f.rejectEdit {
+				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message is too long"}`))
+				return
+			}
+			ok(true)
 		case "getFile":
 			if p["file_id"] == "big" {
 				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: file is too big"}`))
@@ -401,5 +419,200 @@ func TestReactions(t *testing.T) {
 	f.mu.Unlock()
 	if len(allowed) != 2 || allowed[1] != "message_reaction" {
 		t.Fatalf("allowed_updates %v", allowed)
+	}
+}
+
+func (f *fakeAPI) callsTo(method string) []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.calls[method]...)
+}
+
+func TestSendActionsPutsKeyboardOnLastPart(t *testing.T) {
+	a, f := newTest(t)
+	acts := []channel.Action{{ID: "approval:7:approve", Label: "Approve"}, {ID: "approval:7:deny", Label: "Deny"}}
+	ids, err := a.SendActions(context.Background(), "42", channel.Persona{Name: "Pip"}, strings.Repeat("word ", 1000)+"\nReply **approve** or **deny**.", acts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent) != 2 || len(ids) != 2 {
+		t.Fatalf("want two parts, got %d", len(f.sent))
+	}
+	if f.sent[0]["reply_markup"] != nil {
+		t.Fatalf("keyboard on the first part: %v", f.sent[0])
+	}
+	kb, _ := json.Marshal(f.sent[1]["reply_markup"])
+	if string(kb) != `{"inline_keyboard":[[{"callback_data":"approval:7:approve","text":"Approve"},{"callback_data":"approval:7:deny","text":"Deny"}]]}` {
+		t.Fatalf("keyboard: %s", kb)
+	}
+	// The plain-text fallback keeps the keyboard.
+	f.sent = nil
+	f.rejectHTML = true
+	if _, err := a.SendActions(context.Background(), "42", channel.Persona{Name: "Pip"}, "odd **text", acts); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent) != 1 || f.sent[0]["parse_mode"] != nil || f.sent[0]["reply_markup"] == nil {
+		t.Fatalf("plain fallback lost the keyboard: %+v", f.sent)
+	}
+}
+
+func callback(id int, from int64, isBot bool, data string) map[string]any {
+	return map[string]any{"update_id": id, "callback_query": map[string]any{
+		"id": fmt.Sprintf("cb%d", id), "data": data,
+		"from": map[string]any{"id": from, "is_bot": isBot, "first_name": "Sam"},
+		"message": map[string]any{"message_id": 50, "chat": map[string]any{"id": -5, "type": "group"},
+			"text": "Pip\nI need your OK", "entities": []any{map[string]any{"type": "bold", "offset": 0, "length": 3}}},
+	}}
+}
+
+func TestButtonPress(t *testing.T) {
+	a, f := newTest(t)
+	presses := make(chan channel.Press, 10)
+	a.OnPress(func(_ context.Context, p channel.Press) channel.PressReply {
+		presses <- p
+		if p.UserID != "42" {
+			return channel.PressReply{Notice: "This isn't yours to approve."}
+		}
+		return channel.PressReply{Outcome: "✅ Approved"}
+	})
+	f.updates = []map[string]any{
+		callback(1, 7, false, "approval:9:approve"),
+		callback(2, 8, true, "approval:9:approve"), // bots never press
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx, func(context.Context, channel.Incoming) {})
+
+	select {
+	case p := <-presses:
+		if p.Channel != "telegram" || p.ChatID != "-5" || p.MessageID != "50" || p.UserID != "7" || p.UserName != "Sam" || p.IsDM || p.ActionID != "approval:9:approve" {
+			t.Fatalf("press: %+v", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("press never arrived")
+	}
+	waitFor(t, func() bool { return len(f.callsTo("answerCallbackQuery")) == 2 })
+	f.mu.Lock()
+	allowed, _ := json.Marshal(f.poll["allowed_updates"])
+	f.mu.Unlock()
+	if string(allowed) != `["message","callback_query"]` {
+		t.Fatalf("allowed_updates: %s", allowed)
+	}
+	for _, ans := range f.callsTo("answerCallbackQuery") {
+		if ans["callback_query_id"] == "cb1" && ans["text"] != "This isn't yours to approve." {
+			t.Fatalf("someone else's press should get a private notice: %v", ans)
+		}
+	}
+	if len(f.callsTo("editMessageText")) != 0 {
+		t.Fatal("a refused press must not settle the message")
+	}
+	select {
+	case p := <-presses:
+		t.Fatalf("a bot's press reached the handler: %+v", p)
+	default:
+	}
+
+	// The owner's press settles the message: outcome added, buttons gone.
+	f.mu.Lock()
+	f.updates = []map[string]any{callback(3, 42, false, "approval:9:approve")}
+	f.mu.Unlock()
+	waitFor(t, func() bool { return len(f.callsTo("editMessageText")) == 1 })
+	edit := f.callsTo("editMessageText")[0]
+	if edit["text"] != "Pip\nI need your OK\n\n✅ Approved" || fmt.Sprint(edit["chat_id"]) != "-5" || fmt.Sprint(edit["message_id"]) != "50" {
+		t.Fatalf("edit: %v", edit)
+	}
+	ents, _ := json.Marshal(edit["entities"])
+	if string(ents) != `[{"length":3,"offset":0,"type":"bold"},{"length":10,"offset":20,"type":"italic"}]` {
+		t.Fatalf("entities: %s", ents)
+	}
+	if kb, _ := json.Marshal(edit["reply_markup"]); string(kb) != `{"inline_keyboard":[]}` {
+		t.Fatalf("buttons not removed: %s", kb)
+	}
+
+	// If the text can't be edited, the buttons still go.
+	f.mu.Lock()
+	f.rejectEdit = true
+	f.updates = []map[string]any{callback(4, 42, false, "approval:9:approve")}
+	f.mu.Unlock()
+	waitFor(t, func() bool { return len(f.callsTo("editMessageReplyMarkup")) == 1 })
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A message with buttons answered some other way is settled as a press
+// would settle it: outcome under the text, buttons gone.
+func TestSettleActions(t *testing.T) {
+	a, f := newTest(t)
+	ctx := context.Background()
+	acts := []channel.Action{{ID: "approval:7:approve", Label: "Approve"}, {ID: "approval:7:deny", Label: "Deny"}}
+	ids, err := a.SendActions(ctx, "42", channel.Persona{Name: "Pip"}, "I need your OK", acts)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("send: %v %v", ids, err)
+	}
+	if err := a.SettleActions(ctx, "42", ids[0], "✅ Approved"); err != nil {
+		t.Fatal(err)
+	}
+	edits := f.callsTo("editMessageText")
+	if len(edits) != 1 {
+		t.Fatalf("edits: %+v", edits)
+	}
+	edit := edits[0]
+	if edit["text"] != "<b>Pip</b>\nI need your OK\n\n✅ Approved" || fmt.Sprint(edit["chat_id"]) != "42" || fmt.Sprint(edit["message_id"]) != ids[0] {
+		t.Fatalf("edit: %v", edit)
+	}
+	ents, _ := json.Marshal(edit["entities"])
+	if string(ents) != `[{"length":10,"offset":27,"type":"italic"}]` {
+		t.Fatalf("entities: %s", ents)
+	}
+	if kb, _ := json.Marshal(edit["reply_markup"]); string(kb) != `{"inline_keyboard":[]}` {
+		t.Fatalf("buttons not removed: %s", kb)
+	}
+
+	// A message it doesn't remember (sent before a restart) only loses
+	// its buttons.
+	if err := a.SettleActions(ctx, "42", "77", "Expired"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.callsTo("editMessageText")); n != 1 {
+		t.Fatalf("edited text it doesn't know: %d", n)
+	}
+	rm := f.callsTo("editMessageReplyMarkup")
+	if len(rm) != 1 || fmt.Sprint(rm[0]["message_id"]) != "77" {
+		t.Fatalf("buttons not removed: %+v", rm)
+	}
+
+	// If the text can't be edited, the buttons still go.
+	ids, _ = a.SendActions(ctx, "42", channel.Persona{Name: "Pip"}, "I need your OK", acts)
+	f.mu.Lock()
+	f.rejectEdit = true
+	f.mu.Unlock()
+	if err := a.SettleActions(ctx, "42", ids[0], "✖️ Denied"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.callsTo("editMessageText")) != 2 || len(f.callsTo("editMessageReplyMarkup")) != 2 {
+		t.Fatal("no fallback to removing the buttons")
+	}
+	if err := a.SettleActions(ctx, "42", "nope", "Expired"); err == nil {
+		t.Fatal("a bad message id should fail")
+	}
+}
+
+// Only so many messages' texts are remembered.
+func TestButtonedIsBounded(t *testing.T) {
+	a := New(token, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for i := 0; i < maxButtoned+10; i++ {
+		a.remember(1, int64(i), sentText{Text: "x"})
+	}
+	if len(a.buttoned) != maxButtoned || len(a.buttonedQ) != maxButtoned || a.forget(1, 0) != nil || a.forget(1, maxButtoned+9) == nil {
+		t.Fatalf("remembered %d", len(a.buttoned))
 	}
 }

@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v29)
 
 - Sprigs speak first: check-in presets per sprig, in the character file
   (`initiative.morning_brief`, `initiative.event_reminders`,
@@ -41,6 +41,47 @@ stated.
   estimates the cost: above `budget.ask_above_usd` ($0.25) it asks first
   with the figure, and it refuses anything that would cross a cap, saying
   by how much. Estimates are kept next to what things really cost.
+- Starter sprigs: five ready-made sprigs for a household, shipped in
+  the binary as sprig packages. Sage, a homework helper for kids that
+  asks rather than answers; Poppy, a reading buddy for kids; Basil, a
+  meal planner (the week's dinners and one shopping list); Clover, a bill
+  tracker (solo or family; reminds, never pays: every tool it is ever
+  given starts read only); and Thyme, a chore chart that keeps the
+  rotation fair from the household calendar. Each comes with a real
+  voice, an avatar, voice tests, the skills it needs, a spend cap and
+  sensible levels; suggested routines arrive paused until you turn them
+  on. `thicket sprig starter` lists and adds them (`--kid` for the kid
+  ones, `--export DIR` writes them as `.sprig` files), and Juni offers
+  the one that fits in chat ("you said you have a 9-year-old: want a
+  reading buddy?"), showing everything first. Kid starters are added
+  only by an owner or admin, who becomes the kid sprig's parent and sees
+  the parent preview before it exists. Worked examples in
+  [Writing a sprig](docs/authoring.md#starter-sprigs).
+- A permission level set for every sprig no longer reaches solo
+  (private) sprigs, core tools included: only a solo sprig's person
+  decides what it may do. Its own levels and the tool defaults apply.
+  If you relied on an every-sprig level for your own solo sprig, set it
+  on that sprig.
+- A weekly digest (schema v28): once a week, Sunday 18:00 in each
+  adult's own timezone by default (`digest.day`, `digest.time`; `off`
+  stops it), Juni sends each adult one short message: per sprig, what it
+  did (job runs, replies, changes from the trail), what's waiting on them
+  (open inbox items and approvals) and what it cost that week, with a
+  total and a dashboard link. Each adult sees their own solo sprigs and
+  the family sprigs, parents also their kid sprigs, and nobody another
+  adult's solo sprig. Costs follow the dashboard: admins see a family
+  sprig's whole week against its week (labelled "7 × daily cap": there
+  is no weekly cap setting), everyone else only their own share of it;
+  solo sprigs' owners and kid sprigs' parents see the whole cost, and
+  the total is the sum of what each person is shown. Built in code from
+  the database, never by a model; it waits out quiet hours (sent once
+  they end, within a day) and pauses but not the daily budget. A quiet
+  week sends one line, or nothing for whoever asks for that: tell Juni
+  (new `weekly_digest` tool, which also shows the digest on request),
+  pick it under **Weekly digest** in your web app account, or
+  `GET`/`PUT /api/v2/digest`; each person sets only their own.
+  Migration 0028 keeps each person's choice. See
+  [The weekly digest](docs/household.md#the-weekly-digest).
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
   `likes` and `dislikes` (what annoyed you) sit with the existing
@@ -167,6 +208,22 @@ stated.
   sprig's file was removed could finish last and bring the sprig back,
   without its cap, until the next file check. Each reload now drops what
   it read if a later reload has already finished.
+- One-tap **Approve** / **Deny** buttons on approval prompts in Telegram
+  (inline keyboard, `callback_query` updates) and Discord (message
+  components, sent through the bot or an application-owned webhook). A
+  tap settles the message (the buttons go, the outcome shows) and runs or
+  cancels the action; anyone but the person asked is told privately that
+  it isn't theirs. Typing approve or deny still works. Adapters opt in
+  with the new `channel.ActionSender` interface. An approval is now
+  reserved before its prompt is sent (so the buttons can name it) and
+  becomes answerable only once the prompt is delivered; a tap in that
+  moment is asked to try again. Answered any other way (typed, from the
+  dashboard or the API) or left to expire, the prompt is settled too:
+  Thicket keeps the prompt message's id (schema v29) and edits it to show
+  the outcome without its buttons, through the new optional
+  `channel.ActionSettler` (`SettleActions`). A sweep each minute settles
+  prompts that expired. Telegram remembers recent prompts' text for the
+  edit; one sent before a restart only loses its buttons.
 
 ## Unreleased: sprig packages and untrusted content
 

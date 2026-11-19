@@ -29,6 +29,10 @@ import (
 // (tool "*": new sprigs start at draft), or per tool for all sprigs; the
 // most specific wins. Core tools (memory, teamwork) ignore a sprig-wide
 // level: a sprig at draft still remembers things.
+//
+// A level for all sprigs is household policy for shared sprigs: it doesn't
+// reach a solo sprig, core tools included, since only a solo sprig's
+// person decides what it may do. Its own rows and the defaults apply.
 
 // changes reports whether a tool changes something outside the chat.
 func changes(t *Tool) bool { return t.Risky || t.Writes }
@@ -37,12 +41,17 @@ func changes(t *Tool) bool { return t.Risky || t.Writes }
 // so a sprig-wide level applies to it.
 func granted(t *Tool) bool { return t.Scope != "" && t.Scope != "host" }
 
+// levelFor says which stored levels apply to this sprig's tool.
+func levelFor(c *character.Character, t *Tool) store.LevelFor {
+	return store.LevelFor{Granted: granted(t), Private: c.Tier() == character.TierSolo}
+}
+
 // toolLevel returns the level that applies to this sprig and tool.
 func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *Tool) string {
 	if c.IsKid() {
 		return store.LevelRead // whatever is stored: kid sprigs never change anything
 	}
-	lv, err := e.DB.ToolLevel(ctx, c.ID, tool.Name, granted(tool))
+	lv, err := e.DB.ToolLevel(ctx, c.ID, tool.Name, levelFor(c, tool))
 	if err != nil {
 		e.Log.Error("read tool level; asking instead", "tool", tool.Name, "err", err)
 		return store.LevelAsk // fail closed

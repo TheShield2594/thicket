@@ -90,9 +90,7 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 		Personality: character.Personality{Traits: s.Traits},
 		Voice:       character.Voice{Style: s.VoiceStyle},
 		CreatedBy:   "household",
-		Body: strings.TrimSpace(s.Description + "\n\nYou are talking with a child. Keep things age-appropriate and kind. " +
-			"Never ask for or encourage sharing personal details (address, school, phone, photos), never suggest meeting anyone, " +
-			"and if they seem upset, unsafe or talk about hurting themselves, be gentle and encourage them to talk to a grown-up they trust."),
+		Body:        strings.TrimSpace(s.Description + "\n\n" + kidSafetyNote),
 	}
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, errors.New(strings.Join(probs, "; "))

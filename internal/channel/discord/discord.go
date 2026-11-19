@@ -39,6 +39,7 @@ type Adapter struct {
 	chanInfo map[string]*discordgo.Channel
 	onDelete func(ctx context.Context, d channel.Deletion)
 	onReact  func(ctx context.Context, r channel.Reaction)
+	onPress  channel.PressHandler
 }
 
 // OnReaction registers what to call when someone adds a reaction. Call it
@@ -48,6 +49,10 @@ func (a *Adapter) OnReaction(f func(ctx context.Context, r channel.Reaction)) { 
 // OnDelete registers what to call when someone deletes messages. Call it
 // before Run.
 func (a *Adapter) OnDelete(f func(ctx context.Context, d channel.Deletion)) { a.onDelete = f }
+
+// OnPress registers what to call when someone presses a button. Call it
+// before Run.
+func (a *Adapter) OnPress(h channel.PressHandler) { a.onPress = h }
 
 // ownHook reports whether a webhook id is one of ours (a sprig's post).
 func (a *Adapter) ownHook(id string) bool {
@@ -177,6 +182,11 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 			Attachments: atts, ReplyTo: replyTo,
 		}
 		go h(ctx, in)
+	})
+	s.AddHandler(func(_ *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Interaction != nil && i.Type == discordgo.InteractionMessageComponent {
+			go a.press(ctx, i.Interaction)
+		}
 	})
 	s.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageDelete) {
 		if a.onDelete != nil && m.Message != nil {

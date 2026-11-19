@@ -32,16 +32,33 @@ func ValidLevel(s string) bool {
 // granted tools (its scoped tools, not the core ones like memory).
 const AnyTool = "*"
 
+// LevelFor says which rows apply to a sprig's tool.
+type LevelFor struct {
+	// Granted: the tool comes from a scope the sprig was given, so the
+	// sprig's level for all its tools (tool "*") covers it.
+	Granted bool
+	// Private: the sprig is one person's (solo). A level set for every
+	// sprig doesn't reach it: only its own rows count, so nobody but its
+	// person decides what it may do.
+	Private bool
+}
+
+// levelQuery picks the most specific level row that applies; see ToolLevel.
+const levelQuery = `SELECT level FROM tool_levels WHERE
+		(character = ? AND tool = ?) OR (? AND character = ? AND tool = '*') OR (NOT ? AND character = '*' AND tool = ?)
+		ORDER BY CASE WHEN character = '*' THEN 2 WHEN tool = '*' THEN 1 ELSE 0 END LIMIT 1`
+
+func levelArgs(character, tool string, f LevelFor) []any {
+	return []any{character, tool, f.Granted, character, f.Private, tool}
+}
+
 // ToolLevel returns the level set for a sprig and tool, most specific
-// first: the sprig's own level for this tool, then (for a granted tool,
-// scoped=true) the sprig's level for all its tools, then this tool's level
-// for every sprig. "" means use the tool's default.
-func (s *Store) ToolLevel(ctx context.Context, character, tool string, scoped bool) (string, error) {
+// first: the sprig's own level for this tool, then (for a granted tool)
+// the sprig's level for all its tools, then (unless the sprig is private)
+// this tool's level for every sprig. "" means use the tool's default.
+func (s *Store) ToolLevel(ctx context.Context, character, tool string, f LevelFor) (string, error) {
 	var v string
-	err := s.db.QueryRowContext(ctx, `SELECT level FROM tool_levels WHERE
-		(character = ? AND tool = ?) OR (? AND character = ? AND tool = '*') OR (character = '*' AND tool = ?)
-		ORDER BY CASE WHEN character = '*' THEN 2 WHEN tool = '*' THEN 1 ELSE 0 END LIMIT 1`,
-		character, tool, scoped, character, tool).Scan(&v)
+	err := s.db.QueryRowContext(ctx, levelQuery, levelArgs(character, tool, f)...).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -56,7 +73,7 @@ var ErrLevelChanged = errors.New("the level changed")
 // is set). The check and the write are one transaction, so a change made
 // in between can't be overwritten. A failed read refuses rather than
 // assuming anything.
-func (s *Store) RaiseToolLevel(ctx context.Context, character, tool string, scoped bool, def, from, to string) (string, error) {
+func (s *Store) RaiseToolLevel(ctx context.Context, character, tool string, f LevelFor, def, from, to string) (string, error) {
 	if !ValidLevel(to) {
 		return "", errors.New("level must be read, draft, ask or act")
 	}
@@ -66,10 +83,7 @@ func (s *Store) RaiseToolLevel(ctx context.Context, character, tool string, scop
 	}
 	defer tx.Rollback()
 	var cur string
-	err = tx.QueryRowContext(ctx, `SELECT level FROM tool_levels WHERE
-		(character = ? AND tool = ?) OR (? AND character = ? AND tool = '*') OR (character = '*' AND tool = ?)
-		ORDER BY CASE WHEN character = '*' THEN 2 WHEN tool = '*' THEN 1 ELSE 0 END LIMIT 1`,
-		character, tool, scoped, character, tool).Scan(&cur)
+	err = tx.QueryRowContext(ctx, levelQuery, levelArgs(character, tool, f)...).Scan(&cur)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		cur = def

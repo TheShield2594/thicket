@@ -376,6 +376,9 @@ type Approval struct {
 	CreatedAt time.Time
 	// EstimateID is the cost estimate the person was asked with (0: none).
 	EstimateID int64
+	// Reserved is set (by ApprovalByID) while its prompt is still being
+	// sent: nothing can answer it yet.
+	Reserved bool
 }
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (int64, error) {
@@ -419,6 +422,90 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status string) (bo
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// ReserveApproval stores an approval whose prompt isn't out yet, so its id
+// can go on the prompt's buttons. Until OpenApproval nothing can answer it:
+// it is held as expired, with no decision time.
+func (s *Store) ReserveApproval(ctx context.Context, a Approval) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id) VALUES (?, ?, ?, ?, ?, 'expired', ?, ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// OpenApproval makes a reserved approval answerable, from now. promptMsg
+// is the id of the prompt's message with buttons ("" if it has none), so
+// it can be settled once the approval is answered or expires.
+func (s *Store) OpenApproval(ctx context.Context, id int64, promptMsg string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE approvals SET status = 'pending', created_at = ?, prompt_msg = ? WHERE id = ? AND status = 'expired' AND decided_at IS NULL",
+		s.unix(), promptMsg, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DropApproval deletes a reserved approval whose prompt never reached the
+// user.
+func (s *Store) DropApproval(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM approvals WHERE id = ? AND status = 'expired' AND decided_at IS NULL", id)
+	return err
+}
+
+// TakePromptMsg returns the id of an approval's prompt message still to
+// be settled, and clears it: whoever takes it settles it, once. "" means
+// there is none (no buttons, or already settled).
+func (s *Store) TakePromptMsg(ctx context.Context, id int64) (string, error) {
+	var msg string
+	err := s.db.QueryRowContext(ctx, "SELECT prompt_msg FROM approvals WHERE id = ?", id).Scan(&msg)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && msg == "") {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE approvals SET prompt_msg = '' WHERE id = ? AND prompt_msg = ?", id, msg)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return "", nil // someone else took it
+	}
+	return msg, nil
+}
+
+// UnsettledApprovals expires pending approvals older than maxAge, then
+// lists the answered or expired approvals whose prompt still shows its
+// buttons.
+func (s *Store) UnsettledApprovals(ctx context.Context, maxAge time.Duration) ([]Approval, error) {
+	now := s.unix()
+	if _, err := s.db.ExecContext(ctx, "UPDATE approvals SET status = 'expired', decided_at = ? WHERE status = 'pending' AND created_at < ?",
+		now, now-int64(maxAge.Seconds())); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, character, chat_ref, tool, status, created_at FROM approvals
+		WHERE prompt_msg != '' AND status != 'pending' AND decided_at IS NOT NULL ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		var a Approval
+		var at int64
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Status, &at); err != nil {
+			return nil, err
+		}
+		a.CreatedAt = time.Unix(at, 0)
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) SetApprovalResult(ctx context.Context, id int64, result string) error {

@@ -44,7 +44,9 @@ internal/avatar      parametric SVG avatars with CSS-animated states
      and locks the chat so turns run in order;
    - intercepts secrets: a pending `request_secret` capture, or anything
      credential-shaped. These never reach the model or the history;
-   - resolves a pending approval if the message is "approve"/"deny";
+   - resolves a pending approval if the message is "approve"/"deny"
+     (on Telegram and Discord, the prompt's buttons do the same; see
+     [Adding a channel](#adding-a-channel));
    - if no model key exists yet, sends the scripted first-run greeting;
    - picks the sprig: addressed by name, else whoever spoke last in this
      chat, else the host.
@@ -330,7 +332,10 @@ it, routing and ownership agree.
 
 Every tool call passes `Engine.gate` before it runs. The level comes from
 `tool_levels` (a sprig's own row, else the `*` row for every sprig, else
-the default: `ask` for `Tool.Risky`, `act` otherwise). `read` refuses risky
+the default: `ask` for `Tool.Risky`, `act` otherwise). A solo sprig skips
+the every-sprig row (`store.LevelFor.Private`), core tools included: only
+its person decides what it may do, so a household-wide level covers
+shared sprigs and leaves private ones on their own rows and the defaults. `read` refuses risky
 tools, `draft` saves the exact call to the inbox instead of running it,
 `ask` registers an approval, `act` runs. Non-risky tools run at `read` and
 `draft`. Approving re-checks the level, so lowering it cancels a pending
@@ -465,6 +470,21 @@ follow-ups aren't written until they may go out. Replies, approvals,
 safety alerts and failure reports bypass the gate and aren't counted;
 `mustReach` adds a line saying why when the gate would have held them.
 
+The weekly digest (`internal/agent/digest.go`) is proactive but outside
+that budget: `WeeklyDigests`, run on every initiative tick, finds each
+adult whose `digest.day`/`digest.time` passed in their timezone within the
+last day, waits out the host's quiet hours and pauses, claims
+`digest:<user>:<date>` in `notices` so it goes once, and sends what
+`BuildDigest` gathered from `job_runs`, `trail`, `inbox`, `approvals`,
+`messages` and `usage`, through `sendToUser` (no `RecordProactive`). Who
+sees which sprig is `UsableBy` or `IsParent`, never `PrivateFrom`; the
+text is built in code. A family sprig's cost is `SpendBetween` for
+admins and `UserSpendBetween` (`usage.user_id`) for everyone else, as
+the dashboard shows costs to admins only. `digest_prefs` (migration 0028)
+holds each person's `always`, `skip_empty` or `off`, set by the
+`weekly_digest` tool or `GET`/`PUT /api/v2/digest` (and `/api/digest`
+for the web app; `internal/web/digest.go`).
+
 Before that gate, every proactive message passes the worth-saying gate
 (`internal/agent/worth.go`) once it's written: in `RunJob` for job and
 trigger output, in `proactive` for check-ins and follow-ups. `worthSaying`
@@ -556,6 +576,43 @@ full guide, with testing against a fake API, is
 references are stored as `<channel>:<chat id>`. Attachments that need an
 authenticated download set `Attachment.Open`, whose errors must not
 contain the token (Telegram's file URLs do).
+
+Optional interfaces, checked by type assertion, add more:
+`channel.Poster` (say which message ids a send became),
+`channel.DeleteWatcher` (hear about deleted messages) and
+`channel.ActionSender` (buttons on a message). An `ActionSender` posts
+text with `[]channel.Action` (a label and an opaque id under 64 bytes)
+and delivers each tap to the handler given to `OnPress` as a
+`channel.Press` carrying the chat, the message and who pressed. The
+handler answers within a moment with a `PressReply`: a `Notice` shown to
+the presser alone (Telegram's callback answer, a Discord ephemeral
+follow-up) and/or an `Outcome` that settles the message (buttons removed,
+outcome shown), so it can't be pressed twice. Telegram uses an inline
+keyboard and `callback_query` updates; Discord uses message components and
+interactions, acknowledged at once (Discord allows three seconds) and
+posted through the bot, or the persona webhook when an application owns
+it, since only then do presses reach the bot. Channels without buttons
+get the text alone.
+
+Approval prompts use this: the approval row is reserved (stored as
+expired with no decision time) so the buttons can name it
+(`approval:<id>:approve|deny`), sent, then opened as pending; an
+undelivered prompt's row is deleted. A tap from anyone but the approval's
+user, or from another chat, is refused privately. The engine claims the
+approval at once and runs the action and the sprig's reply afterwards,
+in turn with the chat. Presses only come from people in a chat app, so
+an agent (the local API, the MCP server) still can't answer an approval.
+A tap on a row still reserved (the prompt is out but not yet opened) is
+asked to try again and settles nothing.
+
+The id of the message with the buttons is stored with the approval
+(`approvals.prompt_msg`). However the approval ends, whoever ends it
+takes that id (`TakePromptMsg` clears it, so it is settled once): a
+press settles the message itself; a typed answer or one from the
+dashboard or API calls the channel's optional `channel.ActionSettler`
+(`SettleActions`) in the background; and `RunApprovalSweep` expires
+unanswered approvals each minute and settles their prompts as
+"Expired". A failed edit is logged and never undoes the decision.
 
 A user can have several identities, one per app account
 (`identities` table). `UserByExternal` resolves any of them;

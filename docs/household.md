@@ -84,7 +84,10 @@ permission levels, trust upgrades, exec, granted paths, and pausing it.
 
 So a member can change their own solo sprigs' levels ("Juni, let Wren
 add to my reading list without asking") but not a family sprig's or
-anyone else's. Every refused attempt goes in the [trail](#the-trail) as
+anyone else's. A level set for every sprig is household policy for
+shared sprigs: it doesn't reach solo sprigs, not even for core tools like
+memory, so it can't change what someone's private sprig may do (yours
+included: set your own solo sprig's levels on the sprig itself). Every refused attempt goes in the [trail](#the-trail) as
 `refused` and in the activity log; one aimed at someone else's private
 sprig doesn't name it. Giving a sprig an integration (`grant_tools` with
 `mcp:…`) stays with admins, since integrations hold the household's
@@ -139,6 +142,10 @@ voice:
 
 Admins create them (`POST /api/v2/kid-sprigs`, or write the file). Their
 parents then decide what they may use (`PATCH /api/v2/kid-sprigs/bramble/access`).
+Two ready-made kid sprigs come with Thicket, a homework helper and a
+reading buddy: ask Juni, or `thicket sprig starter reading-buddy --kid
+NAME`. The admin who adds one becomes its parent and sees everything it
+will be first ([Starter sprigs](authoring.md#starter-sprigs)).
 
 ## What kid sprigs can't do
 
@@ -189,6 +196,48 @@ memory apart from facts: edit, lock, undo or delete any of it, or add
   that contain a warning word; messages about self-harm alert even if
   that check fails. Alerts are at most one an hour per kid and concern, go
   in the trail, and never block the chat.
+
+## The weekly digest
+
+Once a week Juni sends each adult one short message about their week:
+for each sprig they can see, what it did (job runs, replies, what it put
+on the calendar or changed, from the trail), what's waiting on them
+(open inbox items and approvals), and what it cost that week against its
+cap, with a total and a link to the dashboard for the rest.
+
+- **When:** `digest.day` (default `sunday`) at `digest.time` (default
+  `18:00`), in each person's own timezone. `digest.day off` stops it for
+  the household. It waits for the end of Juni's quiet hours, sends
+  nothing while Thicket or Juni is paused, and is not limited by Juni's
+  daily message budget (nor does it count against it). A digest that
+  can't go out within a day of its time is skipped for that week.
+- **What each person sees:** their own solo sprigs and the family
+  sprigs; parents also get the kid sprigs they set up (replies to the
+  kids, safety alerts). Never another adult's solo sprig, not even its
+  name or what it cost. Job runs, inbox items and approvals are the
+  person's own; a family sprig's changes are the person's own, or
+  everyone's for admins, as under **Changes** on the dashboard. Kids get
+  no digest.
+- **Cost**, shown as the dashboard shows it (only admins see what a
+  sprig costs in all):
+  - a family sprig: admins see its whole week, for everyone it worked
+    for, against its week; everyone else sees only **their share** (the
+    spend recorded for them), never the family total or its cap;
+  - your own solo sprig, and a kid sprig you're a parent of: its whole
+    week against its week.
+
+  There is no weekly cap setting: a sprig's week is seven times its
+  daily cap (`budget.character.<id>.daily_usd`), and the digest says so:
+  "$0.30 of a $7.00 week (7 × $1.00 daily cap)", or "no cap of its own".
+  The total is the sum of the amounts that person was shown.
+- **Quiet weeks** get one line. Tell Juni "skip the digest when there's
+  nothing in it" (or "turn my weekly digest off", or "show me my
+  digest") to change that for you; it's the `weekly_digest` tool. The
+  same choice (every week, only weeks with something in it, or off) is
+  under **Weekly digest** in your account in the web app, and at
+  `/api/v2/digest` for apps. Each person sets only their own.
+- It is put together from the database in code, not written by a model,
+  so the numbers and the needs-you list are exactly what the records say.
 
 ## The trail
 

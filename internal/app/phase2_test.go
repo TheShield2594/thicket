@@ -67,7 +67,7 @@ func TestOnboardingShowsADiffAndWaitsForApproval(t *testing.T) {
 	if vt, _ := character.LoadVoiceTests(dir, "wren"); len(vt) != 3 || vt[0].Reference != "" {
 		t.Fatalf("voice tests: %+v", vt)
 	}
-	if lv, _ := a.DB.ToolLevel(ctx, "wren", "schedule_job", true); lv != store.LevelDraft {
+	if lv, _ := a.DB.ToolLevel(ctx, "wren", "schedule_job", store.LevelFor{Granted: true}); lv != store.LevelDraft {
 		t.Fatalf("new sprig's tools start at %q, want draft", lv)
 	}
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
@@ -120,7 +120,7 @@ func TestOnboardingUndoesOnFailure(t *testing.T) {
 	if jobs, _ := a.DB.UserJobs(ctx, owner.ID); len(jobs) != 0 {
 		t.Fatalf("routines left behind: %+v", jobs)
 	}
-	if lv, _ := a.DB.ToolLevel(ctx, "wren", "schedule_job", true); lv != "" {
+	if lv, _ := a.DB.ToolLevel(ctx, "wren", "schedule_job", store.LevelFor{Granted: true}); lv != "" {
 		t.Fatalf("level left behind: %q", lv)
 	}
 	os.Remove(theirs)
@@ -173,7 +173,7 @@ func TestTrustUpgrade(t *testing.T) {
 	}
 	a.Engine.HandleIncoming(ctx, dm("approve"))
 	fc.take()
-	if lv, _ := a.DB.ToolLevel(ctx, "hal", "mcp_ha__turn_on", true); lv != store.LevelAct {
+	if lv, _ := a.DB.ToolLevel(ctx, "hal", "mcp_ha__turn_on", store.LevelFor{Granted: true}); lv != store.LevelAct {
 		t.Fatalf("level after approval: %q", lv)
 	}
 	a.Engine.HandleIncoming(ctx, dm("hal, turn on the light"))
@@ -566,7 +566,7 @@ func TestStaleTrustUpgradeIsRefused(t *testing.T) {
 	fc.take()
 	a.DB.SetToolLevel(ctx, "hal", "mcp_ha__turn_on", store.LevelRead) // lowered meanwhile
 	a.Engine.HandleIncoming(ctx, dm("approve"))
-	if lv, _ := a.DB.ToolLevel(ctx, "hal", "mcp_ha__turn_on", true); lv != store.LevelRead {
+	if lv, _ := a.DB.ToolLevel(ctx, "hal", "mcp_ha__turn_on", store.LevelFor{Granted: true}); lv != store.LevelRead {
 		t.Fatalf("a stale request raised the level to %q", lv)
 	}
 	if err := a.DB.SetToolLevel(ctx, store.AllSprigs, store.AnyTool, store.LevelRead); err == nil {

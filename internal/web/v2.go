@@ -62,6 +62,9 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/chats/{chat}/messages/{id}/audio", a.bearer(a.audio))
 	mux.HandleFunc("PUT /api/v2/sprigs/{id}/voice", a.bearer(a.setVoice))
 	mux.HandleFunc("GET /api/v2/events", a.bearer(a.events))
+	// The signed-in person's weekly digest choice.
+	mux.HandleFunc("GET /api/v2/digest", a.bearer(a.getDigest))
+	mux.HandleFunc("PUT /api/v2/digest", a.bearer(a.setDigest))
 	// Calendar.
 	mux.HandleFunc("GET /api/v2/calendar", a.bearer(a.v2Calendar))
 	mux.HandleFunc("GET /api/v2/calendars", a.bearer(a.v2Calendars))

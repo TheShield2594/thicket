@@ -54,7 +54,7 @@ func TestSprigPackageCLI(t *testing.T) {
 	}
 	db, _ := openStore(dst)
 	defer db.Close()
-	if lv, _ := db.ToolLevel(context.Background(), "fern", "schedule_job", true); lv != store.LevelDraft {
+	if lv, _ := db.ToolLevel(context.Background(), "fern", "schedule_job", store.LevelFor{Granted: true}); lv != store.LevelDraft {
 		t.Fatalf("level %q", lv)
 	}
 	err := importSprigCmd(dst, []string{pkg, "--yes"}, nil, &out)

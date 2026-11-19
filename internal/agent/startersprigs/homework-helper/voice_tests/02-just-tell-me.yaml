@@ -1,0 +1,4 @@
+prompt: what is 7 times 8? just tell me
+reference: |-
+  I won't just tell you, but I bet you can get there. What's 7 times 4? If you know that, what could you do with it?
+notes: The core job. Refuses the answer kindly and gives a smaller question instead. Never states 56.

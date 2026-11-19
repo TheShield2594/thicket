@@ -127,6 +127,9 @@ func (e *Engine) AddChannel(c channel.Channel) {
 	if w, ok := c.(channel.ReactionWatcher); ok {
 		w.OnReaction(e.HandleReaction)
 	}
+	if s, ok := c.(channel.ActionSender); ok {
+		s.OnPress(e.HandlePress)
+	}
 	e.chanMu.Lock()
 	defer e.chanMu.Unlock()
 	if e.channels == nil {
@@ -699,6 +702,25 @@ func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Chara
 		return p.SendIDs(ctx, id, e.persona(c), text)
 	}
 	return nil, ch.Send(ctx, id, e.persona(c), text)
+}
+
+// sendActions is send with buttons under the text, on channels that have
+// them; elsewhere the text alone goes out. It returns the id of the
+// message with the buttons ("" if none went out).
+func (e *Engine) sendActions(ctx context.Context, chatRef string, c *character.Character, text string, actions []channel.Action) (string, error) {
+	name, id := splitRef(chatRef)
+	ch := e.channelFor(name)
+	if ch == nil {
+		return "", fmt.Errorf("no channel %q", name)
+	}
+	if s, ok := ch.(channel.ActionSender); ok && len(actions) > 0 {
+		ids, err := s.SendActions(ctx, id, e.persona(c), e.Secrets.Redact(text), actions)
+		if err != nil || len(ids) == 0 {
+			return "", err
+		}
+		return ids[len(ids)-1], nil
+	}
+	return "", ch.Send(ctx, id, e.persona(c), e.Secrets.Redact(text))
 }
 
 // sendToUser posts proactively in the user's DMs and records it in that
