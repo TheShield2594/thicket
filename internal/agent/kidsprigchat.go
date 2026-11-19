@@ -155,11 +155,13 @@ func (e *Engine) proposeKidSprig(ctx context.Context, t *turn, id string) (strin
 	if err != nil {
 		return "", err
 	}
-	b, err := json.Marshal(kidSprigApproval{Spec: d.spec, CapUSD: e.Settings.Float(ctx, "budget.kid_monthly_usd")})
+	// The cap is read once: the preview shows it and creation installs it.
+	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
+	b, err := json.Marshal(kidSprigApproval{Spec: d.spec, CapUSD: capUSD})
 	if err != nil {
 		return "", err
 	}
-	t.askAs(t.char, e.kidSprigPreview(ctx, c, d), &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: t.chatRef,
+	t.askAs(t.char, e.kidSprigPreview(c, d, capUSD), &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: t.chatRef,
 		Tool: internalPrefix + "create_kid_sprig", Args: string(b)})
 	e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed kid sprig "+c.DisplayName(), "")
 	return fmt.Sprintf("PENDING: the user is being shown the parent preview of %s and asked to approve. Tell them briefly to look it over; don't say it's created.", c.DisplayName()), nil
@@ -167,7 +169,7 @@ func (e *Engine) proposeKidSprig(ctx context.Context, t *turn, id string) (strin
 
 // kidSprigPreview is the parent preview: who the sprig will be and every
 // limit it has.
-func (e *Engine) kidSprigPreview(ctx context.Context, c *character.Character, d *kidDraft) string {
+func (e *Engine) kidSprigPreview(c *character.Character, d *kidDraft, capUSD float64) string {
 	var b strings.Builder
 	kids, parents := strings.Join(d.kidNames, " and "), strings.Join(d.parentNames, " and ")
 	fmt.Fprintf(&b, "🌱 Parent preview: here's who %s will be for %s. Nothing is created until you say so.\n", c.DisplayName(), kids)
@@ -179,7 +181,7 @@ func (e *Engine) kidSprigPreview(ctx context.Context, c *character.Character, d 
 	fmt.Fprintf(&b, "- Talks only to %s. No adult can chat with it, Juni included, and it never messages anyone on its own.\n", kids)
 	fmt.Fprintf(&b, "- Parents: %s. They can read every chat, decide what it may use, and get a safety alert if something worrying comes up.\n", parents)
 	b.WriteString("- Starts with no tools, no family memory and no calendar: only the kid's own memories. Parents can allow more, one thing at a time.\n")
-	if capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd"); capUSD > 0 {
+	if capUSD > 0 {
 		fmt.Fprintf(&b, "- Spending: at most **%s a month**, which only its parents can raise.\n", money(capUSD))
 	}
 	fmt.Fprintf(&b, "Once it's created, its parents hear what they can do, and %s gets a first hello.\nReply **approve** or **deny**.", kids)
@@ -194,11 +196,8 @@ func (e *Engine) createKidSprigApproved(ctx context.Context, user *store.User, a
 		return "", err
 	}
 	spec := ap.Spec
-	// Only the cap the parent preview showed.
-	if now := e.Settings.Float(ctx, "budget.kid_monthly_usd"); now != ap.CapUSD {
-		return "", fmt.Errorf("the monthly cap for new kid sprigs changed since the preview (%s → %s), so nothing was created: preview it again and approve that", money(ap.CapUSD), money(now))
-	}
-	c, err := e.CreateKidSprig(ctx, user, spec)
+	// Exactly the cap the parent preview showed, whatever the setting is now.
+	c, err := e.createKidSprig(ctx, user, spec, ap.CapUSD)
 	if err != nil {
 		return "", err
 	}

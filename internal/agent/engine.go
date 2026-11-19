@@ -86,6 +86,7 @@ type Engine struct {
 	drafts    sync.Map   // user id -> *character.Character
 	kidDrafts sync.Map   // user id -> *kidDraft
 	kidMu     sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
+	kidTurns  sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
@@ -372,8 +373,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		ch.Typing(ctx, in.ChatID)
 	}
 	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages,
-		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken}
+		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken, said: in.Text}
 	if user.IsKid() {
+		// One turn at a time per kid, across chats and apps, so two at once
+		// can't both spend the last of a daily allowance.
+		mu, _ := e.kidTurns.LoadOrStore(user.ID, &sync.Mutex{})
+		mu.(*sync.Mutex).Lock()
+		defer mu.(*sync.Mutex).Unlock()
 		// Past a time limit the kid hears so, kindly, and no reply model is
 		// called. A message the safety check screens is screened first: if
 		// it's flagged (or can't be screened), the kid gets a real answer.
@@ -539,7 +545,11 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 			return nil
 		}
 		// A kid sprig past its own time limit doesn't pick it up.
-		if msg := e.kidLimitReply(ctx, t.user, target, t.query); msg != "" && target.IsKid() {
+		said := t.said
+		if said == "" {
+			said = t.query
+		}
+		if msg := e.kidLimitReply(ctx, t.user, target, said); msg != "" && target.IsKid() {
 			e.active.Store(t.chatRef, target.ID)
 			return e.sayLimit(ctx, t.chatRef, t.conv, target, msg)
 		}
@@ -549,7 +559,7 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		if t.conv != nil {
 			_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", note)
 		}
-		next := &turn{user: t.user, char: target, chatRef: t.chatRef, conv: t.conv, isDM: t.isDM, depth: t.depth + 1, query: h.message + " " + t.query, spokenTo: t.spokenTo}
+		next := &turn{user: t.user, char: target, chatRef: t.chatRef, conv: t.conv, isDM: t.isDM, depth: t.depth + 1, query: h.message + " " + t.query, spokenTo: t.spokenTo, said: t.said}
 		next.inherit(t)
 		next.addTaint("sprig " + t.char.ID) // the handoff note is a sprig's words
 		return e.respond(ctx, next, fmt.Sprintf("%s just handed this to you: %q. Pick it up and reply to the user directly.", t.char.DisplayName(), h.message))

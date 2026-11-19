@@ -60,6 +60,10 @@ type turn struct {
 	// spokenTo: the message this answers was a voice message (it was
 	// transcribed), so a sprig that speaks when spoken to answers aloud.
 	spokenTo bool
+	// said is the person's whole message, voice notes transcribed (query
+	// is only what they typed): what a kid sprig's limits are checked
+	// against when a turn is handed over.
+	said string
 	// replied: respond posted a real reply (not a failure notice, a
 	// pause or a cost question).
 	replied bool

@@ -137,8 +137,13 @@ func (e *Engine) screen(ctx context.Context, kid *store.User, c *character.Chara
 		if json.Unmarshal([]byte(stripFence(resp.Message.Content)), &out) == nil {
 			if _, known := safetyLabels[out.Concern]; known && concern == "" {
 				concern = out.Concern
+			} else if !known && out.Concern != "none" {
+				failed = true // an answer it can't read is no answer
 			}
 			summary = oneLine(out.Summary, 300)
+		} else {
+			failed = true
+			e.logActivity(ctx, "warn", "safety", c.ID, kid.ID, "safety check answer unreadable", "")
 		}
 	} else {
 		failed = true

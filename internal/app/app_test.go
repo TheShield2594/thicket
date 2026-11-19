@@ -213,6 +213,8 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		m.mu.Unlock()
 		msg := strings.ToLower(req.Messages[1].Content)
 		switch {
+		case strings.Contains(msg, "garbled"):
+			return text("I think this one is fine, probably?"), nil // not JSON
 		case strings.Contains(msg, "fail screen"):
 			return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
 		case strings.Contains(msg, "where i live"):

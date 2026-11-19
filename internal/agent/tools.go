@@ -1127,6 +1127,10 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	if err != nil {
 		return "", err
 	}
+	// The same lock as every other change to a sprig's file, so a stale
+	// copy never overwrites a newer change (a kid sprig's limits, say).
+	e.kidMu.Lock()
+	defer e.kidMu.Unlock()
 	c, ok := e.Chars.Get(a.Character)
 	if !ok || c.PrivateFrom(t.user.ID) { // someone else's private sprig is theirs to change
 		return "", fmt.Errorf("no sprig with id %q", a.Character)

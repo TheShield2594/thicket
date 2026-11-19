@@ -181,6 +181,21 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 			return "", fmt.Errorf("that cap was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
 		}
 	}
+	if u.Type == "limits" || u.Type == "allow" || u.Type == "grant" {
+		// The same lock as every other change to a sprig's file (kidMu), so
+		// a stale copy never overwrites a newer change.
+		e.kidMu.Lock()
+		defer e.kidMu.Unlock()
+	}
+	if u.Type == "limits" {
+		// Only the latest change to the limits is undone, however the
+		// values repeat: an older one would overwrite a newer change.
+		if latest, err := e.latestLimitsChange(ctx, u.Character); err != nil {
+			return "", err
+		} else if latest == nil || latest.ID != id {
+			return "", fmt.Errorf("the time limits were changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
+		}
+	}
 	// Claim the undo first, so two at once can't both run it.
 	ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID)
 	if err != nil {
@@ -219,29 +234,20 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		done = fmt.Sprintf("%s's tools are back to %s", c.DisplayName(), listOr(cp.Tools))
-	case "limits":
-		// Only while the limits are still what this change set: undoing an
-		// older change would overwrite a newer one.
-		e.kidMu.Lock()
-		defer e.kidMu.Unlock()
+	case "limits": // under kidMu, checked to be the latest change (UndoTrail)
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {
 			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
 		}
-		var l, set character.KidLimits
+		var l character.KidLimits
 		if err := json.Unmarshal(u.Args, &l); err != nil {
 			return "", err
-		}
-		if err := json.Unmarshal([]byte(u.Set), &set); err != nil || set != c.Limits {
-			return "", fmt.Errorf("%s's time limits were changed again since (they're now %s): undo the latest change instead", c.DisplayName(), describeLimits(c.Limits))
 		}
 		if err := e.writeLimits(ctx, c, l); err != nil {
 			return "", err
 		}
 		done = fmt.Sprintf("%s's time limits are back to %s", c.DisplayName(), describeLimits(l))
-	case "allow":
-		e.kidMu.Lock()
-		defer e.kidMu.Unlock()
+	case "allow": // under kidMu (UndoTrail)
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {
 			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
@@ -335,6 +341,22 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 
 // latestCapChange is the newest cap change still in force for one sprig's
 // daily or monthly cap (0 if none).
+// latestLimitsChange is a kid sprig's latest time-limit change not undone,
+// or nil.
+func (e *Engine) latestLimitsChange(ctx context.Context, sprig string) (*store.TrailEntry, error) {
+	entries, err := e.DB.TrailOfKind(ctx, store.TrailGrant, sprig, 500)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		var u trailUndo
+		if json.Unmarshal(entries[i].Undo, &u) == nil && u.Type == "limits" {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func (e *Engine) latestCapChange(ctx context.Context, sprig, period string) (int64, error) {
 	entries, err := e.DB.TrailOfKind(ctx, store.TrailCap, sprig, 100)
 	if err != nil {

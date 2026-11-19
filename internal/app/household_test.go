@@ -10,10 +10,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 	"github.com/theshield2594/thicket/internal/web"
 )
@@ -61,6 +63,7 @@ type household struct {
 	kidSays  func(text string) []sent
 	kimSays  func(text string) []sent
 	ownerSay func(text string) []sent
+	day      time.Time // set by fixDay
 }
 
 func setupHousehold(t *testing.T) *household {
@@ -497,17 +500,14 @@ func TestKidSprigInChat(t *testing.T) {
 		t.Fatal("clover created before approval")
 	}
 
-	// Only the cap the parent preview showed: if it changed, nothing is created.
-	capWas := a.Settings.String(ctx, "budget.kid_monthly_usd")
+	// Exactly the cap the parent preview showed, even if the setting
+	// changes before approval.
+	shown := a.Settings.Float(ctx, "budget.kid_monthly_usd")
 	a.Settings.Set(ctx, "budget.kid_monthly_usd", "25")
-	h.ownerSay("approve")
-	if _, ok := a.Chars.Get("clover"); ok {
-		t.Fatal("created with a cap the preview didn't show")
-	}
-	a.Settings.Set(ctx, "budget.kid_monthly_usd", capWas)
-	h.ownerSay("create the kid sprig clover")
-
 	out = h.ownerSay("approve")
+	if got := a.Settings.Float(ctx, settings.SprigCap("clover", "monthly")); got != shown || shown <= 0 {
+		t.Fatalf("installed cap %v, the preview showed %v", got, shown)
+	}
 	c, ok := a.Chars.Get("clover")
 	if !ok || !c.IsKid() || len(c.Tools) != 0 || len(c.Allow) != 0 {
 		t.Fatalf("clover after approval: %+v", c)

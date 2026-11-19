@@ -60,13 +60,18 @@ type KidSprigSpec struct {
 // then decide what it may use (KidAccess). It starts with no tools, no
 // adult data and no initiative.
 func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigSpec) (*character.Character, error) {
+	return e.createKidSprig(ctx, by, s, e.Settings.Float(ctx, "budget.kid_monthly_usd"))
+}
+
+// createKidSprig is CreateKidSprig with the monthly cap given: the one a
+// parent preview showed, when it's created from chat.
+func (e *Engine) createKidSprig(ctx context.Context, by *store.User, s KidSprigSpec, capUSD float64) (*character.Character, error) {
 	c, err := e.kidSprigFromSpec(ctx, by, s)
 	if err != nil {
 		return nil, err
 	}
 	// A low cap that only its parents can raise, in place before the
 	// sprig is live.
-	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
 	// Under the cap lock until the first cap is in the trail, so a cap
 	// change can't land in between and be undone by undoing this one.
 	e.capMu.Lock()

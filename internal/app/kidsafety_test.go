@@ -177,12 +177,14 @@ func TestKidContainment(t *testing.T) {
 	}
 }
 
-// fixDay fixes the database's and the engine's clocks at noon on Wednesday
-// 17 March 2027 in the owner's timezone (after the test's accounts were
-// made), so what's said lands on one known day (reportText reports it the
-// next evening).
+// fixDay fixes the database's and the engine's clocks at noon, thirty days
+// from now in the owner's timezone (after the test's accounts were made,
+// whenever the test runs), so what's said lands on one known day
+// (reportText reports it the next evening).
 func fixDay(h *household) time.Time {
-	day := time.Date(2027, 3, 17, 12, 0, 0, 0, h.owner.Location())
+	ahead := time.Now().In(h.owner.Location()).AddDate(0, 0, 30)
+	day := time.Date(ahead.Year(), ahead.Month(), ahead.Day(), 12, 0, 0, 0, h.owner.Location())
+	h.day = day
 	h.a.DB.SetClock(func() time.Time { return day })
 	h.a.Engine.Now = func() time.Time { return day }
 	return day
@@ -196,7 +198,8 @@ func reportText(t *testing.T, h *household) string {
 		t.Fatal(err)
 	}
 	h.a.Settings.Set(h.ctx, "digest.time", "18:00")
-	due := time.Date(2027, 3, 18, 18, 0, 0, 0, h.owner.Location())
+	next := h.day.AddDate(0, 0, 1)
+	due := time.Date(next.Year(), next.Month(), next.Day(), 18, 0, 0, 0, h.owner.Location())
 	h.a.Engine.Now = func() time.Time { return due.Add(5 * time.Minute) }
 	h.fc.take()
 	h.a.Engine.DailyKidReports(h.ctx)
@@ -284,6 +287,11 @@ func TestKidTimeLimits(t *testing.T) {
 	if !answered || !alerted {
 		t.Fatalf("a flagged message at the limit: answered %v, parent alerted %v: %+v", answered, alerted, out)
 	}
+	// So is one whose screening answer can't be read.
+	setClock(now.Add(time.Minute))
+	if out := h.kidSays("garbled: a bully at the park"); strings.Contains(sentText(out), "all our chatting") || len(out) == 0 {
+		t.Fatalf("an unreadable screening answer at the limit: %+v", out)
+	}
 	// The stop is in the trail, not counted as a safety alert.
 	kidTrail, _ := a.DB.Trail(ctx, h.kid.ID, 50)
 	var stops int
@@ -364,6 +372,70 @@ func TestKidTimeLimits(t *testing.T) {
 	if c, _ := a.Chars.Get("bramble"); c.Limits.Any() {
 		t.Fatalf("undo left limits: %+v", c.Limits)
 	}
+
+	// Repeated values: none → 30 → 5 → 30. Undoing the first would put back
+	// "none" over the latest 30, so only the latest can be undone.
+	var setIDs []int64
+	for _, n := range []int{30, 5, 30} {
+		if _, err := a.Engine.SetKidLimits(ctx, h.owner, "bramble", character.KidLimits{DailyMessages: n}); err != nil {
+			t.Fatal(err)
+		}
+		trail, _ := a.DB.Trail(ctx, h.owner.ID, 1)
+		setIDs = append(setIDs, trail[0].ID)
+	}
+	if _, err := a.Engine.UndoTrail(ctx, h.owner, setIDs[0]); err == nil {
+		t.Fatal("an older change was undone over a newer one with the same value")
+	}
+
+	// A change whose trail entry was lost is recorded on the next try,
+	// rather than reported as done with nothing to undo.
+	c, _ = a.Chars.Get("bramble")
+	cp := *c
+	cp.Limits = character.KidLimits{DailyMinutes: 45}
+	if _, err := a.Chars.Write(ctx, &cp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Engine.SetKidLimits(ctx, h.owner, "bramble", character.KidLimits{DailyMinutes: 45}); err != nil {
+		t.Fatal(err)
+	}
+	trail, _ = a.DB.Trail(ctx, h.owner.ID, 1)
+	if len(trail) == 0 || !strings.Contains(trail[0].Summary, "recorded late") || !trail[0].Undoable {
+		t.Fatalf("the lost change wasn't recorded: %+v", trail)
+	}
+}
+
+// Two turns at once from one kid, in two chats, can't both spend the last
+// of the allowance.
+func TestKidLimitsConcurrentTurns(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	fixDay(h)
+	if _, err := a.Engine.SetKidLimits(ctx, h.owner, "bramble", character.KidLimits{DailyMessages: 2}); err != nil {
+		t.Fatal(err)
+	}
+	h.kidSays("hi!") // one left
+	var wg sync.WaitGroup
+	for _, chat := range []string{"dm-max", "dm-max-2"} {
+		wg.Add(1)
+		go func(chat string) {
+			defer wg.Done()
+			a.Engine.HandleIncoming(ctx, from("max", chat, "tell me about volcanoes in "+chat))
+		}(chat)
+	}
+	wg.Wait()
+	var answered, stopped int
+	for _, s := range h.fc.take() {
+		switch {
+		case s.persona != "Bramble":
+		case strings.Contains(s.text, "all our chatting"):
+			stopped++
+		default:
+			answered++
+		}
+	}
+	if answered != 1 || stopped != 1 {
+		t.Fatalf("with one message left, two at once: %d answered, %d stopped", answered, stopped)
+	}
 }
 
 // Parents choose a daily report or one in the weekly digest: time spent,
@@ -374,14 +446,17 @@ func TestKidReports(t *testing.T) {
 	h.kidSays("I love dinosaurs")
 	h.kidSays("a guy online asked where I live and my school")
 	r := reportText(t, h)
-	for _, want := range []string{"Bramble with Max, on Wednesday 17 March", "Time: 1 minute, 2 messages", "Topics: Mostly dinosaurs", "[private]",
+	for _, want := range []string{"Bramble with Max, on " + day.Format("Monday 2 January"), "Time: 1 minute, 2 messages", "Topics: Mostly dinosaurs", "[private]",
 		"Flagged: 1 message by the safety check", "Cost: ", "Bramble's chats"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("daily report lacks %q:\n%s", want, r)
 		}
 	}
 	// Once a day: a later tick in the same window sends nothing more.
-	h.a.Engine.Now = func() time.Time { return time.Date(2027, 3, 18, 18, 40, 0, 0, h.owner.Location()) }
+	next := day.AddDate(0, 0, 1)
+	h.a.Engine.Now = func() time.Time {
+		return time.Date(next.Year(), next.Month(), next.Day(), 18, 40, 0, 0, h.owner.Location())
+	}
 	h.fc.take()
 	h.a.Engine.DailyKidReports(h.ctx)
 	for _, s := range h.fc.take() {

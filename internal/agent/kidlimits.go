@@ -197,6 +197,12 @@ func (e *Engine) SetKidLimits(ctx context.Context, parent *store.User, sprig str
 	if probs := l.Problems(); len(probs) > 0 {
 		return nil, errors.New(strings.Join(probs, "; "))
 	}
+	// A change whose trail entry was lost (the file written, the entry
+	// and the rollback both failed) is recorded now, so every limit in
+	// force has its entry and its undo.
+	if err := e.recordUnrecordedLimits(ctx, parent, c); err != nil {
+		return nil, err
+	}
 	if l == c.Limits {
 		return c, nil
 	}
@@ -230,6 +236,42 @@ func (e *Engine) SetKidLimits(ctx context.Context, parent *store.User, sprig str
 	}
 	got, _ := e.Chars.Get(sprig)
 	return got, nil
+}
+
+// recordUnrecordedLimits writes the trail entry a limit change lost, if
+// the limits in force aren't what the latest entry set. Under kidMu.
+func (e *Engine) recordUnrecordedLimits(ctx context.Context, by *store.User, c *character.Character) error {
+	var recorded character.KidLimits // no entry: no limits were set through Thicket
+	latest, err := e.latestLimitsChange(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if latest != nil {
+		var u trailUndo
+		if json.Unmarshal(latest.Undo, &u) != nil || json.Unmarshal([]byte(u.Set), &recorded) != nil {
+			return nil // an entry from before Set was recorded: nothing to compare
+		}
+	}
+	if recorded == c.Limits {
+		return nil
+	}
+	old, err := json.Marshal(recorded)
+	if err != nil {
+		return err
+	}
+	set, err := json.Marshal(c.Limits)
+	if err != nil {
+		return err
+	}
+	undo, err := json.Marshal(trailUndo{Type: "limits", Character: c.ID, Args: old, Set: string(set)})
+	if err != nil {
+		return err
+	}
+	if _, err := e.DB.AddTrailID(ctx, store.TrailEntry{UserID: by.ID, Character: c.ID, Kind: store.TrailGrant,
+		Summary: fmt.Sprintf("%s's time limits: %s → %s (recorded late)", c.DisplayName(), describeLimits(recorded), describeLimits(c.Limits)), Undo: undo}); err != nil {
+		return fmt.Errorf("the current limits have no trail entry and it still can't be written, so nothing was changed: %w", err)
+	}
+	return nil
 }
 
 func (e *Engine) writeLimits(ctx context.Context, c *character.Character, l character.KidLimits) error {
@@ -373,7 +415,7 @@ func (e *Engine) toolKidLimits(ctx context.Context, t *turn, args json.RawMessag
 		got, err := e.SetKidLimits(ctx, t.user, c.ID, l)
 		if err != nil {
 			if len(out) > 0 {
-				return "", fmt.Errorf("%s But the limits weren't changed: %w", out[0], err)
+				return "", fmt.Errorf("%s The limit change failed: %w", out[0], err)
 			}
 			return "", err
 		}
@@ -585,7 +627,11 @@ func (e *Engine) DailyKidReports(ctx context.Context) {
 			r, err := e.buildKidReport(ctx, c, dayEnd.AddDate(0, 0, -1), dayEnd, true)
 			if err != nil {
 				// Nothing went out: let a later tick try again.
-				_ = e.DB.ReleaseNotice(ctx, key)
+				// With a context that outlives the tick; a failed release is
+				// logged, and that day's report is then skipped.
+				if rerr := e.DB.ReleaseNotice(context.WithoutCancel(ctx), key); rerr != nil {
+					e.Log.Error("release a kid report claim", "key", key, "err", rerr)
+				}
 				e.logActivity(ctx, "error", "initiative", host.ID, u.ID, "a kid report couldn't be put together", err.Error())
 				continue
 			}
