@@ -259,3 +259,38 @@ func TestKidEstimateRefusalWithHeadroom(t *testing.T) {
 		t.Fatalf("small request after a refusal: %+v", out)
 	}
 }
+
+// With the cap used up, a costly request is the cap reached: the kid hears
+// the allowance message and the parents the cap note, not "turned down".
+func TestKidEstimateRefusalAtExhaustedCap(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	a.Engine.FetchAttachment = fakeFetch
+	if err := a.Settings.Set(ctx, "pdf_engine", "mistral-ocr"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DB.RecordUsage(ctx, store.Usage{Character: "bramble", Model: "fake", CostUSD: 1}); err != nil {
+		t.Fatal(err)
+	}
+	in := from("max", "dm-max", "read this to me")
+	in.Attachments = []channel.Attachment{{Name: "manual.pdf", URL: "https://cdn.example/manual.pdf", ContentType: "application/pdf", Size: 800}}
+	a.Engine.HandleIncoming(ctx, in)
+	var kid, parent string
+	for _, s := range h.fc.take() {
+		switch s.chat {
+		case "dm-max":
+			kid += s.text
+		case "dm-owner":
+			parent += s.text
+		}
+	}
+	if !strings.Contains(kid, "used up my allowance") {
+		t.Fatalf("kid: %q", kid)
+	}
+	if !strings.Contains(parent, "has used its monthly cap") || strings.Contains(parent, "smaller things") {
+		t.Fatalf("parent should get the cap-reached note: %q", parent)
+	}
+}

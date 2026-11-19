@@ -379,7 +379,9 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 		}
 		res, err := e.MCP.CallAs(ctx, c.ID, u.Server, u.Tool, u.Args, false, e.execAllowed(ctx, c))
 		if err != nil {
-			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, e.Secrets.Redact(shortErr(err)))
+			// Redacted whole, then cut: cutting first could split a secret
+			// so it's no longer recognised.
+			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, truncate(e.Secrets.Redact(err.Error()), 160))
 		}
 		if res.IsError {
 			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, truncate(e.Secrets.Redact(res.Text), 200))

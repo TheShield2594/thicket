@@ -403,7 +403,8 @@ func (e *Engine) replySprig(in channel.Incoming, user *store.User, addressed *ch
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
 	reply, err := e.runTurn(ctx, t, event)
-	if errors.Is(err, ErrPaused) {
+	paused := errors.Is(err, ErrPaused)
+	if paused {
 		err, reply = nil, pausedReply(err)
 	}
 	var hold *costHold
@@ -439,7 +440,7 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		var ids []string
 		var msgID int64
 		ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply)
-		t.replied = sendErr == nil && err == nil // a real reply, not a failure notice
+		t.replied = sendErr == nil && err == nil && !paused // a real reply, not a failure or pause notice
 		if sendErr == nil && t.conv != nil {
 			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
 				msgID = id

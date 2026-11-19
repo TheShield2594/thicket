@@ -143,21 +143,26 @@ func orModel(m, def string) string {
 }
 
 // overCap says why an estimate can't go ahead: it would cross a cap, the
-// one returned. "" when it fits. What was already spent is in the
-// headroom, so usd is only what's still to come.
+// one returned, with what's left of it. "" when it fits. What was already
+// spent is in the headroom, so usd is only what's still to come.
 func (e *Engine) overCap(ctx context.Context, sprig *character.Character, usd float64) (string, *llm.BudgetError) {
+	why, tight, _ := e.overCapLeft(ctx, sprig, usd)
+	return why, tight
+}
+
+func (e *Engine) overCapLeft(ctx context.Context, sprig *character.Character, usd float64) (string, *llm.BudgetError, float64) {
 	if e.Budget == nil {
-		return "", nil
+		return "", nil, 0
 	}
 	left, tight, ok, err := e.Budget.Headroom(ctx, sprig.ID)
 	if err != nil || !ok || usd <= left {
-		return "", nil
+		return "", nil, 0
 	}
 	whose := "the household's " + tight.Period + " cap"
 	if tight.Sprig != "" {
 		whose = sprig.DisplayName() + "'s " + tight.Period + " cap"
 	}
-	return fmt.Sprintf("that would cost about %s, which is %s more than %s has left (%s of %s)", money(usd), money(usd-left), whose, money(left), money(tight.Limit)), tight
+	return fmt.Sprintf("that would cost about %s, which is %s more than %s has left (%s of %s)", money(usd), money(usd-left), whose, money(left), money(tight.Limit)), tight, left
 }
 
 // checkTurnCost runs before a turn's first model call. A costHold error
@@ -176,10 +181,15 @@ func (e *Engine) checkTurnCost(ctx context.Context, t *turn, msgs []llm.Message,
 		kind = "pdf"
 	}
 	est := store.Estimate{UserID: t.user.ID, Character: t.char.ID, Kind: kind, What: what, EstimateUSD: usd}
-	if why, tight := e.overCap(ctx, t.char, usd); why != "" {
+	if why, tight, left := e.overCapLeft(ctx, t.char, usd); why != "" {
 		est.Outcome = store.EstimateRefused
 		_, _ = e.DB.AddEstimate(ctx, est)
 		e.logActivity(ctx, "warn", "budget", t.char.ID, t.user.ID, "refused a costly reply: "+why, what)
+		if t.user.IsKid() && left <= 0 {
+			// Nothing left at all: that's the cap reached, not a big
+			// request (a small one wouldn't work either).
+			return &costHold{msg: e.kidCapReply(ctx, t, tight)}
+		}
 		if t.user.IsKid() {
 			e.tellParentsRefused(ctx, t.char, t.user, tight, what, why)
 			return &costHold{msg: "That's too big a job for my allowance right now. Ask a grown-up if you need it!"}
