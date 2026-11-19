@@ -58,11 +58,19 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	// The worth-saying gate (worth.go): output with nothing new in it, or a
 	// rerun of what the sprig already said, is recorded as empty and never
 	// sent. The run keeps it as its output, so it can be read.
-	if why := e.worthSaying(jctx, user, char, out, jobDraft(&j, t)); why != "" {
-		cost, _ = e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+	why := e.worthSaying(jctx, user, char, out, jobDraft(&j, t))
+	cost, _ = e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+	// The check can call a model: a stop or pause meanwhile still wins,
+	// so nothing goes out after it and the run says why.
+	if flight.paused.Load() {
+		return scheduler.Result{Err: errStoppedByPause, Cost: cost}
+	}
+	if flight.stopped.Load() {
+		return scheduler.Result{Err: ErrStopped, Cost: cost}
+	}
+	if why != "" {
 		return scheduler.Result{Status: "empty", Output: out, Held: why, Cost: cost}
 	}
-	cost, _ = e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
 	return scheduler.Result{Status: "ok", Output: out, Cost: cost}
 }
 

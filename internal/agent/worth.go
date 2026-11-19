@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -22,13 +23,16 @@ import (
 //
 //  1. It's a rerun: it says what one of the sprig's last few proactive
 //     messages to this person said (the same words, give or take a few,
-//     and the same numbers). Decided in code.
+//     and the same numbers in the same order). Decided in code. A held
+//     message is checked again right before it goes out (FlushHeld), since
+//     what was sent or held meanwhile wasn't in the history yet.
 //  2. Nothing is new: since the sprig last wrote to this person there is
 //     nothing on the calendar for the next day and nothing newly added,
 //     nothing due (follow-ups, open inbox items), no new memories, no other
 //     job results, and the message itself brings none (a due follow-up, a
 //     trigger's new items, outside sources a job read). Decided in code,
-//     without a model.
+//     without a model. A routine run that read nothing at all (no tool
+//     call, no payload) stands alone, so it always goes on to rule 3.
 //  3. Otherwise the cheap model reads it with what's new and the recent
 //     messages and says whether it's worth saying; filler such as
 //     "nothing new today" isn't. If that check can't run, it goes out.
@@ -68,10 +72,8 @@ func (e *Engine) worthSaying(ctx context.Context, u *store.User, c *character.Ch
 	if err != nil {
 		e.Log.Warn("read recent proactive messages", "err", err) // compared with nothing: it goes out
 	}
-	for _, r := range recent {
-		if repeats(text, r.Text) {
-			return "it repeats what " + c.DisplayName() + " said " + r.SentAt.In(u.Location()).Format("Mon 2 Jan 15:04")
-		}
+	if why := repeatOf(u, c, text, recent); why != "" {
+		return why
 	}
 	found, since := e.newsFor(ctx, u, c, d.jobID)
 	news := append(append([]string(nil), d.news...), found...)
@@ -80,6 +82,36 @@ func (e *Engine) worthSaying(ctx context.Context, u *store.User, c *character.Ch
 			"): nothing on the calendar, nothing due, no new memories or job results"
 	}
 	return e.judgeWorth(ctx, u, c, text, news, recent)
+}
+
+// repeatOf is rule 1: why text reruns one of recent, or "".
+func repeatOf(u *store.User, c *character.Character, text string, recent []store.Said) string {
+	for _, r := range recent {
+		if repeats(text, r.Text) {
+			return "it repeats what " + c.DisplayName() + " said " + r.SentAt.In(u.Location()).Format("Mon 2 Jan 15:04")
+		}
+	}
+	return ""
+}
+
+// heldRepeat is rule 1 for a held message about to go out: it was
+// checked when it was written, but messages sent or held since then
+// weren't in the history yet. delivered is what was just sent before it
+// to the same person by the same sprig.
+func (e *Engine) heldRepeat(ctx context.Context, u *store.User, c *character.Character, text string, delivered []string) string {
+	recent, err := e.DB.RecentSaid(ctx, u.ID, c.ID, repeatWithin)
+	if err != nil {
+		e.Log.Warn("read recent proactive messages", "err", err) // compared with what this flush sent only
+	}
+	if why := repeatOf(u, c, text, recent); why != "" {
+		return why
+	}
+	for _, d := range delivered {
+		if repeats(text, d) {
+			return "it repeats a held message " + c.DisplayName() + " just sent"
+		}
+	}
+	return ""
 }
 
 // newsFor lists what changed for u that c could be telling them about
@@ -181,9 +213,15 @@ func (e *Engine) upcomingItems(ctx context.Context, u *store.User, from, to time
 
 // jobDraft is what a job run's output brings by itself: the new items a
 // trigger or webhook fired on, and outside sources the run read (which
-// only a model can judge).
+// only a model can judge). A standalone routine (a daily lesson, a poem,
+// a pick) reads nothing at all: what it wrote is its news, so the cheap
+// model judges it rather than rule 2 holding it back.
 func jobDraft(j *store.Job, t *turn) proactiveDraft {
 	d := proactiveDraft{what: fmt.Sprintf("job “%s”", j.Name), jobID: j.ID}
+	if j.Payload == "" && j.Kind != store.JobWebhook && t.toolCalls == 0 && len(t.taintedBy) == 0 {
+		d.news = append(d.news, "it's a routine that stands alone (it read nothing): what it wrote is new")
+		return d
+	}
 	if j.Payload != "" || j.Kind == store.JobWebhook {
 		from := j.Event
 		if from == "" {
@@ -232,29 +270,22 @@ func similarity(a, b string) float64 {
 }
 
 // repeats reports whether a says what b said: nearly the same words, and
-// exactly the same numbers (times, dates and amounts are what change from
-// one day's message to the next).
+// exactly the same numbers in the same order (times, dates and amounts
+// are what change from one day's message to the next).
 func repeats(a, b string) bool {
 	if similarity(a, b) < repeatAt {
 		return false
 	}
-	na, nb := numbers(a), numbers(b)
-	if len(na) != len(nb) {
-		return false
-	}
-	for n := range na {
-		if !nb[n] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(numbers(a), numbers(b))
 }
 
-func numbers(s string) map[string]bool {
-	out := map[string]bool{}
-	for w := range words(s) {
+// numbers is the digit-containing words of s, in order: "11/12" and
+// "12/11" are different dates.
+func numbers(s string) []string {
+	var out []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
 		if strings.IndexFunc(w, unicode.IsDigit) >= 0 {
-			out[w] = true
+			out = append(out, w)
 		}
 	}
 	return out

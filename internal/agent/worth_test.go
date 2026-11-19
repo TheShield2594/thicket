@@ -29,11 +29,17 @@ type presenceLLM struct {
 	reply  string
 	worth  func(draft string) bool
 	judged int
+	// tool, when set, is called once (when offered) before the reply.
+	tool string
 }
 
 func (f *presenceLLM) Chat(_ context.Context, req llm.Request) (*llm.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.tool != "" && len(req.Tools) > 0 && req.Messages[len(req.Messages)-1].Role != "tool" {
+		return &llm.Response{Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Type: "function",
+			Function: llm.FunctionCall{Name: f.tool, Arguments: "{}"}}}}}, nil
+	}
 	if req.Messages[0].Content == worthRubric {
 		f.judged++
 		_, draft, _ := strings.Cut(req.Messages[len(req.Messages)-1].Content, "The message it's about to send:\n")
@@ -143,6 +149,13 @@ func (f *presenceFixture) heldBack(t *testing.T, why string) bool {
 func TestMorningBriefWithNothingNewSendsNothing(t *testing.T) {
 	f := newPresenceFixture(t)
 	ctx := context.Background()
+	// The brief reads the calendar (and finds nothing on it).
+	f.char.Tools = []string{character.ScopeCalendar}
+	if _, err := f.e.Chars.Write(ctx, f.char); err != nil {
+		t.Fatal(err)
+	}
+	f.char, _ = f.e.Chars.Get("pip")
+	f.llm.tool = "calendar"
 	job, err := f.db.CreateJob(ctx, store.Job{UserID: f.user.ID, Character: "pip", Name: "Morning brief", Schedule: "0 7 * * *",
 		Prompt: "Send the morning briefing.", Kind: store.JobCron, Enabled: true})
 	if err != nil {
@@ -250,6 +263,78 @@ func TestFillerIsHeldBackByTheCheapCheck(t *testing.T) {
 	}
 }
 
+// A routine that reads nothing (a daily lesson, a poem) has its own news:
+// the cheap model judges it, even on a day when nothing else changed.
+func TestStandaloneRoutineIsJudgedNotHeld(t *testing.T) {
+	f := newPresenceFixture(t)
+	ctx := context.Background()
+	job, err := f.db.CreateJob(ctx, store.Job{UserID: f.user.ID, Character: "pip", Name: "Word of the day", Schedule: "0 7 * * *",
+		Prompt: "Teach one new Spanish word with an example sentence.", Kind: store.JobCron, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := f.now
+	f.now = today.Add(-24 * time.Hour)
+	if err := f.e.sendProactive(ctx, f.user, f.char, "Today's word: mariposa (butterfly). Una mariposa azul."); err != nil {
+		t.Fatal(err)
+	}
+	f.now = today
+
+	f.llm.reply = "Today's word: ventana (window). Abre la ventana, por favor."
+	res := f.e.RunJob(ctx, *job, 0)
+	if res.Status != "ok" || f.llm.judged != 1 {
+		t.Fatalf("a standalone routine: %+v (judged %d)", res, f.llm.judged)
+	}
+	// The judge still decides, and a rerun is still caught in code.
+	f.llm.worth = func(string) bool { return false }
+	f.llm.reply = "Today's word: perro (dog). El perro duerme."
+	if res := f.e.RunJob(ctx, *job, 0); res.Status != "empty" || !strings.Contains(res.Held, "not worth saying") {
+		t.Fatalf("judged not worth it: %+v", res)
+	}
+	f.llm.reply = "Today's word: mariposa (butterfly). Una mariposa azul!"
+	judged := f.llm.judged
+	if res := f.e.RunJob(ctx, *job, 0); res.Status != "empty" || !strings.Contains(res.Held, "repeats") || f.llm.judged != judged {
+		t.Fatalf("a rerun: %+v", res)
+	}
+}
+
+// Held messages that say the same thing (two runs during quiet hours, or
+// one that repeats what went out since) go out once.
+func TestHeldRepeatsAreDroppedOnFlush(t *testing.T) {
+	f := newPresenceFixture(t)
+	ctx := context.Background()
+	if err := f.e.sendProactive(ctx, f.user, f.char, "The bins go out tonight at 19:00."); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		"Heads up: the bins go out tonight at 19:00!", // repeats what was sent
+		"Dentist moved to 11/12 at 09:30.",
+		"Dentist moved to 11/12, at 09:30!", // repeats the one before
+		"Dentist moved to 12/11 at 09:30.",  // a different date
+	} {
+		if _, err := f.db.HoldMessage(ctx, store.HeldMessage{UserID: f.user.ID, Character: "pip", Ref: "job:9",
+			Title: "job", Reason: store.HeldQuiet, Text: text, CreatedAt: f.now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.e.FlushHeld(ctx)
+	f.ch.mu.Lock()
+	sent := append([]string(nil), f.ch.sent...)
+	f.ch.mu.Unlock()
+	if len(sent) != 3 || !strings.Contains(sent[1], "11/12") || !strings.Contains(sent[2], "12/11") {
+		t.Fatalf("sent: %q", sent)
+	}
+	if left, _ := f.db.HeldMessages(ctx, 0, ""); len(left) != 0 {
+		t.Fatalf("still held: %+v", left)
+	}
+	if !f.heldBack(t, "repeats") {
+		t.Fatal("the activity log doesn't say what was dropped")
+	}
+	if f.llm.judged != 0 {
+		t.Fatal("the held repeat check must not use a model")
+	}
+}
+
 func TestRepeats(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -259,6 +344,7 @@ func TestRepeats(t *testing.T) {
 		{"Dentist at 09:30 today, bins out tonight.", "Dentist at 10:30 today, bins out tonight.", false}, // the time changed
 		{"Morning! Dentist at 09:30.", "Rain later: take a coat to football practice.", false},
 		{"", "anything", false},
+		{"Your appointment is on 11/12 at 09:30.", "Your appointment is on 12/11 at 09:30.", false}, // the date changed
 	} {
 		if got := repeats(c.a, c.b); got != c.want {
 			t.Errorf("repeats(%q, %q) = %v (similarity %.2f)", c.a, c.b, got, similarity(c.a, c.b))

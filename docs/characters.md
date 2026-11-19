@@ -152,14 +152,19 @@ it's written, before it's sent or held:
 
 - **A rerun is dropped.** If it says what one of the sprig's last three
   messages to you said (nearly the same words and exactly the same
-  times, dates and numbers), it isn't sent.
+  times, dates and numbers, in the same order), it isn't sent. Messages
+  held for quiet hours are checked again just before they go out, so two
+  held results that say the same thing arrive once.
 - **Nothing new, nothing sent.** If nothing changed since the sprig last
   wrote to you (nothing on your calendar for the next day and nothing
   newly put on it, no follow-ups due, nothing new waiting for you, no new
   memories, no other job results) and the message brings nothing of its
   own (a due follow-up, a trigger's new items, something a job looked up
   online or in an integration), it isn't sent. A morning briefing on an
-  empty day sends nothing; you never get "nothing new today".
+  empty day sends nothing; you never get "nothing new today". A routine
+  that stands alone (it calls no tools and fires on no event, like a
+  word of the day or a short poem) brings its own news, so it skips this
+  rule and goes to the cheap model.
 - **Otherwise the cheap model takes a look** (`cheap_model`) and drops
   filler. If that check can't run, the message goes out.
 

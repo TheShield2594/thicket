@@ -60,7 +60,10 @@ stated.
   job results) and the message brings nothing of its own. Both are
   decided by Thicket, not the model; otherwise the cheap model screens out
   filler. A morning briefing on an empty day sends nothing, never
-  "nothing new today". Held-back job runs count as "nothing to report",
+  "nothing new today". A routine that reads nothing (a word of the day)
+  brings its own news, so the cheap model judges it instead, and held
+  messages are checked for reruns again just before they go out.
+  Held-back job runs count as "nothing to report",
   and the activity log says what was held back and why. See
   [Nothing new, nothing sent](docs/characters.md#nothing-new-nothing-sent).
 - The memory review now adds household facts said in passing ("we're

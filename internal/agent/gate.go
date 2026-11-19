@@ -116,6 +116,9 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 		e.Log.Error("list held messages", "err", err)
 		return
 	}
+	// What this flush delivered, per sprig and person, for the repeat
+	// check (the sent history has it too, unless keeping it failed).
+	delivered := map[string][]string{}
 	for _, h := range held {
 		user, err := e.DB.UserByID(ctx, h.UserID)
 		if err != nil {
@@ -163,6 +166,15 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			_ = e.DB.ReleaseHeld(ctx, h.ID)
 			continue
 		}
+		// Two runs held during quiet hours can say the same thing, and
+		// neither was in the sent history when the gate checked it: the
+		// repeat rule (worth.go) applies again, without a model.
+		key := fmt.Sprintf("%d:%s", user.ID, char.ID)
+		if why := e.heldRepeat(ctx, user, char, h.Text, delivered[key]); why != "" {
+			e.finishHeld(ctx, h.ID)
+			e.logActivity(ctx, "info", "initiative", char.ID, user.ID, fmt.Sprintf("held back %s, which was held: %s", h.Title, why), truncate(h.Text, 200))
+			continue
+		}
 		if err := e.sendProactiveNote(ctx, user, char, h.Text, heldNote(h, user)); err != nil {
 			e.Log.Error("deliver held message", "id", h.ID, "err", err)
 			// Not sent: keep it held (released for the next flush) unless the
@@ -175,6 +187,7 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			e.finishHeld(ctx, h.ID)
 			continue
 		}
+		delivered[key] = append(delivered[key], h.Text)
 		e.finishHeld(ctx, h.ID)
 		e.logActivity(ctx, "info", "initiative", char.ID, user.ID, "delivered held "+h.Title, "")
 	}
