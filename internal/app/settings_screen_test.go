@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -84,6 +87,36 @@ func TestSettingsScreen(t *testing.T) {
 	}
 	if ok, _ := a.Secrets.Stored(ctx, "broken_token"); ok {
 		t.Fatal("the token of a failed connector was kept")
+	}
+	// A token never replaces a secret that's already there, and a failed
+	// attempt doesn't delete it.
+	if err := a.Secrets.Put(ctx, "notes_token", "someone-elses-123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Engine.AdminAddIntegration(ctx, owner, "notes", srv.URL, "tok-abcdef123456"); err == nil {
+		t.Fatal("a connector's token replaced an existing secret")
+	}
+	if v, _ := a.Secrets.Get(ctx, "notes_token"); v != "someone-elses-123456" {
+		t.Fatalf("existing secret is now %q", v)
+	}
+	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 0 {
+		t.Fatalf("left behind: %+v", servers)
+	}
+	// A request that's cancelled while connecting still cleans up.
+	gone, cancel := context.WithCancel(ctx)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel() // the person closed the tab while we were connecting
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(slow.Close)
+	if _, err := a.Engine.AdminAddIntegration(gone, owner, "late", slow.URL, "tok-abcdef123456"); err == nil {
+		t.Fatal("a cancelled request connected")
+	}
+	if ok, _ := a.Secrets.Stored(ctx, "late_token"); ok {
+		t.Fatal("a cancelled request left its token stored")
+	}
+	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 0 {
+		t.Fatalf("a cancelled request left: %+v", servers)
 	}
 	for _, bad := range []string{"Has Space", "a", "two__under"} {
 		if _, err := a.Engine.AdminAddIntegration(ctx, owner, bad, srv.URL, ""); err == nil {

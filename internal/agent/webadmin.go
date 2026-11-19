@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
@@ -133,30 +134,55 @@ func (e *Engine) AdminAddIntegration(ctx context.Context, by *store.User, name, 
 	}
 	s := store.MCPServer{Name: name, Transport: "http", Target: rawURL, Enabled: true}
 	token = strings.TrimSpace(token)
+	secret := ""
 	if token != "" {
-		secret := name + "_token"
+		secret = name + "_token"
 		if !secrets.ValidName(secret) {
 			return nil, errors.New("that name is too long to keep a token under; pick a shorter one")
+		}
+		// Never replace a secret this call didn't make: it may be someone
+		// else's credential, and undoing a failed attempt would delete it.
+		if exists, err := e.Secrets.Stored(ctx, secret); err != nil {
+			return nil, err
+		} else if exists {
+			return nil, fmt.Errorf("a secret called %s is already stored; pick another name for the connector", secret)
 		}
 		if err := e.Secrets.Put(ctx, secret, token); err != nil {
 			return nil, err
 		}
 		s.Headers = map[string]string{"Authorization": "Bearer {{secret:" + secret + "}}"}
 	}
+	// undo removes what this call stored and says what it couldn't remove,
+	// so "nothing was saved" is never claimed falsely. It runs even if the
+	// request was cancelled meanwhile (a closed tab, a timeout).
+	undo := func(cause string) error {
+		bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		var left []string
+		e.MCP.Disconnect(name)
+		if err := e.DB.DeleteMCPServer(bg, name); err != nil {
+			e.Log.Error("undo connector", "name", name, "err", err)
+			left = append(left, "the connector "+name+" (remove it from the list)")
+		}
+		if secret != "" {
+			if err := e.Secrets.Delete(bg, secret); err != nil {
+				e.Log.Error("undo connector token", "secret", secret, "err", err)
+				left = append(left, "its token, the secret "+secret)
+			}
+		}
+		if len(left) > 0 {
+			return fmt.Errorf("%s. Undoing it failed too, so this is still stored: %s", cause, strings.Join(left, "; "))
+		}
+		return fmt.Errorf("%s, so nothing was saved", cause)
+	}
 	if err := e.DB.PutMCPServer(ctx, s); err != nil {
-		return nil, err
+		e.Log.Error("save connector", "name", name, "err", err)
+		return nil, undo("couldn't save the connector")
 	}
 	tools, err := e.MCP.Connect(ctx, s)
 	if err != nil {
-		// Nothing is kept from a failed attempt, so the form can simply be
-		// corrected and sent again.
-		e.MCP.Disconnect(name)
-		_ = e.DB.DeleteMCPServer(ctx, name)
-		if token != "" {
-			_ = e.Secrets.Delete(ctx, name+"_token")
-		}
-		e.logActivity(ctx, "warn", "tool", "", by.ID, "integration "+name+" failed to connect", err.Error())
-		return nil, fmt.Errorf("couldn't connect, so nothing was saved: %s", e.Secrets.Redact(err.Error()))
+		e.logActivity(context.WithoutCancel(ctx), "warn", "tool", "", by.ID, "integration "+name+" failed to connect", err.Error())
+		return nil, undo("couldn't connect (" + e.Secrets.Redact(err.Error()) + ")")
 	}
 	e.logActivity(ctx, "info", "tool", "", by.ID, "integration "+name+" connected", fmt.Sprintf("%d tools", len(tools)))
 	return e.integrationInfo(s), nil

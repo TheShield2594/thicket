@@ -499,7 +499,9 @@ function onRoster() {
   rosterTimer = setTimeout(async () => {
     const had = new Set(S.order);
     try { await refreshMe(); } catch { return; }
-    renderShell();
+    // Settings holds forms someone may be half-way through (a token, an
+    // unsaved value); only the sidebar needs the new roster there.
+    if (S.view === 'settings') renderSidebar(); else renderShell();
     for (const id of S.order) if (!had.has(id)) toast(`${S.sprigs.get(id).name} has joined. Find them in the sidebar.`);
   }, 300);
 }
@@ -901,13 +903,16 @@ async function askHost(text, note) {
   if (!host) return toast('There’s no host sprig to ask.');
   const chat = chatOf(host.id);
   if (text) S.drafts.set(chat, text);
-  await openChat(chat);
+  // openChat builds the pane before it waits for the messages. The request
+  // goes in now, never after the wait: by then the person may be typing.
+  const opened = openChat(chat);
   const ta = paneEls.get(chat)?.querySelector('textarea');
   if (ta) {
     if (text) { ta.value = text; ta.dispatchEvent(new Event('input')); }
     ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
   }
   if (note) toast(note);
+  await opened;
 }
 
 const askKey = () => askHost('', `Paste your OpenRouter key (it starts with sk-or-) to ${hostSprig()?.name || 'the host'}. It’s encrypted, and no model sees it.`);
