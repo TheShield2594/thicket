@@ -120,7 +120,9 @@ func buildSystemPrompt(in promptInput) string {
 		b.WriteString(skillOfferGuide)
 	}
 
-	if c.Host && !in.onboarded && !in.jobMode {
+	// The setup tour is the owner's (and admins'): its steps use admin
+	// tools. Members and kids who join later never get it.
+	if c.Host && !in.onboarded && !in.jobMode && in.user.IsAdmin() {
 		b.WriteString(onboardingGuide)
 		if in.user != nil && in.user.Timezone != "" {
 			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): don't ask where they are, only their name.\n")

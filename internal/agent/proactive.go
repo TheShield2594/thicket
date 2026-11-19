@@ -261,7 +261,8 @@ func (e *Engine) CheckIns(ctx context.Context) {
 	window := time.Duration(days) * 24 * time.Hour
 	for _, u := range users {
 		u := u
-		if u.OnboardedAt.IsZero() {
+		// Admins mid-setup aren't nudged; others have no setup tour to finish.
+		if u.OnboardedAt.IsZero() && u.IsAdmin() {
 			continue
 		}
 		last, err := e.DB.LastUserMessageAt(ctx, u.ID)
