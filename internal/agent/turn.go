@@ -348,13 +348,33 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	} else {
 		t.done = append(t.done, tool.Label())
 	}
-	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, e.Secrets.Redact(truncate(string(args), 500)+" → "+truncate(out, 500)))
+	detail := e.Secrets.Redact(truncate(string(args), 500) + " → " + truncate(out, 500))
+	if e.privateDraft(t, name, args) {
+		detail = "(a private sprig's draft: not logged)" // admins read the activity log
+	}
+	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, detail)
 	// Tool output goes back to the model: no secret values in it.
 	out = e.Secrets.Redact(out)
 	if tool.Untrusted {
 		return wrapUntrusted(name, out)
 	}
 	return out
+}
+
+// privateDraft reports whether a tool call drafts or proposes a private
+// sprig, whose details stay out of the activity log.
+func (e *Engine) privateDraft(t *turn, name string, args json.RawMessage) bool {
+	switch name {
+	case "preview_character":
+		var a struct {
+			Private bool `json:"private"`
+		}
+		return json.Unmarshal(args, &a) == nil && a.Private
+	case "create_character":
+		v, ok := e.drafts.Load(t.user.ID)
+		return ok && v.(*sprigDraft).char.BelongsTo != 0
+	}
+	return false
 }
 
 func truncate(s string, n int) string {

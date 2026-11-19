@@ -249,3 +249,14 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 	}
 	return out, nil
 }
+
+// privateProposal reports whether a create_sprig proposal is for a
+// private sprig. Anything unreadable counts as private.
+func privateProposal(args string) bool {
+	var p sprigProposal
+	if json.Unmarshal([]byte(args), &p) != nil {
+		return true
+	}
+	c, err := character.Parse([]byte(p.Files[p.ID+".md"]))
+	return err != nil || c.BelongsTo != 0
+}

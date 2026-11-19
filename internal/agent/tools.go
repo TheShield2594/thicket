@@ -984,7 +984,7 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		}
 	}
 	// The draft introduces itself, in its own voice.
-	sys := buildSystemPrompt(promptInput{char: c, user: t.user, roster: append(e.Chars.All(), c), now: e.now(), onboarded: true, isDM: t.isDM})
+	sys := buildSystemPrompt(promptInput{char: c, user: t.user, roster: append(e.Chars.For(t.user), c), now: e.now(), onboarded: true, isDM: t.isDM})
 	resp, err := e.LLM.Chat(llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "preview"}), llm.Request{
 		Messages: []llm.Message{
 			{Role: "system", Content: sys},

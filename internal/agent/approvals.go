@@ -111,7 +111,11 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	} else {
 		_ = e.DB.AddMessage(ctx, conv.ID, "event", "", "The user answered a request from the dashboard.")
 	}
-	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), e.Secrets.Redact(a.Args))
+	detail := e.Secrets.Redact(a.Args)
+	if a.Tool == internalPrefix+"create_sprig" && privateProposal(a.Args) {
+		detail = "(a private sprig's files: not logged)" // admins read the activity log
+	}
+	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), detail)
 	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM}
 	what := strings.TrimPrefix(a.Tool, internalPrefix)
 	switch {

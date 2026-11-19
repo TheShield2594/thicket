@@ -116,6 +116,24 @@ func TestAddPartnersPrivateSprig(t *testing.T) {
 	a.DB.LogActivity(ctx, store.Activity{Level: "error", Kind: "model", Character: "wren", UserID: robin.ID, Summary: "SECRET-ERROR"})
 	a.DB.RecordUsage(ctx, store.Usage{UserID: robin.ID, Character: "wren", Origin: "task", Model: "m", CostUSD: 0.42})
 
+	// Nothing about the draft reached the activity log, details included.
+	acts, _ := a.DB.RecentActivity(ctx, 200, "info")
+	for _, x := range acts {
+		if strings.Contains(x.Detail+x.Summary, "Wren") && x.Character != "wren" {
+			t.Fatalf("activity outside Wren's own rows names it: %+v", x)
+		}
+	}
+	// An admin can't undo changes to Robin's private sprig either.
+	if all, _ := a.DB.Trail(ctx, 0, 50); len(all) > 0 {
+		for _, e := range all {
+			if e.Character == "wren" && e.Undoable {
+				if _, err := a.Engine.UndoTrail(ctx, owner, e.ID); err == nil {
+					t.Fatal("the owner undid a change to Robin's private sprig")
+				}
+			}
+		}
+	}
+
 	secrets := []string{"Wren", "wren", "secret reading list", "SECRET-"}
 	noSecrets := func(where, body string) {
 		t.Helper()
