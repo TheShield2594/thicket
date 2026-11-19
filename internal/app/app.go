@@ -205,6 +205,8 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.Pin = a.Engine.PinWebMessage
 	a.Web.OIDC = a.oidcLogin(ctx)
 	a.Web.Household = a.Engine
+	a.Web.Admin = a.Engine
+	a.Chars.OnLoad(a.Web.RosterChanged)
 	a.Web.Calendar = a.Calendar
 	a.Web.BaseURL = cfg.WebBaseURL()
 	a.Web.MakeKidSprig = func(ctx context.Context, by *store.User, body json.RawMessage) (*character.Character, error) {

@@ -48,7 +48,12 @@ type Registry struct {
 	chars   map[string]*Character
 	errs    []LoadError
 	mtimes  map[string]time.Time
+	onLoad  []func()
 }
+
+// OnLoad registers f to run after every successful Load: a sprig was
+// created, changed or removed. Register before the registry is shared.
+func (r *Registry) OnLoad(f func()) { r.onLoad = append(r.onLoad, f) }
 
 func NewRegistry(dir string, hashes HashStore, log *slog.Logger) *Registry {
 	return &Registry{dir: dir, hashes: hashes, log: log, chars: map[string]*Character{}, mtimes: map[string]time.Time{}}
@@ -214,6 +219,9 @@ func (r *Registry) Load() error {
 	r.mu.Unlock()
 	for _, e := range errs {
 		r.log.Error("character file problem", "file", e.Path, "problems", strings.Join(e.Problems, "; "))
+	}
+	for _, f := range r.onLoad {
+		f()
 	}
 	return nil
 }

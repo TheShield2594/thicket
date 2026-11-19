@@ -25,6 +25,16 @@ She will:
 
 Ask "what integrations do we have?" any time to see their status.
 
+## Connecting one, in the web app
+
+Owners and admins can also use **Settings → Connectors** in the web app:
+give it a name, the server's address and, if it needs one, an access
+token. The token is stored encrypted as the secret `NAME_token` and sent
+as `Authorization: Bearer …`. If the server can't be reached, nothing is
+saved. As in chat, no sprig can use a new connector until you grant it
+(`mcp:NAME/*`), and services you sign in to (OAuth) are connected by
+asking Juni.
+
 ## Transports
 
 | Transport | `target` | Secrets go in |

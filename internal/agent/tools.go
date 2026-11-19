@@ -927,6 +927,21 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	if len(probs) > 0 {
 		return "", errors.New("the draft needs fixing: " + strings.Join(probs, "; "))
 	}
+	// Check the look and routines before the sprig says hello: a draft
+	// that fails here is sent back to be fixed and previewed again, and an
+	// intro posted first would then show up twice.
+	look := a.Look.Merge(avatar.Default(c.ID, c.Color))
+	if err := look.Validate(); err != nil {
+		return "", errors.New("the look needs fixing: " + err.Error())
+	}
+	for _, r := range a.Routines {
+		if _, err := scheduler.Parse(r.Schedule); err != nil {
+			return "", fmt.Errorf("routine %q: %w", r.Name, err)
+		}
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Task) == "" {
+			return "", errors.New("each routine needs a name and a task")
+		}
+	}
 	// The draft introduces itself, in its own voice.
 	sys := buildSystemPrompt(promptInput{char: c, user: t.user, roster: append(e.Chars.All(), c), now: e.now(), onboarded: true, isDM: t.isDM})
 	resp, err := e.LLM.Chat(llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "preview"}), llm.Request{
@@ -947,18 +962,6 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	}
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", fmt.Sprintf("Preview of new sprig %s introduced itself: %s", c.DisplayName(), intro))
-	}
-	look := a.Look.Merge(avatar.Default(c.ID, c.Color))
-	if err := look.Validate(); err != nil {
-		return "", errors.New("the look needs fixing: " + err.Error())
-	}
-	for _, r := range a.Routines {
-		if _, err := scheduler.Parse(r.Schedule); err != nil {
-			return "", fmt.Errorf("routine %q: %w", r.Name, err)
-		}
-		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Task) == "" {
-			return "", errors.New("each routine needs a name and a task")
-		}
 	}
 	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines})
 	return fmt.Sprintf("The preview of %s has been posted in the chat (it said: %q). Ask the user what they think and whether anything feels off. Don't repeat the intro.", c.DisplayName(), intro), nil

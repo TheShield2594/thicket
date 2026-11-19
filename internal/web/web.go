@@ -77,7 +77,10 @@ type Adapter struct {
 	OIDC *OIDCLogin
 	// For API v2: the engine's household operations, the calendar, kid
 	// sprig creation, and the address invites link to.
-	Household    Household
+	Household Household
+	// Admin backs the Settings screen (owners and admins): models and
+	// other settings, and connectors.
+	Admin        Admin
 	Calendar     *calendar.Service
 	MakeKidSprig KidSprigMaker
 	BaseURL      string
@@ -179,12 +182,33 @@ func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona,
 	if !ok {
 		return nil, fmt.Errorf("web: bad chat id %q", chatID)
 	}
-	m, err := a.DB.AddWebMessage(ctx, uid, store.WebMessage{ChatID: chatID, Role: "assistant", Character: p.ID, Content: text})
+	// The app names a speaker from the roster. Keep the name only when the
+	// roster can't supply it: a preview of a sprig that doesn't exist yet.
+	name := ""
+	if c, ok := a.Chars.Get(p.ID); !ok || c.DisplayName() != p.Name {
+		name = p.Name
+	}
+	m, err := a.DB.AddWebMessage(ctx, uid, store.WebMessage{ChatID: chatID, Role: "assistant", Character: p.ID, Name: name, Content: text})
 	if err != nil {
 		return nil, err
 	}
 	a.publish(uid, Event{Type: "message", Chat: chatID, Message: &m})
 	return []string{strconv.FormatInt(m.ID, 10)}, nil
+}
+
+// RosterChanged tells every open app that the sprigs changed (one was
+// created, edited or removed), so sidebars update without a reload.
+func (a *Adapter) RosterChanged() {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, subs := range a.subs {
+		for ch := range subs {
+			select {
+			case ch <- Event{Type: "sprigs"}:
+			default:
+			}
+		}
+	}
 }
 
 // OnDelete registers what to call when someone deletes a message in the
@@ -299,7 +323,13 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/oidc/callback", a.oidcCallback)
 	mux.HandleFunc("GET /api/account", a.auth(a.account))
 	mux.HandleFunc("POST /api/account/password", a.auth(a.changePassword))
+	mux.HandleFunc("POST /api/account/profile", a.auth(a.saveProfile))
 	mux.HandleFunc("DELETE /api/account/sessions/{id}", a.auth(a.revokeSession))
+	mux.HandleFunc("GET /api/settings", a.auth(a.adminOnly(a.getSettings)))
+	mux.HandleFunc("POST /api/settings", a.auth(a.adminOnly(a.setSetting)))
+	mux.HandleFunc("GET /api/integrations", a.auth(a.adminOnly(a.getIntegrations)))
+	mux.HandleFunc("POST /api/integrations", a.auth(a.adminOnly(a.addIntegration)))
+	mux.HandleFunc("DELETE /api/integrations/{name}", a.auth(a.adminOnly(a.removeIntegration)))
 	mux.HandleFunc("POST /api/logout", a.auth(a.logout))
 	mux.HandleFunc("GET /api/me", a.auth(a.me))
 	mux.HandleFunc("GET /api/sprigs/{id}", a.auth(a.sprig))
@@ -536,6 +566,7 @@ func (a *Adapter) me(w http.ResponseWriter, r *http.Request, u *store.User) {
 		"status":          st,
 		"parent_of":       a.parentOf(ctx, u),
 		"calendar":        a.Calendar != nil && !u.IsKid(),
+		"settings":        a.Admin != nil && u.IsAdmin(),
 	})
 }
 
