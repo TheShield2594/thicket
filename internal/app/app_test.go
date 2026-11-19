@@ -329,6 +329,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 			return toolCall("ask_sprig", map[string]any{"to": "juniper", "question": "and you?"}), nil
 		}
 		return text("Tomorrow: dentist at 10, standup at 2."), nil
+	case strings.HasPrefix(sys, "You are Quill") && last.Role == "tool":
+		return text("Quill here: " + last.Content), nil
+	case strings.HasPrefix(sys, "You are Quill") && strings.HasPrefix(lastUserText(req.Messages), "read "):
+		return toolCall("mcp_files__read_file", map[string]any{"path": strings.TrimPrefix(lastUserText(req.Messages), "read ")}), nil
 	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
 		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
@@ -411,6 +415,11 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	case strings.Contains(u, "put dinner on the calendar"):
 		return toolCall("add_to_calendar", map[string]any{"title": "Dinner: lentil curry", "start": "2026-11-20 17:30", "kind": "dinner",
 			"source_label": "Recipe box", "source_url": "https://recipes.example/lentil-curry"}), nil
+	case strings.HasPrefix(u, "set level "):
+		// "set level TOOL LEVEL for SPRIG"
+		var tool, level, sprig string
+		fmt.Sscanf(u, "set level %s %s for %s", &tool, &level, &sprig)
+		return toolCall("set_tool_level", map[string]any{"tool": tool, "level": level, "sprig": sprig}), nil
 	case strings.Contains(u, "remember we are vegetarian"):
 		return toolCall("remember", map[string]any{"content": "The household is vegetarian.", "scope": "family", "kind": "preference"}), nil
 	case strings.Contains(u, "remember my dog"):

@@ -49,6 +49,9 @@ func (e *Engine) SprigStates(ctx context.Context) map[string]string {
 }
 
 func (e *Engine) sprigState(ctx context.Context, c *character.Character, loc *time.Location) string {
+	if e.paused(ctx, c.ID) != nil {
+		return "paused" // by everything's pause or its own, as the dashboard shows it
+	}
 	b := e.busyFor(c.ID)
 	switch {
 	case b.working.Load() > 0:

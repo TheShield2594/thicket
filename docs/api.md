@@ -85,6 +85,16 @@ jobs. Answers `{"stopped_reply": true, "stopped_jobs": []}`. From the
 command line: `thicket stop [--conversation NAME]`. Pressing Ctrl-C during
 `thicket ask` also stops the reply.
 
+### `POST /api/v1/pause`, `POST /api/v1/resume`, `GET /api/v1/pause`
+
+The kill switch. An empty body pauses (or resumes) everything, which only
+the owner may do; `{"sprig": "pip"}` pauses one sprig, which its owner may
+do (the person a private sprig belongs to, or the owner or an admin for a
+shared one). Each answers with the pauses in force, like the `GET`:
+`{"pauses": [{"scope": "*", "name": "everything", "reason": "through the API", "paused_at": "…"}]}`.
+Refused requests get `403` and are recorded in the trail. See
+[Pausing](operations.md#pausing-the-kill-switch).
+
 ### `GET /api/v1/sprigs`
 
 `{"sprigs": [{"id": "juniper", "name": "Juni", "role": "…", "host": true}]}`

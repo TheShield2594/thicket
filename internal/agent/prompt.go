@@ -100,10 +100,13 @@ func buildSystemPrompt(in promptInput) string {
 	if len(in.memories) == 0 {
 		b.WriteString("Nothing yet.\n")
 	} else {
-		b.WriteString("Memories (#id, kind). \"shared\" ones every sprig knows; \"yours\" are just between you and the user.\n")
+		b.WriteString("Memories (#id, layer/kind). \"shared\": this person's, every sprig they talk to knows them; \"yours\": just between you and this person; \"family\": household memory every adult's family sprigs share, so never treat it as private to this person, and never repeat this person's own memories as if they were the household's.\n")
 		for _, m := range in.memories {
 			scope := "shared"
-			if m.Character != "" {
+			switch {
+			case m.Household:
+				scope = "family"
+			case m.Character != "":
 				scope = "yours"
 			}
 			due := ""

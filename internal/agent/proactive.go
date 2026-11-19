@@ -43,6 +43,9 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	defer cancel()
 	out, err := e.runTurn(jctx, t, "")
 	cost, _ := e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+	if flight.paused.Load() || errors.Is(err, ErrPaused) {
+		return scheduler.Result{Err: errStoppedByPause, Cost: cost}
+	}
 	if flight.stopped.Load() {
 		return scheduler.Result{Err: ErrStopped, Cost: cost}
 	}
@@ -55,9 +58,12 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	return scheduler.Result{Status: "ok", Output: out, Cost: cost}
 }
 
-// PausedReason holds scheduled jobs back while a spend cap is reached
-// (scheduler.Pauser).
+// PausedReason holds scheduled jobs back while Thicket or the job's sprig
+// is paused, or a spend cap is reached (scheduler.Pauser).
 func (e *Engine) PausedReason(ctx context.Context, j store.Job) string {
+	if err := e.paused(ctx, j.Character); err != nil {
+		return err.Error()
+	}
 	why := e.Budget.HeartbeatPause(ctx, j.Character)
 	if why != "" {
 		e.logActivity(ctx, "warn", "budget", j.Character, j.UserID, fmt.Sprintf("job #%d %q skipped: %s", j.ID, j.Name, why), "")
@@ -83,7 +89,7 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 	}
 	if errors.Is(res.Err, ErrStopped) {
 		// The user asked for it and was told: no failure report.
-		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q stopped by the user", j.ID, j.Name), "")
+		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q %s", j.ID, j.Name, res.Err), "")
 		return
 	}
 	switch res.Status {
@@ -190,6 +196,10 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Paused: nothing goes out, not even held messages; they wait.
+			if e.paused(ctx, "") != nil {
+				continue
+			}
 			// Held messages are already written: no model needed.
 			e.FlushHeld(ctx)
 			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {
@@ -249,8 +259,8 @@ func (e *Engine) FollowUps(ctx context.Context) {
 			expire("neither the sprig that noted it nor the host has follow-ups switched on")
 			continue
 		}
-		if e.holdReason(ctx, char, user) != "" {
-			continue // try again after quiet hours, or with tomorrow's budget
+		if e.holdReason(ctx, char, user) != "" || e.paused(ctx, char.ID) != nil {
+			continue // try again after quiet hours, with tomorrow's budget, or once resumed
 		}
 		if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("followup:%d", m.ID), time.Hour); !ok {
 			continue // attempted recently
@@ -259,7 +269,7 @@ func (e *Engine) FollowUps(ctx context.Context) {
 		err = e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content))
 		if err == nil {
 			expire("")
-		} else if errors.Is(err, errHeld) {
+		} else if errors.Is(err, errHeld) || errors.Is(err, ErrPaused) || errors.Is(err, ErrStopped) {
 			_ = e.DB.ReleaseNotice(ctx, fmt.Sprintf("followup:%d", m.ID)) // retry as soon as it may go out
 		}
 	}
@@ -288,7 +298,7 @@ func (e *Engine) CheckIns(ctx context.Context) {
 		}
 		var char *character.Character
 		for _, c := range e.Chars.For(&u) {
-			if c.Initiative.CheckIns && !c.IsKid() && e.holdReason(ctx, c, &u) == "" {
+			if c.Initiative.CheckIns && !c.IsKid() && e.holdReason(ctx, c, &u) == "" && e.paused(ctx, c.ID) == nil {
 				char = c
 				break
 			}
@@ -303,7 +313,7 @@ func (e *Engine) CheckIns(ctx context.Context) {
 			continue
 		}
 		err = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
-		if errors.Is(err, errHeld) {
+		if errors.Is(err, errHeld) || errors.Is(err, ErrPaused) || errors.Is(err, ErrStopped) {
 			// Not sent: free the claim so it goes out once it may.
 			_ = e.DB.ReleaseNotice(ctx, key)
 		}
@@ -321,8 +331,15 @@ var errHeld = errors.New("held by quiet hours or the daily budget; not sent")
 // the message is about stays due and is simply tried again.
 func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string) error {
 	t := &turn{user: u, char: c, query: event, noTools: true}
+	// Tracked like a job, so pausing the sprig cancels the generation.
+	ctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("proactive:%d", e.taskSeq.Add(1)), u.ID, "a check-in")
+	defer done()
+	flight.setChar(c.ID)
 	pctx := llm.WithMeta(ctx, llm.Meta{UserID: u.ID, Character: c.ID, Purpose: "proactive"})
 	text, err := e.runTurn(pctx, t, event)
+	if flight.paused.Load() {
+		return errStoppedByPause
+	}
 	if err != nil {
 		e.Log.Warn("proactive message failed", "user", u.ID, "character", c.ID, "err", err)
 		return err
@@ -333,6 +350,9 @@ func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Char
 	// Generation can take a while: re-check the gate right before sending.
 	if e.holdReason(ctx, c, u) != "" {
 		return errHeld
+	}
+	if err := e.paused(ctx, c.ID); err != nil {
+		return err
 	}
 	if err := e.sendProactive(ctx, u, c, text); err != nil {
 		e.Log.Error("send proactive message", "err", err)

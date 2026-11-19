@@ -79,7 +79,9 @@ func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMes
 // draftAction writes the action up for the user instead of running it.
 func (e *Engine) draftAction(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
 	act, _ := json.Marshal(draftAction{Tool: tool.Name, Args: args, ChatRef: t.chatRef})
-	_, err := e.DB.AddInbox(ctx, store.InboxItem{UserID: t.user.ID, Character: t.char.ID, Kind: store.InboxDraft,
+	// The draft goes to the sprig's owner: a private sprig's person, or
+	// whoever a shared sprig was working for.
+	_, err := e.DB.AddInbox(ctx, store.InboxItem{UserID: heldOwner(t), Character: t.char.ID, Kind: store.InboxDraft,
 		Title: fmt.Sprintf("%s drafted: %s", t.char.DisplayName(), tool.Label()), Detail: prettyArgs(args), Action: string(act)})
 	if err != nil {
 		e.Log.Error("save draft", "err", err)
@@ -121,15 +123,18 @@ func (e *Engine) toolSetLevel(ctx context.Context, t *turn, args json.RawMessage
 		return "", errors.New("tool is required")
 	}
 	who, label := store.AllSprigs, "every sprig"
+	var target *character.Character
 	if s := strings.TrimSpace(a.Sprig); s != "" && s != store.AllSprigs {
-		c, err := e.findSprig(nil, s) // admins set levels on any sprig but someone else's private one
-		if err == nil && c.PrivateFrom(t.user.ID) {
-			err = fmt.Errorf("there's no sprig called %q", s)
-		}
+		c, err := e.findSprig(nil, s)
 		if err != nil {
 			return "", err
 		}
-		who, label = c.ID, c.DisplayName()
+		who, label, target = c.ID, c.DisplayName(), c
+	}
+	// Admins set levels on shared sprigs (and for every sprig); a private
+	// sprig's levels are its owner's alone. Refusals are logged.
+	if err := e.mayManage(ctx, t.user, target, "change a permission level"); err != nil {
+		return "", err
 	}
 	if tool == store.AnyTool && who == store.AllSprigs {
 		return "", errors.New(`tool "*" needs a sprig: name the sprig whose granted tools it covers`)

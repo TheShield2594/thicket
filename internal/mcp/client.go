@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,13 +98,48 @@ type Client struct {
 	nextID atomic.Int64
 }
 
-// DialStdio starts command and speaks MCP over its stdin/stdout.
-func DialStdio(ctx context.Context, command string, args []string, env map[string]string) (*Client, error) {
-	cmd := exec.Command(command, args...)
-	cmd.Env = os.Environ()
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+// passEnv is what a stdio server inherits from Thicket's environment:
+// enough to find programs, read text and reach the network through a
+// proxy. Nothing else: Thicket's own variables (keys, tokens, settings)
+// never reach a server unless its configuration names them.
+var passEnv = []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
+	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+	"SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT", "WINDIR"}
+
+// StdioEnv builds a server's environment: the few variables in passEnv,
+// HOME set to home (if given), then the server's own configured env.
+func StdioEnv(home string, env map[string]string) []string {
+	var out []string
+	for _, k := range passEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, k+"="+v)
+		}
 	}
+	if home != "" {
+		out = append(out, "HOME="+home)
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, k+"="+env[k])
+	}
+	return out
+}
+
+// DialStdio starts command and speaks MCP over its stdin/stdout. It runs
+// with a scrubbed environment (StdioEnv) in dir, if dir isn't empty.
+func DialStdio(ctx context.Context, command string, args []string, env map[string]string) (*Client, error) {
+	return DialStdioIn(ctx, "", "", command, args, env)
+}
+
+// DialStdioIn is DialStdio with a working folder and HOME.
+func DialStdioIn(ctx context.Context, dir, home, command string, args []string, env map[string]string) (*Client, error) {
+	cmd := exec.Command(command, args...)
+	cmd.Env = StdioEnv(home, env)
+	cmd.Dir = dir
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

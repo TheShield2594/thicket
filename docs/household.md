@@ -13,6 +13,10 @@ kids get sprigs of their own that are locked down in code.
 | member | adults | talk to family sprigs and their own solo sprigs, connect their calendars, approve what their sprigs do |
 | kid | kids | talk only to the kid sprigs set up for them |
 
+`admin` stays a role of its own rather than folding into `owner`: a
+household often has two adults who both run things, but only one
+owner, whose role can't be changed and who alone can pause everything.
+
 Admins add people by asking Juni ("add my wife's sprig", "invite my
 housemate", "invite 1234567890 on Discord as a kid"), from the dashboard's
 invite link, or with the app API (`POST /api/v2/household/invites` with
@@ -60,6 +64,30 @@ Whoever runs the server can technically open the database file, which
 holds everything. Thicket won't show it to them, and Juni says so plainly
 when you add someone.
 
+## Who may change a sprig
+
+Every sprig has an owner, and only its owner changes what it may do:
+permission levels, trust upgrades, exec, granted paths, and pausing it.
+
+| Sprig | Its owner |
+|---|---|
+| solo | the person it belongs to (not admins, not the household owner) |
+| family | the household owner and admins |
+| kid | the household owner and admins (it stays locked to read whatever they set) |
+
+So a member can change their own solo sprigs' levels ("Juni, let Wren
+add to my reading list without asking") but not a family sprig's or
+anyone else's. Every refused attempt goes in the [trail](#the-trail) as
+`refused` and in the activity log; one aimed at someone else's private
+sprig doesn't name it. Giving a sprig an integration (`grant_tools` with
+`mcp:…`) stays with admins, since integrations hold the household's
+accounts.
+
+Approvals, drafts and needs-you items go to the sprig's owner: for a solo
+sprig its person; for a shared sprig, the person whose request caused
+them (Kim's request to the family meal planner drafts into Kim's inbox,
+not the owner's).
+
 ## Three kinds of sprig
 
 **Solo sprigs** are one person's: a comics tracker, a homelab helper. Set
@@ -73,7 +101,11 @@ about the household ("we're vegetarian", "bins go out on Thursday") with
 `remember` scope `family`. Family memory is separate from everyone's
 private memory: a family sprig talking to Kim sees family memory and
 Kim's own memories, never Sam's. Family sprigs put things on the shared
-household calendar.
+household calendar. Nothing goes into family memory unless it's saved
+with scope `family`, and the sprig is told which layer each memory comes
+from (`family`, the person's `shared` memories, or `yours` between it and
+the person), so it doesn't treat the household's as private or the
+person's as the household's.
 
 **Kid sprigs** talk to the kids they were set up for:
 

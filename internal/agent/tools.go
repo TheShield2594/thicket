@@ -34,7 +34,10 @@ type Tool struct {
 	Risky     bool // needs approval unless a level says otherwise
 	Writes    bool // changes something, but acts by default (see levels.go)
 	Untrusted bool // output is outside content: wrap it as data
-	Run       func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
+	// Exec: the tool can run commands or programs. Offered only to sprigs
+	// whose owner turned exec on (see sandboxing.go).
+	Exec bool
+	Run  func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
 }
 
 // Label is shown in approval prompts.
@@ -92,9 +95,13 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 		out[tool.Name] = tool
 	}
 	if e.MCP != nil {
+		execOK := e.execAllowed(ctx, t.char)
 		for _, st := range e.MCP.Tools() {
 			if !t.char.AllowsMCP(st.Server, st.Tool.Name) {
 				continue
+			}
+			if st.Exec && !execOK {
+				continue // granted, but its owner hasn't turned exec on
 			}
 			st := st
 			params := string(st.Tool.InputSchema)
@@ -112,8 +119,23 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Scope:       "mcp:" + st.Server,
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
+				Exec:        st.Exec,
 				Run: func(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-					res, err := e.MCP.Call(ctx, st.Server, st.Tool.Name, args, st.Tool.ReadOnly())
+					// Checked again here, in code, for every way a call
+					// runs (straight away, approved, from a draft).
+					if st.Exec && !e.execAllowed(ctx, t.char) {
+						e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+st.FuncName()+": exec isn't on", "")
+						return "", fmt.Errorf("%s can't run commands: its owner hasn't turned exec on", t.char.DisplayName())
+					}
+					if st.Local {
+						if err := e.checkLocalPaths(ctx, t.char, args); err != nil {
+							e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+st.FuncName()+": path outside the sprig's files", "")
+							return "", err
+						}
+					}
+					// Exec is checked again on the connection that serves the
+					// call: the integration may have been re-marked since.
+					res, err := e.MCP.CallAs(ctx, t.char.ID, st.Server, st.Tool.Name, args, st.Tool.ReadOnly(), e.execAllowed(ctx, t.char))
 					if err != nil {
 						return "", err
 					}
@@ -364,7 +386,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/*. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/* plus exec on (set_sprig_access), since it runs commands. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,
@@ -429,6 +451,7 @@ func (e *Engine) builtinTools() []*Tool {
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
 				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
 			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
+				`"exec":{"type":"boolean","description":"true if it can run commands or programs (a shell, a code runner): its tools are then offered only to sprigs with exec turned on (set_sprig_access)"},` +
 				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
 			Scope:     "admin",
 			AdminOnly: true,
@@ -453,11 +476,26 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRemoveIntegration,
 		},
 		{
+			Name:        "pause",
+			Description: "The kill switch. Pause a sprig (it stops what it's doing at once, and no replies, jobs, triggers or tasks run for it until resumed), or with no sprig pause everything (the owner only; then everything, you included, stops answering until it's resumed from the dashboard, the API or `thicket resume`). resume=true lifts a sprig's pause. Only a sprig's owner may pause it: the person a private sprig belongs to, or the owner or an admin for a shared one.",
+			Params:      `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; omit for everything"},"resume":{"type":"boolean"}}}`,
+			Scope:       "host",
+			ChatOnly:    true,
+			Run:         e.toolPause,
+		},
+		{
+			Name:        "set_sprig_access",
+			Description: "Show or change what a sprig may run and read beyond chatting. exec=true lets it use integrations that run commands (the sandbox computer, shell servers); off by default, and needed on top of granting the integration. grant_path / revoke_path: a full path on this machine it may use besides its own folder (Thicket's data can never be granted). Only the sprig's owner may change these: the person a private sprig belongs to, or the owner or an admin for a shared one. With only sprig, it describes the current access.",
+			Params:      `{"type":"object","properties":{"sprig":{"type":"string"},"exec":{"type":"boolean"},"grant_path":{"type":"string"},"revoke_path":{"type":"string"}},"required":["sprig"]}`,
+			Scope:       "admin",
+			ChatOnly:    true,
+			Run:         e.toolSetSprigAccess,
+		},
+		{
 			Name:        "set_tool_level",
-			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act).",
+			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act). Only a sprig's owner may: the person a private sprig belongs to, or the owner or an admin for a shared sprig (and for every sprig at once). Anyone else is refused, and the attempt is logged.",
 			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"level":{"type":"string","enum":["read","draft","ask","act","default"]},"sprig":{"type":"string","description":"sprig id or name; omit for every sprig"}},"required":["tool","level"]}`,
 			Scope:       "admin",
-			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolSetLevel,
 		},
@@ -1250,6 +1288,23 @@ func (e *Engine) toolAddIntegration(ctx context.Context, t *turn, args json.RawM
 	a := in.MCPServer
 	if !secrets.ValidName(a.Name) || strings.Contains(a.Name, "__") {
 		return "", errors.New("integration names are lowercase letters, digits and single underscores")
+	}
+	// Re-adding an integration keeps its exec mark unless exec is given:
+	// leaving it out mustn't quietly offer its commands to every sprig.
+	var given struct {
+		Exec *bool `json:"exec"`
+	}
+	_ = json.Unmarshal(args, &given)
+	if given.Exec == nil {
+		if servers, err := e.DB.MCPServers(ctx); err != nil {
+			return "", err
+		} else {
+			for _, s := range servers {
+				if s.Name == a.Name {
+					a.Exec = s.Exec
+				}
+			}
+		}
 	}
 	if in.Auth == "oauth" {
 		return e.addOAuthIntegration(ctx, t, a, in.ClientID, in.ClientSecret)

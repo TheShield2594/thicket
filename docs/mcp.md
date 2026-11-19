@@ -58,6 +58,57 @@ services:
 
 Then tell Juni the URL is `http://some-mcp-server:3000/mcp`.
 
+## Sandboxing: files and commands
+
+What a sprig can reach through an integration is limited in code, per
+sprig.
+
+**Commands (exec).** An integration that can run commands or programs
+(a shell server, a code runner, the [sandbox computer](sandbox.md)) is
+marked `exec`: say so when you add it ("it runs commands"), or pass
+`"exec": true` to `add_integration`. Granting a sprig an exec
+integration isn't enough on its own: its tools aren't offered, and are
+refused if called, until the sprig's owner turns exec on:
+
+> Juni, let Tinker run commands.
+
+(`set_sprig_access(sprig: tinker, exec: true)`.) Turn it off the same
+way. Sprigs that had the sandbox before this was added kept exec, with a
+trail entry saying so.
+
+**Files.** A sprig's files are its own folder, `characters/<id>/`, plus
+paths its owner granted:
+
+> Juni, let Quill use /srv/scans.
+
+(`set_sprig_access(sprig: quill, grant_path: /srv/scans)`; `revoke_path`
+takes it back.) Thicket's data folder, every sprig's folder and the key
+file can never be granted, and neither can a folder that contains them
+(such as `/`).
+
+A local (`stdio`) integration runs a separate process for each sprig
+that uses it, started in that sprig's folder, with a scrubbed
+environment: only `PATH`, locale, timezone, proxy and certificate
+variables, `HOME` set to a shared `mcp/home` folder, and the `env` you
+configured. Thicket's own variables (keys, tokens) never reach it unless
+you put one in its `env`. Every argument that names a path (`path`,
+`file`, `dir`, `source`, `destination` and similar) is resolved, with
+`..` and symbolic links followed, and refused if it lands outside the
+sprig's folder and grants. Remote (`http`) integrations run on another
+machine, so their paths aren't Thicket's and aren't checked.
+
+Who may change these: the person a private sprig belongs to, or the
+owner or an admin for a shared one. Every change goes in the trail and
+can be undone; refused attempts are in the trail too.
+
+**Untrusted servers belong in their own container.** A `stdio` server is
+a program on Thicket's machine, running as Thicket's user. The checks
+above stop a sprig from *asking* it for another sprig's files, but a
+server that ignores its arguments, or runs commands, can read whatever
+Thicket's user can. Run any server you don't fully trust as its own
+container, served over HTTP as above, with no access to Thicket's
+volume. The sandbox computer is set up that way.
+
 ## Home Assistant
 
 Home Assistant ships an MCP Server integration.

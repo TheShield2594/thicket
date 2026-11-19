@@ -81,8 +81,16 @@ func (e *Engine) toolAskSprig(ctx context.Context, t *turn, args json.RawMessage
 		consult: &consult{from: t.char, question: q}, query: q, depth: t.depth}
 	sub.inherit(t)
 	sub.addTaint("sprig " + t.char.ID) // the question is a sprig's words
-	sctx := llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
+	// The answer is the asked sprig's own work: tracked as its own, so
+	// pausing it cancels the answer. It still ends with the asking turn.
+	fctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("consult:%d", e.taskSeq.Add(1)), t.user.ID, target.DisplayName()+"'s answer")
+	flight.setChar(target.ID)
+	sctx := llm.WithMeta(fctx, llm.Meta{UserID: t.user.ID, Character: target.ID, JobID: jobID(t), Purpose: "consult", Origin: llm.OriginOf(llm.MetaFrom(ctx))})
 	answer, err := e.runTurn(sctx, sub, "")
+	done()
+	if flight.paused.Load() {
+		err = fmt.Errorf("%s was paused", target.DisplayName())
+	}
 	// Approval prompts the asked sprig raised go out with this reply.
 	t.afterReply = append(t.afterReply, sub.afterReply...)
 	t.done = append(t.done, sub.done...)
@@ -216,6 +224,15 @@ func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, fr
 	switch {
 	case life != nil && life.Err() != nil:
 		return // shutting down: left running, reported as interrupted at the next start
+	case flight.paused.Load() || errors.Is(err, ErrPaused):
+		// Not run, or cut short, by a pause: in the inbox, not in chat
+		// (nothing is sent while paused).
+		_ = e.DB.FinishTask(bg, taskID, "stopped", "paused")
+		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": stopped by a pause", "")
+		e.deadLetter(bg, store.InboxItem{UserID: user.ID, Character: target.ID, Kind: store.InboxInterrupted, Ref: ref,
+			Title:  fmt.Sprintf("%s's task from %s was stopped by a pause", target.DisplayName(), from.DisplayName()),
+			Detail: "Task: " + task + "\n\nIt wasn't finished and won't restart on its own; ask again once it's resumed."})
+		return
 	case flight.stopped.Load():
 		_ = e.DB.FinishTask(bg, taskID, "stopped", "")
 		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": stopped by the user", "")

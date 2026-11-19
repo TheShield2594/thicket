@@ -106,6 +106,11 @@ Usage:
   thicket run-job JOB_ID [--payload TEXT|-]
                                       run a job now, optionally with input (needs THICKET_API_TOKEN)
   thicket stop [--conversation NAME]  stop the reply in progress there, or else your running jobs
+  thicket pause [--sprig ID] [--reason TEXT]
+                                      the kill switch: stop everything (or one sprig) within a second
+                                      and run nothing until resumed; works while the server runs
+  thicket pause status                what's paused
+  thicket resume [--sprig ID]         lift a pause
   thicket mcp                         an MCP server on stdin/stdout, so Claude Desktop, Cursor and
                                       other agents can talk to your sprigs (needs THICKET_API_TOKEN)
   thicket changelog [VERSION]         what changed in this build, or in one released version
@@ -174,6 +179,10 @@ func main() {
 		err = runJobCmd(args)
 	case "stop":
 		err = stopCmd(args)
+	case "pause":
+		err = pauseCmd(loadConfig(), args, os.Stdout, true)
+	case "resume":
+		err = pauseCmd(loadConfig(), args, os.Stdout, false)
 	case "mcp":
 		err = mcpCmd()
 	case "changelog":

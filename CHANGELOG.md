@@ -4,6 +4,48 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: kill switch, sandboxing and sprig owners (schema v20)
+
+- The kill switch. `thicket pause` stops every reply, job and delegated
+  task within a second, and nothing runs (replies, jobs, webhooks,
+  triggers, check-ins, follow-ups, held messages, model calls) until
+  `thicket resume`. `--sprig ID` pauses one sprig; `thicket pause status`
+  shows what's paused. It writes straight into the database, so it works
+  without an API token and survives restarts. Also on the dashboard
+  (**Pause everything** for the owner, **Pause** on each sprig for its
+  owner), at `POST /api/v1/pause` and `/api/v1/resume`, and in chat
+  ("Juni, pause Pip"). Messages that arrive get a short "paused" answer;
+  webhooks get 503. Every pause and resume is in the trail. See
+  [Pausing](docs/operations.md#pausing-the-kill-switch).
+- Rate limits: per sprig, 30 tool calls a minute and 20 actions an hour
+  taken without asking; per integration, 60 calls a minute. New settings
+  `limits.tool_calls_per_minute`, `limits.actions_per_hour` and
+  `limits.integration_calls_per_minute`, with per-sprig and
+  per-integration overrides. A call over a limit isn't run and goes to
+  the owner's inbox.
+- Commands need an explicit grant. Integrations that run commands are
+  marked `exec` (the sandbox is); their tools are offered only to sprigs
+  whose owner turned exec on (`set_sprig_access`). **Sprigs that already
+  had the sandbox keep it**, with a trail entry saying so.
+- Each sprig keeps to its own files: its folder, `characters/<id>/`,
+  plus paths its owner grants. Thicket's data can never be granted. Local
+  (`stdio`) integrations now run one process per sprig, started in that
+  sprig's folder, with a scrubbed environment (Thicket's keys and tokens
+  are no longer inherited; add what a server needs to its `env`), and
+  path arguments are resolved, symlinks and `..` included, and checked.
+  See [Sandboxing](docs/mcp.md#sandboxing-files-and-commands).
+- Sprig owners decide. Members can now change permission levels, exec
+  and paths on their own private sprigs, and pause them; family and kid
+  sprigs stay with the owner and admins. Attempts on someone else's
+  sprig are refused and recorded in the trail. Drafts from a shared
+  sprig go to the person who asked, and sprigs are told which memory
+  layer (family, shared or their own) each memory comes from. See
+  [Who may change a sprig](docs/household.md#who-may-change-a-sprig).
+- New guides: [Writing a sprig](docs/authoring.md) and
+  [Extending Thicket](docs/adapters.md) (chat adapters and integrations);
+  the architecture tour covers ownership, sandboxing, pause, rate limits
+  and the trail.
+
 ## Unreleased: sprig packages and untrusted content
 
 - Sprig packages. `thicket export-sprig ID [-o FILE] [--skill ID]` writes

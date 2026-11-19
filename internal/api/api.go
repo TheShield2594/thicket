@@ -131,6 +131,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/jobs", a.auth(a.getJobs))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/run", a.auth(a.runJob))
 	mux.HandleFunc("POST /api/v1/stop", a.auth(a.stop))
+	mux.HandleFunc("GET /api/v1/pause", a.auth(a.getPauses))
+	mux.HandleFunc("POST /api/v1/pause", a.auth(a.pause))
+	mux.HandleFunc("POST /api/v1/resume", a.auth(a.resume))
 	return mux
 }
 
@@ -406,4 +409,44 @@ func (a *API) stop(w http.ResponseWriter, r *http.Request, c caller) {
 		jobs = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stopped_reply": stopped, "stopped_jobs": jobs, "set_aside": setAside})
+}
+
+// --- the kill switch ---
+
+func (a *API) getPauses(w http.ResponseWriter, r *http.Request, c caller) {
+	ps, err := a.Engine.PausesFor(r.Context(), c.user)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "couldn't read pauses")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pauses": ps})
+}
+
+func (a *API) pause(w http.ResponseWriter, r *http.Request, c caller) {
+	a.setPause(w, r, c, true)
+}
+
+func (a *API) resume(w http.ResponseWriter, r *http.Request, c caller) {
+	a.setPause(w, r, c, false)
+}
+
+// setPause pauses or resumes everything (no sprig: the owner only) or one
+// sprig (its owner). The body is {"sprig": "…"} or empty.
+func (a *API) setPause(w http.ResponseWriter, r *http.Request, c caller, on bool) {
+	var req struct {
+		Sprig string `json:"sprig"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		fail(w, http.StatusBadRequest, "body must be JSON: {\"sprig\": \"…\"} (or empty, for everything)")
+		return
+	}
+	do := a.Engine.Resume
+	if on {
+		do = a.Engine.Pause
+	}
+	if err := do(r.Context(), c.user, strings.TrimSpace(req.Sprig), "through the API"); err != nil {
+		fail(w, http.StatusForbidden, err.Error())
+		return
+	}
+	a.getPauses(w, r, c)
 }

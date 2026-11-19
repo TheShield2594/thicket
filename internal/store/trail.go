@@ -14,14 +14,17 @@ import (
 
 // Trail kinds.
 const (
-	TrailLevel  = "level"  // a tool's permission level changed
-	TrailGrant  = "grant"  // a sprig's tool scopes changed
-	TrailEvent  = "event"  // a sprig put something on the calendar
-	TrailRole   = "role"   // someone's household role changed
-	TrailSafety = "safety" // a safety alert went to a kid's parents
-	TrailUndo   = "undo"   // something above was undone
-	TrailUpdate = "update" // Thicket was updated to a new version
-	TrailHeld   = "held"   // an action after untrusted content went to the inbox instead
+	TrailLevel   = "level"   // a tool's permission level changed
+	TrailGrant   = "grant"   // a sprig's tool scopes changed
+	TrailEvent   = "event"   // a sprig put something on the calendar
+	TrailRole    = "role"    // someone's household role changed
+	TrailSafety  = "safety"  // a safety alert went to a kid's parents
+	TrailUndo    = "undo"    // something above was undone
+	TrailUpdate  = "update"  // Thicket was updated to a new version
+	TrailHeld    = "held"    // an action after untrusted content went to the inbox instead
+	TrailAccess  = "access"  // a sprig's exec opt-in or granted paths changed
+	TrailRefused = "refused" // someone tried to change a sprig that isn't theirs to change
+	TrailPause   = "pause"   // everything, or one sprig, was paused or resumed
 )
 
 type TrailEntry struct {

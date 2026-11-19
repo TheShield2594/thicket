@@ -49,6 +49,8 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 {{if .Flash}}<section class="flash" role="status">{{.Flash}}</section>{{end}}
 {{if .Problem}}<section class="problem" role="alert">{{.Problem}}</section>{{end}}
 <p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>
+{{if .PausedAll}}<section class="problem" role="status">⏸️ <b>Thicket is paused.</b> Nothing runs: no replies, jobs, triggers or check-ins.{{if .CanPauseAll}} <form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="kind" value="pause"><button class="primary" name="action" value="resume">Resume everything</button></form>{{else}} The owner can resume it.{{end}}</section>
+{{else if .CanPauseAll}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="kind" value="pause"><button name="action" value="pause" title="Stop every reply, job and task now; nothing runs until you resume">⏸️ Pause everything</button></form>{{end}}
 
 <section id="sprigs"><h2>Sprigs</h2><div class="roster">
 {{range .Sprigs}}{{if .Private}}<div class="sprigcard"><div><b>{{.Name}}</b> <span class="tag">private</span>
@@ -57,7 +59,8 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 {{else}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}{{if .Only}} <span class="tag">{{.Only}}</span>{{end}}
 <div class="state" id="st-{{.ID}}"><b>{{.State}}</b></div><div class="muted small">{{.Role}}</div>
 {{if .Proactive}}<div class="muted small">{{.Proactive}}</div>{{end}}
-<div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}{{end}}
+<div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div>
+{{if .CanPause}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="pause"><input type="hidden" name="sprig" value="{{.ID}}">{{if .Paused}}<button class="primary" name="action" value="resume">Resume {{.Name}}</button>{{else}}<button name="action" value="pause">Pause {{.Name}}</button>{{end}}</form>{{end}}</div></div>{{end}}{{end}}
 </div></section>
 
 <section id="inbox"><h2>Needs you</h2>

@@ -25,6 +25,11 @@ type Expander interface {
 type ServerTool struct {
 	Server string
 	Tool   Tool
+	// Exec: the server can run commands or programs (MCPServer.Exec).
+	Exec bool
+	// Local: the server is a process on Thicket's own machine (stdio), so
+	// paths in its arguments are on that machine too.
+	Local bool
 }
 
 // FuncName is the model-facing function name.
@@ -55,12 +60,25 @@ func FuncName(server, tool string) string {
 // client; a replaced or removed connection is only closed once the last
 // in-flight call releases it.
 type conn struct {
-	client  *Client
-	tools   []Tool
-	err     error
-	at      time.Time
-	refs    int  // guarded by Registry.mu
-	retired bool // guarded by Registry.mu
+	client    *Client
+	tools     []Tool
+	err       error
+	at        time.Time
+	server    string
+	transport string
+	exec      bool
+	refs      int  // guarded by Registry.mu
+	retired   bool // guarded by Registry.mu
+}
+
+// connKey names a connection: the server's own (for listing tools, and
+// for every call to a remote server), or one sprig's process of a stdio
+// server, which runs in that sprig's folder.
+func connKey(server, sprig string) string {
+	if sprig == "" {
+		return server
+	}
+	return server + "\x00" + sprig
 }
 
 // retireLocked marks c as replaced and closes it if nothing is using it.
@@ -105,17 +123,24 @@ type Registry struct {
 	// RetryBackoff is the first wait before retrying a read-only call
 	// (doubles each time); 0 means 500ms.
 	RetryBackoff time.Duration
+	// Folder returns the working folder for a stdio server's process: the
+	// sprig's own folder, or (sprig "") a neutral one for listing tools.
+	// It returns "" to use Thicket's own. Home is HOME for every stdio
+	// server (caches, config), shared by all of them.
+	Folder func(sprig string) (string, error)
+	Home   string
 
 	mu    sync.Mutex
-	conns map[string]*conn
-	gen   map[string]uint64 // bumped on every (re)connect or removal
+	conns map[string]*conn  // by connKey
+	gen   map[string]uint64 // by connKey: bumped on every (re)connect or removal
+	sgen  map[string]uint64 // by server: bumped when a server is removed or replaced
 }
 
 func NewRegistry(db *store.Store, sec Expander, log *slog.Logger) *Registry {
-	return &Registry{DB: db, Secrets: sec, Log: log, conns: map[string]*conn{}, gen: map[string]uint64{}}
+	return &Registry{DB: db, Secrets: sec, Log: log, conns: map[string]*conn{}, gen: map[string]uint64{}, sgen: map[string]uint64{}}
 }
 
-func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error) {
+func (r *Registry) dial(ctx context.Context, s store.MCPServer, sprig string) (*Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	switch s.Transport {
@@ -128,7 +153,14 @@ func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error)
 			}
 			env[k] = x
 		}
-		return DialStdio(ctx, s.Target, s.Args, env)
+		dir := ""
+		if r.Folder != nil {
+			var err error
+			if dir, err = r.Folder(sprig); err != nil {
+				return nil, err
+			}
+		}
+		return DialStdioIn(ctx, dir, r.Home, s.Target, s.Args, env)
 	case "http":
 		hdr := map[string]string{}
 		var token TokenFunc
@@ -152,26 +184,50 @@ func (r *Registry) dial(ctx context.Context, s store.MCPServer) (*Client, error)
 	return nil, fmt.Errorf("unknown transport %q", s.Transport)
 }
 
-// Connect (re)connects one server and lists its tools.
+// Connect (re)connects one server and lists its tools. A stdio server's
+// per-sprig processes are restarted too, on their next call, so they
+// pick up its new settings.
 func (r *Registry) Connect(ctx context.Context, s store.MCPServer) ([]Tool, error) {
-	c, err := r.connect(ctx, s, false)
+	r.mu.Lock()
+	r.retireSprigsLocked(s.Name)
+	r.mu.Unlock()
+	c, err := r.connect(ctx, s, "", false)
 	if err != nil {
 		return nil, err
 	}
 	return c.tools, nil
 }
 
-// connect dials a server and publishes the connection, unless the server
-// was removed or reconnected by someone else while we were dialling.
-func (r *Registry) connect(ctx context.Context, s store.MCPServer, hold bool) (*conn, error) {
+// retireSprigsLocked drops a server's per-sprig processes. r.mu must be
+// held.
+func (r *Registry) retireSprigsLocked(server string) {
+	r.sgen[server]++ // invalidates per-sprig connection attempts in flight
+	for k, c := range r.conns {
+		if c.server == server && k != server {
+			r.gen[k]++
+			r.retireLocked(c)
+			delete(r.conns, k)
+		}
+	}
+}
+
+// connect dials a server (for one sprig, for a stdio server, or its own
+// connection when sprig is "") and publishes the connection, unless the
+// server was removed or reconnected by someone else while we were
+// dialling.
+func (r *Registry) connect(ctx context.Context, s store.MCPServer, sprig string, hold bool) (*conn, error) {
+	if s.Transport != "stdio" {
+		sprig = "" // one connection serves every sprig
+	}
+	key := connKey(s.Name, sprig)
 	r.mu.Lock()
-	r.gen[s.Name]++
-	myGen := r.gen[s.Name]
-	r.retireLocked(r.conns[s.Name])
-	delete(r.conns, s.Name)
+	r.gen[key]++
+	myGen, mySGen := r.gen[key], r.sgen[s.Name]
+	r.retireLocked(r.conns[key])
+	delete(r.conns, key)
 	r.mu.Unlock()
 
-	c, err := r.dial(ctx, s)
+	c, err := r.dial(ctx, s, sprig)
 	var tools []Tool
 	if err == nil {
 		lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -182,16 +238,16 @@ func (r *Registry) connect(ctx context.Context, s store.MCPServer, hold bool) (*
 			c = nil
 		}
 	}
-	cn := &conn{client: c, tools: tools, err: err, at: time.Now()}
+	cn := &conn{client: c, tools: tools, err: err, at: time.Now(), server: s.Name, transport: s.Transport, exec: s.Exec}
 	r.mu.Lock()
-	if r.gen[s.Name] != myGen {
+	if r.gen[key] != myGen || (sprig != "" && r.sgen[s.Name] != mySGen) {
 		r.mu.Unlock()
 		if c != nil {
 			c.Close()
 		}
 		return nil, fmt.Errorf("integration %q was removed or reconnected while connecting", s.Name)
 	}
-	r.conns[s.Name] = cn
+	r.conns[key] = cn
 	if hold && err == nil {
 		cn.refs++ // taken under the same lock that publishes it
 	}
@@ -221,13 +277,14 @@ func (r *Registry) ConnectAll(ctx context.Context) map[string]error {
 	return errs
 }
 
-// Disconnect drops a server.
+// Disconnect drops a server, and every sprig's process of it.
 func (r *Registry) Disconnect(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.gen[name]++ // invalidates any connection attempt in flight
 	r.retireLocked(r.conns[name])
 	delete(r.conns, name)
+	r.retireSprigsLocked(name)
 }
 
 // Tools lists every tool from connected servers.
@@ -236,8 +293,11 @@ func (r *Registry) Tools() []ServerTool {
 	defer r.mu.Unlock()
 	var out []ServerTool
 	for name, c := range r.conns {
+		if name != c.server && c.server != "" {
+			continue // a sprig's own process: listed through the server's
+		}
 		for _, t := range c.tools {
-			out = append(out, ServerTool{Server: name, Tool: t})
+			out = append(out, ServerTool{Server: name, Tool: t, Exec: c.exec, Local: c.transport == "stdio"})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FuncName() < out[j].FuncName() })
@@ -250,6 +310,9 @@ func (r *Registry) Status() map[string]string {
 	defer r.mu.Unlock()
 	out := map[string]string{}
 	for name, c := range r.conns {
+		if name != c.server && c.server != "" {
+			continue
+		}
 		if c.err != nil {
 			out[name] = "error: " + c.err.Error()
 		} else {
@@ -263,28 +326,54 @@ func (r *Registry) Status() map[string]string {
 // after a transport failure: only for read-only tools, since a dropped
 // connection doesn't mean the server didn't act.
 func (r *Registry) Call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe bool) (*CallResult, error) {
-	return r.call(ctx, server, tool, args, retrySafe, false)
+	return r.call(ctx, server, "", tool, args, retrySafe, false, true)
+}
+
+// ErrExec means a call reached an integration marked exec for a sprig
+// that may not use one.
+var ErrExec = errors.New("runs commands, and this sprig's exec access is off")
+
+// CallAs invokes a tool for a sprig. A stdio server runs a process of its
+// own for each sprig, in that sprig's folder; other servers share one
+// connection. With allowExec false, a call is refused if the connection
+// that would serve it (after any reconnect) is marked exec.
+func (r *Registry) CallAs(ctx context.Context, sprig, server, tool string, args json.RawMessage, retrySafe, allowExec bool) (*CallResult, error) {
+	return r.call(ctx, server, sprig, tool, args, retrySafe, false, allowExec)
+}
+
+// CallReadOnlyAs is CallReadOnly for a sprig, as CallAs.
+func (r *Registry) CallReadOnlyAs(ctx context.Context, sprig, server, tool string, args json.RawMessage, allowExec bool) (*CallResult, error) {
+	return r.call(ctx, server, sprig, tool, args, true, true, allowExec)
 }
 
 // CallReadOnly calls a tool only if the very connection used lists it as
 // read-only (for automatic callers, like trigger polls, that must never
 // run a tool that changes things). It's retried like any read-only call.
 func (r *Registry) CallReadOnly(ctx context.Context, server, tool string, args json.RawMessage) (*CallResult, error) {
-	return r.call(ctx, server, tool, args, true, true)
+	return r.call(ctx, server, "", tool, args, true, true, true)
 }
 
 // ErrNotReadOnly means a tool isn't (or is no longer) listed as read-only.
 var ErrNotReadOnly = errors.New("is not listed as read-only")
 
-func (r *Registry) call(ctx context.Context, server, tool string, args json.RawMessage, retrySafe, onlyReadOnly bool) (*CallResult, error) {
+func (r *Registry) call(ctx context.Context, server, sprig, tool string, args json.RawMessage, retrySafe, onlyReadOnly, allowExec bool) (*CallResult, error) {
 	r.mu.Lock()
-	c := acquireLocked(r.conns[server])
+	var c *conn
+	if b := r.conns[server]; sprig != "" && b != nil && b.transport == "stdio" {
+		c = acquireLocked(r.conns[connKey(server, sprig)])
+	} else if sprig == "" || b != nil {
+		c = acquireLocked(b)
+	}
 	r.mu.Unlock()
 	if c == nil {
 		var err error
-		if c, err = r.reconnect(ctx, server); err != nil {
+		if c, err = r.reconnect(ctx, server, sprig); err != nil {
 			return nil, err
 		}
+	}
+	if c.exec && !allowExec {
+		r.release(c)
+		return nil, fmt.Errorf("%s %w", server, ErrExec)
 	}
 	if onlyReadOnly && !listsReadOnly(c.tools, tool) {
 		r.release(c)
@@ -310,10 +399,14 @@ func (r *Registry) call(ctx context.Context, server, tool string, args json.RawM
 		case <-time.After(backoff):
 		}
 		backoff *= 2
-		c2, rerr := r.reconnect(ctx, server)
+		c2, rerr := r.reconnect(ctx, server, sprig)
 		if rerr != nil {
 			err = rerr
 			continue
+		}
+		if c2.exec && !allowExec {
+			r.release(c2)
+			return nil, fmt.Errorf("%s %w", server, ErrExec)
 		}
 		// The server may have changed on reconnect: replay only if this
 		// connection still lists the tool as read-only.
@@ -354,14 +447,14 @@ func (r *Registry) callOn(ctx context.Context, c *conn, tool string, args json.R
 // reconnect connects a configured server and returns the new connection
 // already held for the caller, so a concurrent replacement can't close it
 // before (or while) the caller uses it.
-func (r *Registry) reconnect(ctx context.Context, server string) (*conn, error) {
+func (r *Registry) reconnect(ctx context.Context, server, sprig string) (*conn, error) {
 	servers, err := r.DB.MCPServers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range servers {
 		if s.Name == server && s.Enabled {
-			return r.connect(ctx, s, true)
+			return r.connect(ctx, s, sprig, true)
 		}
 	}
 	return nil, fmt.Errorf("integration %q is not configured", server)

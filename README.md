@@ -276,6 +276,14 @@ cookies (`Secure` over HTTPS).
   sprig is working: it stops at once, tells you anything it had already
   done, and sets aside messages you sent in the meantime. With no reply
   running, "stop" stops your running jobs.
+- Pull the plug: `thicket pause` stops everything within a second, and
+  nothing runs (replies, jobs, triggers, check-ins, model calls) until
+  `thicket resume`, across restarts. Pause one sprig with `--sprig`, or
+  from the dashboard or the API. Sprigs' tool use is rate-limited per
+  sprig and per integration
+  ([details](docs/operations.md#pausing-the-kill-switch)).
+- Each sprig keeps to its own files and can't run commands until its
+  owner says so ([Sandboxing](docs/mcp.md#sandboxing-files-and-commands)).
 - Pin what matters: reply to a message with **pin this** (or say **pin
   that** for the latest one) and it stays in every reply's context for the
   rest of the conversation, even after older messages are summarised (up
@@ -379,6 +387,8 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 
 ## Docs
 
+- [Writing a sprig](docs/authoring.md): personality, voice, tools,
+  routines, looks, voice tests, sharing
 - [Character file reference](docs/characters.md)
 - [Households: solo, family and kid sprigs](docs/household.md)
 - [Calendar](docs/calendar.md)
@@ -397,6 +407,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Desktop app](docs/desktop.md)
 - [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
+- [Extending Thicket: chat adapters and integrations](docs/adapters.md)
 - [Changelog](CHANGELOG.md)
 
 ## Development

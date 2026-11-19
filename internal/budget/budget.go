@@ -29,6 +29,10 @@ type Guard struct {
 	Log      *slog.Logger
 	OnAlert  func(ctx context.Context, a Alert)
 	Now      func() time.Time
+	// Paused, if set, refuses every model call while Thicket or the
+	// calling sprig is paused (the kill switch): a backstop under every
+	// other check, so nothing that reaches a model runs.
+	Paused func(ctx context.Context, character string) error
 
 	mu      sync.Mutex
 	pending []store.Usage // paid calls not yet written to the database
@@ -148,6 +152,11 @@ func (g *Guard) capAlert(ctx context.Context, c capCheck, spent float64) {
 
 func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	m := llm.MetaFrom(ctx)
+	if g.Paused != nil {
+		if err := g.Paused(ctx, m.Character); err != nil {
+			return nil, err
+		}
+	}
 	if err := g.flushPending(ctx); err != nil {
 		g.alert(ctx, Alert{Key: "budget:accounting", Level: "error",
 			Message: "I can't record what model calls cost right now (" + err.Error() + "), so I've paused model calls to keep the spend caps honest."})

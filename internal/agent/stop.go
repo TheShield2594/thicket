@@ -31,8 +31,17 @@ type inFlight struct {
 	name    string // job name, for jobs
 	cancel  context.CancelFunc
 	stopped atomic.Bool
+	paused  atomic.Bool // stopped by a pause, not by the user
 	acked   atomic.Bool
 	dropped atomic.Int32 // queued messages set aside by the stop
+	char    atomic.Value // string: the sprig doing the work, once known
+}
+
+func (f *inFlight) setChar(id string) { f.char.Store(id) }
+
+func (f *inFlight) charID() string {
+	id, _ := f.char.Load().(string)
+	return id
 }
 
 type inFlightKey struct{}
@@ -100,14 +109,27 @@ func (e *Engine) stopAck(ctx context.Context, t *turn, f *inFlight) {
 	if len(t.done) > 0 {
 		msg += " Before you stopped me I had already done this: " + strings.Join(t.done, ", ") + "."
 	}
+	if f.paused.Load() {
+		msg = "⏸️ Paused, so I've stopped."
+		if err := e.paused(ctx, t.char.ID); err != nil {
+			msg = "⏸️ " + err.Error() + ", so I've stopped."
+		}
+		if len(t.done) > 0 {
+			msg += " Before that I had already done this: " + strings.Join(t.done, ", ") + "."
+		}
+	}
 	if n := f.dropped.Load(); n > 0 {
 		msg += fmt.Sprintf(" I've also set aside the %d message(s) you sent while I was busy; send again anything you still want.", n)
 	}
 	if err := e.send(ctx, t.chatRef, t.char, msg); err != nil {
 		e.Log.Error("send stop acknowledgement", "err", err)
 	}
-	if t.conv != nil {
-		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", "The user stopped the reply before it was finished.")
+	why := "The user stopped the reply before it was finished."
+	if f.paused.Load() {
+		why = "The reply was stopped by a pause before it was finished."
 	}
-	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "reply stopped by the user", strings.Join(t.done, ", "))
+	if t.conv != nil {
+		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", why)
+	}
+	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, why, strings.Join(t.done, ", "))
 }

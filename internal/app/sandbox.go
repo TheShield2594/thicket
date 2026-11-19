@@ -27,13 +27,16 @@ const (
 
 // ensureSandbox shares a token with the sandbox (through a file both
 // containers mount) and keeps the integration's settings current.
-func (a *App) ensureSandbox(ctx context.Context) {
+// It reports whether the sandbox's settings are known to be current.
+func (a *App) ensureSandbox(ctx context.Context) bool {
 	if a.Cfg.SandboxURL == "" {
-		return
+		return true
 	}
 	if err := a.setUpSandbox(ctx); err != nil {
 		a.startErr("The sandbox computer isn't set up: " + shortErr(err))
+		return false
 	}
+	return true
 }
 
 func (a *App) sandboxTokenFile() string {
@@ -70,13 +73,13 @@ func (a *App) setUpSandbox(ctx context.Context) error {
 		}
 	}
 	want := store.MCPServer{Name: sandboxName, Transport: "http", Target: a.Cfg.SandboxURL + "/mcp",
-		Headers: map[string]string{"Authorization": "Bearer {{secret:" + sandboxSecret + "}}"}, Enabled: true}
+		Headers: map[string]string{"Authorization": "Bearer {{secret:" + sandboxSecret + "}}"}, Enabled: true, Exec: true}
 	servers, err := a.DB.MCPServers(ctx)
 	if err != nil {
 		return err
 	}
 	for _, s := range servers {
-		if s.Name == sandboxName && s.Transport == want.Transport && s.Target == want.Target && maps.Equal(s.Headers, want.Headers) && s.Enabled {
+		if s.Name == sandboxName && s.Transport == want.Transport && s.Target == want.Target && maps.Equal(s.Headers, want.Headers) && s.Enabled && s.Exec {
 			return nil
 		}
 	}
@@ -106,4 +109,50 @@ func (a *App) retrySandbox(ctx context.Context) error {
 		return err
 	}
 	return errors.New("no sandbox integration")
+}
+
+// execKeptKey marks that sprigs given an exec-capable integration before
+// exec became a separate opt-in have kept it.
+const execKeptKey = "sandboxing.exec_kept"
+
+// keepExecGrants runs once, on the first start after the upgrade that
+// made exec opt-in: a sprig that already had an exec-capable integration
+// (the sandbox) keeps using it, with exec turned on and a trail entry
+// saying so. Sprigs given one later need exec turned on explicitly.
+func (a *App) keepExecGrants(ctx context.Context) {
+	if _, done, err := a.DB.Setting(ctx, execKeptKey); err != nil || done {
+		return
+	}
+	servers, err := a.DB.MCPServers(ctx)
+	if err != nil {
+		return
+	}
+	for _, c := range a.Chars.All() {
+		if c.IsKid() {
+			continue
+		}
+		for _, s := range servers {
+			if !s.Exec || !hasServerScope(c.Tools, s.Name) {
+				continue
+			}
+			if err := a.DB.SetExecAllowed(ctx, c.ID, true, 0); err != nil {
+				a.Log.Error("keep exec", "sprig", c.ID, "err", err)
+				return // try again next start
+			}
+			_ = a.DB.AddTrail(ctx, store.TrailEntry{Character: c.ID, Kind: store.TrailAccess,
+				Summary: fmt.Sprintf("%s's exec: on (kept: it had the %s integration before exec became a separate opt-in)", c.DisplayName(), s.Name)})
+			break
+		}
+	}
+	_ = a.DB.SetSetting(ctx, execKeptKey, "1")
+}
+
+// hasServerScope reports whether scopes grant any tool of server.
+func hasServerScope(scopes []string, server string) bool {
+	for _, s := range scopes {
+		if s == "mcp:"+server || strings.HasPrefix(s, "mcp:"+server+"/") {
+			return true
+		}
+	}
+	return false
 }

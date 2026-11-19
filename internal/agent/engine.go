@@ -83,6 +83,7 @@ type Engine struct {
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
+	limits    rateLimits // per-sprig and per-integration tool limits
 	// compactBackoff: conversation id -> time before which summarising
 	// isn't retried (it failed).
 	compactBackoff sync.Map
@@ -244,6 +245,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		e.Log.Warn("rate limited", "user", user.ID)
 		return ErrRateLimited
 	}
+	// Paused: say so at once, and keep nothing for later.
+	if err := e.paused(ctx, ""); err != nil {
+		if host, ok := e.Chars.Host(); ok {
+			return e.send(ctx, in.ChatRef(), host, pausedReply(err))
+		}
+		return nil
+	}
 	seq := e.arrivals.Add(1)
 	w := e.waiting(in.ChatRef())
 	w.Add(1)
@@ -330,6 +338,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if !chosen && e.Settings.Bool(ctx, "auto_route") && !user.IsKid() {
 		char = e.route(ctx, user, conv, char, in.Text)
 	}
+	if err := e.paused(ctx, char.ID); err != nil {
+		return e.send(ctx, in.ChatRef(), host, pausedReply(err)) // the message isn't kept for later
+	}
 	e.active.Store(in.ChatRef(), char.ID)
 	msgID, err := e.DB.AddMessageID(ctx, conv.ID, "user", "", in.Text)
 	if err != nil {
@@ -353,6 +364,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
 	reply, err := e.runTurn(ctx, t, event)
+	if errors.Is(err, ErrPaused) {
+		err, reply = nil, pausedReply(err)
+	}
 	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
 		// Stopped: no reply, no approval prompts, no handoff.
 		e.stopAck(ctx, t, f)
