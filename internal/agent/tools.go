@@ -398,6 +398,16 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRequestSecret,
 		},
 		{
+			Name: "connect_chat_app",
+			Description: "Connect this Thicket to Discord or Telegram (so people can talk to the sprigs there), or check that it is. Thicket does it while running: the user sends the bot token in a DM, Thicket connects, stores the token encrypted and answers with the link to add the bot. Nothing goes in an env file and nothing is restarted. " +
+				"Use this, never request_secret, for a chat bot token. If the user already sent the token and it was stored under another name, pass that name as secret.",
+			Params:    `{"type":"object","properties":{"app":{"type":"string","enum":["discord","telegram"]},"secret":{"type":"string","description":"name of an already stored secret holding the bot token (optional)"}},"required":["app"]}`,
+			Scope:     "admin",
+			AdminOnly: true,
+			ChatOnly:  true,
+			Run:       e.toolConnectChatApp,
+		},
+		{
 			Name: "add_integration",
 			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
@@ -1095,6 +1105,10 @@ func (e *Engine) toolRequestSecret(ctx context.Context, t *turn, args json.RawMe
 	if !secrets.ValidName(a.Name) {
 		return "", errors.New("secret names are lowercase letters, digits and underscores")
 	}
+	if n := strings.ReplaceAll(a.Name, "_", ""); chatAppBySecret(a.Name) != nil ||
+		(strings.Contains(n, "discord") || strings.Contains(n, "telegram")) && strings.Contains(n, "token") {
+		return "", errors.New("a Discord or Telegram bot token goes through connect_chat_app, which also connects the app")
+	}
 	if !t.isDM {
 		return "", errors.New("secrets can only be collected in a DM; ask the user to DM you")
 	}
@@ -1221,8 +1235,8 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 			app = t.user.Channel
 		}
 	}
-	if e.channels[app] == nil {
-		return "", fmt.Errorf("this Thicket isn't connected to %q", app)
+	if e.channelFor(app) == nil {
+		return "", fmt.Errorf("this Thicket isn't connected to %q yet (an admin can connect it in chat: connect_chat_app)", app)
 	}
 	id := strings.Trim(a.User, "<@!> ")
 	if id == "" {

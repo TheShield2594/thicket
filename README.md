@@ -83,7 +83,10 @@ Raspberry Pi 4 or 5 (the images are built for amd64 and arm64).
 
 Prefer not to use a terminal? Skip step 2: paste `docker-compose.yml` into
 Portainer (Stacks → Add stack), deploy, and open the sign-in link from the
-container's log. Juni asks for the model key in chat instead. Tokens can
+container's log. Juni asks for the model key in chat instead, and connects
+Discord or Telegram there too: tell her "connect Discord" and send her the
+bot token. She connects it on the spot, with no restart, and gives you
+the link that adds the bot to your server. Tokens can
 also be given as `DISCORD_TOKEN` / `TELEGRAM_TOKEN` environment variables;
 they are stored encrypted on first start, and `thicket init --from-env`
 checks them first. The other variables in `docker-compose.yml` work the
@@ -294,7 +297,7 @@ by asking Juni (as the owner), and the chat value wins.
 
 | Variable | Default | |
 |---|---|---|
-| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only. Stored encrypted on first start, so you can then remove it ([details](docs/operations.md#secrets)) |
+| `DISCORD_TOKEN` | | Discord bot token; without it (and `TELEGRAM_TOKEN`) Thicket runs as a web app only. Stored encrypted on first start, so you can then remove it ([details](docs/operations.md#secrets)). Optional: an admin can send the token to Juni in a DM instead, which connects Discord while Thicket runs |
 | `TELEGRAM_TOKEN` | | Telegram bot token ([details](docs/telegram.md)); stored like `DISCORD_TOKEN` |
 | `THICKET_OWNER_DISCORD_ID` | first DM | your Discord user id |
 | `THICKET_OWNER_TELEGRAM_ID` | first DM | your numeric Telegram user id |

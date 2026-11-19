@@ -93,6 +93,17 @@ stated.
   link, chats (the web app's threads and event stream), the calendar,
   approvals, the trail, levels, and the household (invites, roles, kid
   sprigs, kid chats for parents, kid access). See docs/api-v2.md.
+- Connect Discord or Telegram from chat. An admin sends the bot token to
+  Juni in a DM (or says "connect Discord", and she explains where to get
+  one): Thicket checks it, connects while running, stores it as
+  `discord_token` or `telegram_token` and replies with the link that adds
+  the bot. No environment variable and no restart; a token that fails is
+  not kept and the working connection is put back. New `connect_chat_app`
+  tool (it also adopts a token stored earlier under another name),
+  offered as an onboarding step. `request_secret` no longer takes chat
+  bot tokens, Discord bot tokens are recognised and redacted like other
+  keys, and a refused Discord connection now says whether it was the
+  token or the Message Content intent.
 - Composio documented as an optional MCP adapter for quick connectors;
   direct MCP servers, OAuth and CalDAV remain for privacy-sensitive
   services.

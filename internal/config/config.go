@@ -164,11 +164,11 @@ func (c *Config) Check() []Problem {
 	// The web app always runs; Discord and Telegram are optional.
 	if c.DiscordToken == "" {
 		out = append(out, Problem{false, "DISCORD_TOKEN is not set, so Discord is off (unless its token is stored: see `thicket secrets list`)",
-			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and store the token with `thicket secrets set discord_token` (or set DISCORD_TOKEN)."})
+			"That's fine if you use the web app or Telegram (run `thicket web link` for a web sign-in link). For Discord, create a bot at https://discord.com/developers/applications, enable the Message Content intent, and send the token to Juni in the web app (she connects it straight away), or store it with `thicket secrets set discord_token`, or set DISCORD_TOKEN."})
 	}
 	if c.TelegramToken == "" {
 		out = append(out, Problem{false, "TELEGRAM_TOKEN is not set, so Telegram is off (unless its token is stored: see `thicket secrets list`)",
-			"For Telegram, message @BotFather, send /newbot, and store the token with `thicket secrets set telegram_token` (or set TELEGRAM_TOKEN; see docs/telegram.md)."})
+			"For Telegram, message @BotFather, send /newbot, and send the token to Juni in the web app (she connects it straight away), or store it with `thicket secrets set telegram_token`, or set TELEGRAM_TOKEN (see docs/telegram.md)."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),

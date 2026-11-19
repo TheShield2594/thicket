@@ -429,6 +429,14 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("ask_sprig", map[string]any{"to": "pip", "question": q}), nil
 	case strings.Contains(u, "have pip look into"):
 		return toolCall("delegate_task", map[string]any{"to": "pip", "task": strings.TrimPrefix(u, "have pip look into ")}), nil
+	case strings.HasPrefix(u, "connect discord"):
+		args := map[string]any{"app": "discord"}
+		if n := strings.TrimSpace(strings.TrimPrefix(u, "connect discord")); n != "" {
+			args["secret"] = n
+		}
+		return toolCall("connect_chat_app", args), nil
+	case strings.HasPrefix(u, "ask for the secret "):
+		return toolCall("request_secret", map[string]any{"name": strings.TrimPrefix(u, "ask for the secret "), "purpose": "bot token"}), nil
 	case strings.Contains(u, "link my other app"):
 		return toolCall("link_account", map[string]any{}), nil
 	case strings.HasPrefix(u, "sign job ") && strings.TrimSpace(strings.TrimPrefix(u, "sign job 1 with")) == "":

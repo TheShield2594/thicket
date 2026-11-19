@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/gorilla/websocket"
 
 	"github.com/theshield2594/thicket/internal/channel"
 )
@@ -29,6 +30,7 @@ type Adapter struct {
 
 	s         *discordgo.Session
 	connected atomic.Bool
+	me        atomic.Pointer[discordgo.User]
 
 	mu       sync.Mutex
 	hooks    map[string]*discordgo.Webhook // parent channel id -> webhook
@@ -65,6 +67,48 @@ func New(token string, listenChannels []string, log *slog.Logger) *Adapter {
 func (a *Adapter) Name() string    { return "discord" }
 func (a *Adapter) Connected() bool { return a.connected.Load() }
 
+// invitePermissions is what the bot asks for when it's added to a server:
+// view channels, send messages (also in threads), manage messages, embed
+// links, attach files, read message history and manage webhooks.
+const invitePermissions = 1<<10 | 1<<11 | 1<<13 | 1<<14 | 1<<15 | 1<<16 | 1<<29 | 1<<38
+
+// Bot is the bot account and the link that adds it to a server.
+func (a *Adapter) Bot() (channel.Bot, bool) {
+	u := a.me.Load()
+	if u == nil {
+		return channel.Bot{}, false
+	}
+	return channel.Bot{Name: u.Username,
+		URL: fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&scope=bot&permissions=%d", u.ID, int64(invitePermissions))}, true
+}
+
+// Check asks Discord whether the token is a bot's.
+func (a *Adapter) Check(ctx context.Context) error {
+	s, err := discordgo.New("Bot " + a.token)
+	if err != nil {
+		return err
+	}
+	if _, err := s.User("@me", discordgo.WithContext(ctx)); err != nil {
+		var re *discordgo.RESTError
+		if errors.As(err, &re) && re.Response != nil && re.Response.StatusCode == http.StatusUnauthorized {
+			return errors.New("Discord didn't accept that bot token (copy it again from the Bot page of your application: Reset Token)")
+		}
+		return fmt.Errorf("couldn't reach Discord: %w", err)
+	}
+	return nil
+}
+
+// openErr explains why the gateway refused the bot.
+func openErr(err error) error {
+	switch {
+	case websocket.IsCloseError(err, 4014):
+		return errors.New("Discord refused the connection because the Message Content intent is off: on https://discord.com/developers/applications open your application, Bot, Privileged Gateway Intents, turn on Message Content Intent, then try again")
+	case websocket.IsCloseError(err, 4004):
+		return errors.New("Discord didn't accept that bot token (copy it again from the Bot page of your application: Reset Token)")
+	}
+	return fmt.Errorf("%w (check the bot token and that the Message Content intent is enabled)", err)
+}
+
 func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	s, err := discordgo.New("Bot " + a.token)
 	if err != nil {
@@ -74,6 +118,7 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Connect) { a.connected.Store(true) })
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Disconnect) { a.connected.Store(false) })
 	s.AddHandler(func(_ *discordgo.Session, r *discordgo.Ready) {
+		a.me.Store(r.User)
 		a.connected.Store(true)
 		a.log.Info("discord connected", "as", r.User.Username, "guilds", len(r.Guilds))
 	})
@@ -135,7 +180,8 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		}
 	})
 	if err := s.Open(); err != nil {
-		return fmt.Errorf("%w (check DISCORD_TOKEN and that the Message Content intent is enabled)", err)
+		a.connected.Store(false)
+		return openErr(err)
 	}
 	a.s = s
 	<-ctx.Done()

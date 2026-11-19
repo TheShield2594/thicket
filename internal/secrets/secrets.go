@@ -392,7 +392,10 @@ func (r *Redactor) Add(v string) {
 var secretShapes = regexp.MustCompile(`(?i)\b(sk-or-v1-[a-z0-9]{20,}|sk-(?:ant-|proj-)?[a-z0-9_\-]{20,}|xox[abprs]-[a-z0-9\-]{10,}|gh[pousr]_[a-z0-9]{30,}|eyJ[a-z0-9_\-]{20,}\.[a-z0-9_\-]{20,}\.[a-z0-9_\-]{10,}|ntn_[a-z0-9]{30,}|secret_[a-z0-9]{30,}|thk_[a-z0-9_\-]{30,})\b` +
 	// A Telegram bot token has a fixed length and may end in "-", where a
 	// trailing \b can't match, so it gets no trailing boundary.
-	`|\b[0-9]{6,12}:aa[a-z0-9_\-]{33}`)
+	`|\b[0-9]{6,12}:aa[a-z0-9_\-]{33}` +
+	// A Discord bot token (the bot's id in base64, a timestamp, a
+	// signature), which may also end in "-".
+	`|\b[mno][a-z0-9_\-]{22,27}\.[a-z0-9_\-]{6,7}\.[a-z0-9_\-]{27,}`)
 
 // LooksLikeSecret reports whether s contains a credential-shaped token.
 func LooksLikeSecret(s string) bool { return secretShapes.MatchString(s) }

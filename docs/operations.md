@@ -209,7 +209,24 @@ thicket secrets rotate-key           # new master key, every secret re-encrypted
 
 In Docker, `set` reads from a pipe or prompts:
 `docker compose exec -T thicket thicket secrets set telegram_token < token.txt`.
-New chat tokens take effect at the next restart.
+Chat tokens set this way take effect at the next restart.
+
+### Connecting Discord or Telegram from chat
+
+An admin can connect a chat app without touching the environment: in a
+private chat with Juni (the web app counts), say "connect Discord" or
+just send the bot token. Thicket checks the token, connects while it
+runs, stores the token as `discord_token` (or `telegram_token`) and
+answers with the link that adds the bot to a server, or opens a chat
+with it on Telegram. The token never reaches the model or the message
+history. If the connection fails (a wrong token, or Discord's Message
+Content intent is off), the reason is passed on, nothing is stored, and a
+connection that was working is put back. Sending another token later
+swaps the bot. Juni offers this during onboarding too.
+
+The owner's account on the new app is a stranger to Thicket until it is
+linked: ask Juni to "link my Discord" for a one-time code to send the
+bot. Other people are let in with their user id, as before.
 
 `rotate-key` writes the new key first, re-encrypts every secret in one
 transaction, then swaps the key files (`secret.key.old` keeps the old one

@@ -209,10 +209,29 @@ type update struct {
 
 // --- receiving ---
 
+// Bot is the bot account and the link that opens a chat with it.
+func (a *Adapter) Bot() (channel.Bot, bool) {
+	if !a.connected.Load() { // the username is set before this turns true
+		return channel.Bot{}, false
+	}
+	return channel.Bot{Name: "@" + a.botUsername, URL: "https://t.me/" + a.botUsername}, true
+}
+
+// Check asks Telegram whether the token is a bot's.
+func (a *Adapter) Check(ctx context.Context) error {
+	var me user
+	err := a.call(ctx, a.http, "getMe", struct{}{}, &me)
+	var ae *apiError
+	if errors.As(err, &ae) && (ae.Code == 401 || ae.Code == 404) {
+		return errors.New("Telegram didn't accept that bot token (copy it again from @BotFather)")
+	}
+	return err
+}
+
 func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	var me user
 	if err := a.call(ctx, a.http, "getMe", struct{}{}, &me); err != nil {
-		return fmt.Errorf("%w (check TELEGRAM_TOKEN)", err)
+		return fmt.Errorf("%w (check the bot token)", err)
 	}
 	a.botID, a.botUsername = me.ID, me.Username
 	// Updates can't be polled while a webhook is set for this bot.

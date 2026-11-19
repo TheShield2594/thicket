@@ -70,6 +70,12 @@ type Engine struct {
 	// Fire starts an event-driven job now (the scheduler's Fire).
 	Fire func(store.Job) error
 
+	// ConnectChat connects a chat app ("discord", "telegram") with a bot
+	// token while Thicket runs, replacing a connection it already has. It
+	// returns once the bot is online; the app sets it.
+	ConnectChat func(ctx context.Context, app, token string) error
+
+	chanMu    sync.RWMutex
 	channels  map[string]channel.Channel
 	chatLocks sync.Map   // chatRef -> *sync.Mutex
 	active    sync.Map   // chatRef -> character id
@@ -103,16 +109,45 @@ type Engine struct {
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
+	if w, ok := c.(channel.DeleteWatcher); ok {
+		w.OnDelete(e.HandleDeleted)
+	}
+	e.chanMu.Lock()
+	defer e.chanMu.Unlock()
 	if e.channels == nil {
 		e.channels = map[string]channel.Channel{}
 	}
 	e.channels[c.Name()] = c
-	if w, ok := c.(channel.DeleteWatcher); ok {
-		w.OnDelete(e.HandleDeleted)
+}
+
+// RemoveChannel forgets a chat app, if c is still the one registered
+// under its name (a chat app connected in chat that didn't come up).
+func (e *Engine) RemoveChannel(c channel.Channel) {
+	e.chanMu.Lock()
+	defer e.chanMu.Unlock()
+	if e.channels[c.Name()] == c {
+		delete(e.channels, c.Name())
 	}
 }
 
-func (e *Engine) Channels() map[string]channel.Channel { return e.channels }
+// channelFor is the chat app registered under name, or nil. Chat apps can
+// be connected while Thicket runs, so the map is only read through here.
+func (e *Engine) channelFor(name string) channel.Channel {
+	e.chanMu.RLock()
+	defer e.chanMu.RUnlock()
+	return e.channels[name]
+}
+
+// Channels is a copy of the registered chat apps by name.
+func (e *Engine) Channels() map[string]channel.Channel {
+	e.chanMu.RLock()
+	defer e.chanMu.RUnlock()
+	out := make(map[string]channel.Channel, len(e.channels))
+	for n, c := range e.channels {
+		out[n] = c
+	}
+	return out
+}
 
 func (e *Engine) now() time.Time {
 	if e.Now != nil {
@@ -257,7 +292,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))
 	var media loaded
 	if len(in.Attachments) > 0 {
-		if ch := e.channels[in.Channel]; ch != nil {
+		if ch := e.channelFor(in.Channel); ch != nil {
 			ch.Typing(ctx, in.ChatID)
 		}
 		media = e.loadAttachments(ctx, in.Attachments)
@@ -298,7 +333,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if in.MessageID != "" {
 		_ = e.DB.AddMessageRefs(ctx, msgID, in.ChatRef(), in.MessageID)
 	}
-	if ch := e.channels[in.Channel]; ch != nil {
+	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
 	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, userMsgID: msgID}
@@ -540,7 +575,7 @@ func splitRef(ref string) (string, string) {
 // send posts text to a chat as a character.
 func (e *Engine) send(ctx context.Context, chatRef string, c *character.Character, text string) error {
 	name, id := splitRef(chatRef)
-	ch := e.channels[name]
+	ch := e.channelFor(name)
 	if ch == nil {
 		return fmt.Errorf("no channel %q", name)
 	}
@@ -551,7 +586,7 @@ func (e *Engine) send(ctx context.Context, chatRef string, c *character.Characte
 // (none if the channel can't say).
 func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Character, text string) ([]string, error) {
 	name, id := splitRef(chatRef)
-	ch := e.channels[name]
+	ch := e.channelFor(name)
 	if ch == nil {
 		return nil, fmt.Errorf("no channel %q", name)
 	}
@@ -575,7 +610,7 @@ func (e *Engine) sendNotice(ctx context.Context, u *store.User, c *character.Cha
 }
 
 func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.Character, text string, takeOver bool) error {
-	ch := e.channels[u.Channel]
+	ch := e.channelFor(u.Channel)
 	if ch == nil {
 		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
 	}
