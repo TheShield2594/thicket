@@ -13,6 +13,8 @@ import (
 // trigger output, check-ins, follow-ups) passes holdReason: inside the
 // sprig's quiet hours, or once its daily budget for that person is used
 // up, it waits. Replies to the person never pass here and never count.
+// Before that, once it's written, the worth-saying gate (worth.go) drops
+// a message with nothing new in it, or one that reruns a recent one.
 //
 // Finished output (a job's result) is held in the database, so a restart
 // doesn't lose it, and FlushHeld delivers it once nothing holds it back
@@ -59,11 +61,26 @@ func (e *Engine) sentToday(ctx context.Context, c *character.Character, u *store
 
 // sendProactive delivers a proactive message and counts it in the budget.
 func (e *Engine) sendProactive(ctx context.Context, u *store.User, c *character.Character, text string) error {
-	if err := e.sendToUser(ctx, u, c, text); err != nil {
+	return e.sendProactiveNote(ctx, u, c, text, "")
+}
+
+// sendProactiveNote is sendProactive with a note under the message. The
+// text without the note is kept for the worth-saying gate (worth.go), to
+// compare the next messages with.
+func (e *Engine) sendProactiveNote(ctx context.Context, u *store.User, c *character.Character, text, note string) error {
+	sent := text
+	if note != "" {
+		sent += "\n" + note
+	}
+	if err := e.sendToUser(ctx, u, c, sent); err != nil {
 		return err
 	}
-	if err := e.DB.RecordProactive(context.WithoutCancel(ctx), u.ID, c.ID, e.now()); err != nil {
+	ctx = context.WithoutCancel(ctx)
+	if err := e.DB.RecordProactive(ctx, u.ID, c.ID, e.now()); err != nil {
 		e.Log.Error("count proactive message", "err", err)
+	}
+	if err := e.DB.RememberSaid(ctx, u.ID, c.ID, e.Secrets.Redact(text), e.now()); err != nil {
+		e.Log.Error("keep proactive message text", "err", err)
 	}
 	return nil
 }
@@ -146,8 +163,7 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			_ = e.DB.ReleaseHeld(ctx, h.ID)
 			continue
 		}
-		text := h.Text + "\n" + heldNote(h, user)
-		if err := e.sendProactive(ctx, user, char, text); err != nil {
+		if err := e.sendProactiveNote(ctx, user, char, h.Text, heldNote(h, user)); err != nil {
 			e.Log.Error("deliver held message", "id", h.ID, "err", err)
 			// Not sent: keep it held (released for the next flush) unless the
 			// inbox takes it.

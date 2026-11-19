@@ -443,6 +443,24 @@ follow-ups aren't written until they may go out. Replies, approvals,
 safety alerts and failure reports bypass the gate and aren't counted;
 `mustReach` adds a line saying why when the gate would have held them.
 
+Before that gate, every proactive message passes the worth-saying gate
+(`internal/agent/worth.go`) once it's written: in `RunJob` for job and
+trigger output, in `proactive` for check-ins and follow-ups. `worthSaying`
+holds it back, in code, when it reruns one of the sprig's last three
+proactive messages to that person (word-set Jaccard of at least 0.7 and
+the same numbers; texts kept in `proactive_said`, the newest five per
+sprig and person, written by `sendProactive`), or when `newsFor` finds
+nothing new since the sprig last wrote (calendar items in the next 24
+hours or newly added, follow-ups due, inbox items updated, memories added
+or changed, other jobs' `ok` runs) and the message brings nothing itself
+(`proactiveDraft.news`: a due follow-up, a trigger or webhook payload, or
+outside sources the job's turn read, from its taint). Anything it can't
+read counts as news. Otherwise the cheap model judges the draft against
+what's new and the recent messages (purpose `presence`); a failed check
+sends. A held-back job run returns `empty` with the draft as its output
+and the reason in `scheduler.Result.Held`; `proactive` returns
+`errNotWorth`. Both are logged.
+
 Failures are dead-lettered into `inbox` (kinds `failed`, `interrupted`,
 `undelivered`, `draft`), keyed by `ref` (`job:ID`, `task:ID`) so repeats
 bump one open item. Delegated tasks are rows in `tasks`. At startup,

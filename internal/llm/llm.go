@@ -272,7 +272,7 @@ type Meta struct {
 	UserID    int64
 	Character string
 	JobID     int64
-	Purpose   string // chat | job | memory | consistency | preview | proactive | document | voice-check
+	Purpose   string // chat | job | memory | consistency | preview | proactive | document | voice-check | presence
 	// Origin is "heartbeat" for work Thicket starts by itself (jobs,
 	// check-ins, follow-ups, memory review) or "task" for work a person
 	// asked for. Empty means it follows from the purpose the call

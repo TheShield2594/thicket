@@ -103,6 +103,30 @@ need you. If one arrives during your quiet hours (or past the day's
 limit), it says why. The web app's sprig details and the dashboard show
 how much of today's budget is used and what's held.
 
+### Nothing new, nothing sent
+
+A sprig with nothing new to say stays quiet. Every message it starts
+itself (job and trigger results, check-ins, follow-ups) is checked once
+it's written, before it's sent or held:
+
+- **A rerun is dropped.** If it says what one of the sprig's last three
+  messages to you said (nearly the same words and exactly the same
+  times, dates and numbers), it isn't sent.
+- **Nothing new, nothing sent.** If nothing changed since the sprig last
+  wrote to you (nothing on your calendar for the next day and nothing
+  newly put on it, no follow-ups due, nothing new waiting for you, no new
+  memories, no other job results) and the message brings nothing of its
+  own (a due follow-up, a trigger's new items, something a job looked up
+  online or in an integration), it isn't sent. A morning briefing on an
+  empty day sends nothing; you never get "nothing new today".
+- **Otherwise the cheap model takes a look** (`cheap_model`) and drops
+  filler. If that check can't run, the message goes out.
+
+The first two are decided by Thicket itself, without a model. A job run
+held back is recorded as "nothing to report" with the message it would
+have sent; a held-back check-in or follow-up counts as done. The activity
+log says what was held back and why.
+
 ## Tool scopes
 
 Every sprig can always use its memory (remember, list, forget, follow-ups)

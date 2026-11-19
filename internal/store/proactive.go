@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -118,4 +119,73 @@ func (s *Store) FinishHeld(ctx context.Context, id int64) error {
 func (s *Store) ReleaseHeld(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE held_messages SET claimed_at = NULL WHERE id = ?", id)
 	return err
+}
+
+// --- what sprigs said: the worth-saying gate ---
+
+// SaidKeep is how many proactive messages are kept per sprig and person.
+const SaidKeep = 5
+
+// Said is a proactive message a sprig delivered, as it was written.
+type Said struct {
+	Text   string
+	SentAt time.Time
+}
+
+// RememberSaid keeps the text of a proactive message a sprig delivered to
+// a person at at (the caller's clock), and forgets all but the newest
+// SaidKeep of them.
+func (s *Store) RememberSaid(ctx context.Context, userID int64, character, text string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "INSERT INTO proactive_said (user_id, character, text, sent_at) VALUES (?, ?, ?, ?)",
+		userID, character, s.clean(text), at.Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM proactive_said WHERE user_id = ? AND character = ? AND id NOT IN
+		(SELECT id FROM proactive_said WHERE user_id = ? AND character = ? ORDER BY id DESC LIMIT ?)`,
+		userID, character, userID, character, SaidKeep); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecentSaid lists the newest proactive messages a sprig delivered to a
+// person, newest first, at most n.
+func (s *Store) RecentSaid(ctx context.Context, userID int64, character string, n int) ([]Said, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT text, sent_at FROM proactive_said WHERE user_id = ? AND character = ? ORDER BY id DESC LIMIT ?",
+		userID, character, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Said
+	for rows.Next() {
+		var sd Said
+		var at int64
+		if err := rows.Scan(&sd.Text, &at); err != nil {
+			return nil, err
+		}
+		sd.SentAt = time.Unix(at, 0)
+		out = append(out, sd)
+	}
+	return out, rows.Err()
+}
+
+// LastProactiveAt is when a sprig last delivered a proactive message to a
+// person, as far as Thicket still knows (zero if it never did, or only
+// before it kept texts and longer ago than the daily counts reach).
+func (s *Store) LastProactiveAt(ctx context.Context, userID int64, character string) (time.Time, error) {
+	var at sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(t) FROM (
+		SELECT MAX(sent_at) AS t FROM proactive_said WHERE user_id = ? AND character = ?
+		UNION ALL SELECT MAX(sent_at) FROM proactive_sent WHERE user_id = ? AND character = ?)`,
+		userID, character, userID, character).Scan(&at)
+	if err != nil || !at.Valid {
+		return time.Time{}, err
+	}
+	return time.Unix(at.Int64, 0), nil
 }
