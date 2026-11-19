@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"sort"
 	"strings"
@@ -168,15 +169,32 @@ func (e *Engine) AdminAddIntegration(ctx context.Context, by *store.User, name, 
 		bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		var left []string
-		e.MCP.Disconnect(name)
-		if err := e.DB.DeleteMCPServer(bg, name); err != nil {
+		// Only what this call wrote is removed. If the connector or the
+		// secret was replaced from chat while we were connecting, it is
+		// someone else's now and stays.
+		mine := false
+		servers, err := e.DB.MCPServers(bg)
+		for _, cur := range servers {
+			if cur.Name == name && cur.Transport == s.Transport && cur.Target == s.Target && maps.Equal(cur.Headers, s.Headers) {
+				mine = true
+			}
+		}
+		if err != nil {
 			e.Log.Error("undo connector", "name", name, "err", err)
 			left = append(left, "the connector "+name+" (remove it from the list)")
+		} else if mine {
+			e.MCP.Disconnect(name)
+			if err := e.DB.DeleteMCPServer(bg, name); err != nil {
+				e.Log.Error("undo connector", "name", name, "err", err)
+				left = append(left, "the connector "+name+" (remove it from the list)")
+			}
 		}
 		if secret != "" {
-			if err := e.Secrets.Delete(bg, secret); err != nil {
-				e.Log.Error("undo connector token", "secret", secret, "err", err)
-				left = append(left, "its token, the secret "+secret)
+			if cur, err := e.Secrets.Get(bg, secret); err == nil && cur == token {
+				if err := e.Secrets.Delete(bg, secret); err != nil {
+					e.Log.Error("undo connector token", "secret", secret, "err", err)
+					left = append(left, "its token, the secret "+secret)
+				}
 			}
 		}
 		if len(left) > 0 {

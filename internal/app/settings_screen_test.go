@@ -118,6 +118,27 @@ func TestSettingsScreen(t *testing.T) {
 	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 0 {
 		t.Fatalf("a cancelled request left: %+v", servers)
 	}
+	// The same name set up from chat while a Settings add is connecting:
+	// the failed add leaves the chat's connector and secret alone.
+	fromChat := store.MCPServer{Name: "both", Transport: "http", Target: "http://chat.example/mcp", Enabled: true}
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.Secrets.Put(ctx, "both_token", "from-chat-123456")
+		a.DB.PutMCPServer(ctx, fromChat)
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(busy.Close)
+	if _, err := a.Engine.AdminAddIntegration(ctx, owner, "both", busy.URL, "tok-abcdef123456"); err == nil {
+		t.Fatal("connecting to a busy server worked")
+	}
+	if v, _ := a.Secrets.Get(ctx, "both_token"); v != "from-chat-123456" {
+		t.Fatalf("the chat's secret is now %q", v)
+	}
+	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 1 || servers[0].Target != fromChat.Target {
+		t.Fatalf("the chat's connector: %+v", servers)
+	}
+	a.DB.DeleteMCPServer(ctx, "both")
+	a.Secrets.Delete(ctx, "both_token")
+
 	// Two people adding the same name at once: one wins, and the loser
 	// neither replaces nor deletes the winner's token.
 	type result struct {
