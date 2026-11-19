@@ -408,28 +408,35 @@ func parseTimeString(s string, loc *time.Location) (time.Time, bool, bool) {
 // lookup follows the first of several dotted paths (a|b.c) that exists.
 func lookup(v any, paths string) (any, bool) {
 	for _, p := range strings.Split(paths, "|") {
-		p = strings.TrimSpace(p)
-		if p == "" {
+		if p = strings.TrimSpace(p); p == "" {
 			continue
 		}
-		if obj, isObj := v.(map[string]any); isObj {
-			if cur, ok := obj[p]; ok && cur != nil { // a key with dots in it
+		if cur, ok := lookupPath(v, p); ok && cur != nil {
+			return cur, true
+		}
+	}
+	return nil, false
+}
+
+// lookupPath follows one dotted path. A key may itself contain dots
+// (Microsoft Graph's "@odata.nextLink"), at any level: the whole rest of
+// the path is tried as a key first, then each split at a dot.
+func lookupPath(v any, path string) (any, bool) {
+	obj, isObj := v.(map[string]any)
+	if !isObj {
+		return nil, false
+	}
+	if cur, ok := obj[path]; ok {
+		return cur, true
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] != '.' {
+			continue
+		}
+		if next, ok := obj[path[:i]]; ok {
+			if cur, ok := lookupPath(next, path[i+1:]); ok {
 				return cur, true
 			}
-		}
-		cur, ok := v, true
-		for _, key := range strings.Split(p, ".") {
-			obj, isObj := cur.(map[string]any)
-			if !isObj {
-				ok = false
-				break
-			}
-			if cur, ok = obj[key]; !ok {
-				break
-			}
-		}
-		if ok && cur != nil {
-			return cur, true
 		}
 	}
 	return nil, false

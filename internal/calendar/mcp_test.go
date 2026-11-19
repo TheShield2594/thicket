@@ -151,4 +151,11 @@ func TestFetchMCPPages(t *testing.T) {
 	if _, err := s.fetchMCP(context.Background(), out, from, to, time.UTC); err == nil {
 		t.Fatal("a missing page was ignored")
 	}
+	// The same link inside a wrapper object (data.@odata.nextLink).
+	s.MCP = func(ctx context.Context, integration, tool string, args json.RawMessage) (string, error) {
+		return `{"data":{"value":[],"@odata.nextLink":"https://graph.example/next"}}`, nil
+	}
+	if _, err := s.fetchMCP(context.Background(), out, from, to, time.UTC); err == nil {
+		t.Fatal("a missing page inside data was ignored")
+	}
 }
