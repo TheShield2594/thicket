@@ -146,6 +146,9 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 <div class="stat"><span class="muted small">This month</span><b>{{.Month}}</b><span class="muted small">{{.MonthlyCap}}</span></div></div>
 <h3>This month by sprig</h3><table><tr><th>Sprig</th><th>Heartbeat</th><th>Task</th><th>Total</th></tr>{{range $.Costs}}<tr><td>{{.Label}}</td><td>{{.Heartbeat}}</td><td>{{.Task}}</td><td><b>{{.Total}}</b></td></tr>{{else}}<tr><td class="muted" colspan="4">Nothing spent yet.</td></tr>{{end}}</table>
 <p class="muted small">Heartbeat: jobs, triggers, check-ins and memory review. Task: chats and work you asked for.</p>
+{{if .Caps}}<h3>Sprigs' own caps</h3><table><tr><th>Sprig</th><th>Today</th><th>Daily cap</th><th>This month</th><th>Monthly cap</th></tr>{{range .Caps}}<tr><td>{{.Label}}</td><td>{{.Today}}</td><td>{{.Daily}}</td><td{{if .Over}} class="bad"{{end}}>{{.Month}}</td><td>{{.Monthly}}</td></tr>{{end}}</table>
+<p class="muted small">Ask Juni to change one ("set Pip's monthly cap to $3"). A kid sprig's cap can only be raised by its parents. Every change is in the trail, with undo.</p>{{end}}
+{{if .Estimates}}<p class="muted small">{{.Estimates}}</p>{{end}}
 <h3>This month by model</h3><table><tr><th>Model</th><th>Calls</th><th>Cost</th></tr>{{range $.Models}}<tr><td>{{.Label}}</td><td>{{.Calls}}</td><td>{{.Total}}</td></tr>{{else}}<tr><td class="muted" colspan="3">None yet.</td></tr>{{end}}</table>
 {{if .Mix}}<h3>What chat replies re-send</h3><table>
 <tr><td>Earlier conversation</td><td class="barcell" style="width:55%">{{if .HistoryPct}}<div class="bar" style="width:{{.HistoryPct}}%"></div>{{end}}</td><td>{{.HistoryPct}}%</td></tr>

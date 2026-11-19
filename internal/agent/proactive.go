@@ -227,6 +227,7 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 			}
 			e.FollowUps(ctx)
 			e.CheckIns(ctx)
+			e.Presets(ctx) // morning briefs, event heads-ups, due reminders
 		}
 	}
 }

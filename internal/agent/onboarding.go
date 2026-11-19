@@ -29,6 +29,8 @@ type sprigDraft struct {
 	char     *character.Character
 	look     avatar.Params
 	routines []routineArg
+	// monthlyCap is its own monthly spend cap (0 = none).
+	monthlyCap float64
 }
 
 // sprigProposal is what the user approves: the files, byte for byte.
@@ -36,6 +38,8 @@ type sprigProposal struct {
 	ID       string            `json:"id"`
 	Files    map[string]string `json:"files"` // path relative to the characters dir -> content
 	Routines []routineArg      `json:"routines,omitempty"`
+	// MonthlyCapUSD is the sprig's own monthly spend cap (0 = none).
+	MonthlyCapUSD float64 `json:"monthly_cap_usd,omitempty"`
 }
 
 // voiceTestPrompts start a new sprig's voice tests; the references are
@@ -52,7 +56,7 @@ func (e *Engine) buildProposal(d *sprigDraft) (*sprigProposal, error) {
 		return nil, err
 	}
 	id := d.char.ID
-	p := &sprigProposal{ID: id, Files: map[string]string{id + ".md": string(md)}, Routines: d.routines}
+	p := &sprigProposal{ID: id, Files: map[string]string{id + ".md": string(md)}, Routines: d.routines, MonthlyCapUSD: d.monthlyCap}
 	p.Files[id+"/avatar.json"] = string(avatar.Marshal(d.look))
 	for _, vt := range voiceTestPrompts {
 		b, err := yaml.Marshal(character.VoiceTest{Prompt: vt.prompt, Notes: vt.notes})
@@ -101,6 +105,11 @@ func (p *sprigProposal) diffMessage(name string) string {
 		for _, r := range p.Routines {
 			fmt.Fprintf(&b, "- **%s** `%s`: %s\n", r.Name, r.Schedule, r.Task)
 		}
+	}
+	if p.MonthlyCapUSD > 0 {
+		fmt.Fprintf(&b, "Spending: at most **%s a month** of its own.\n", money(p.MonthlyCapUSD))
+	} else {
+		b.WriteString("Spending: no cap of its own (the household caps still apply).\n")
 	}
 	fmt.Fprintf(&b, "%s starts with every tool at **draft**: actions are written up for you, not done, until you give more trust.\nReply **approve** or **deny**.", name)
 	return b.String()
@@ -237,11 +246,26 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		jobIDs = append(jobIDs, j.ID)
 		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
 	}
+	// Its cap, as approved, is in place before it's live, and in the trail
+	// before any other cap change can land (capMu).
+	e.capMu.Lock()
+	defer e.capMu.Unlock()
+	undoCap, err := e.presetCap(ctx, c.ID, p.MonthlyCapUSD)
+	if err != nil {
+		return "", undo(err)
+	}
+	existed := e.fileExists(c.ID)
 	path, err := e.Chars.Write(ctx, c)
 	if err != nil {
+		if e.unpublish(c.ID, existed) { // it may be in place even though Write failed
+			undoCap()
+		}
 		return "", undo(fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err))
 	}
 	e.drafts.Delete(user.ID)
+	if p.MonthlyCapUSD > 0 {
+		e.trailCap(ctx, user, c, "monthly", 0, p.MonthlyCapUSD)
+	}
 	e.logActivity(ctx, "info", "character", c.ID, user.ID, fmt.Sprintf("new sprig %s sprouted", c.DisplayName()), path)
 	out := fmt.Sprintf("%s has been created (%s), with every tool at draft. They can now be addressed by name, e.g. \"%s, ...\".", c.DisplayName(), path, c.DisplayName())
 	if len(made) > 0 {

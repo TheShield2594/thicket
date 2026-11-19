@@ -5,6 +5,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,8 @@ var Known = []Key{
 	{"cheap_model", "small model for memory review and personality checks", "string"},
 	{"budget.daily_usd", "daily spend cap in USD (0 = no cap)", "float"},
 	{"budget.monthly_usd", "monthly spend cap in USD (0 = no cap)", "float"},
+	{"budget.ask_above_usd", "before something that would cost more than this (a long PDF read with OCR, a background task, a long conversation on a big model), the sprig says the estimate and asks first (0 = never ask)", "float"},
+	{"budget.kid_monthly_usd", "the monthly cap a new kid sprig starts with; only its parents can raise it (0 = no cap)", "float"},
 	{"auto_route", "when a message names no sprig, the cheap model picks who answers by role instead of the last sprig always keeping it (true/false; one small model call per such message)", "bool"},
 	{"consistency_check", "run the personality check on replies (true/false)", "bool"},
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
@@ -71,8 +74,8 @@ var choices = map[string][]string{
 }
 
 func lookup(name string) (Key, bool) {
-	if strings.HasPrefix(name, "budget.character.") && strings.HasSuffix(name, ".daily_usd") {
-		return Key{name, "per-character daily cap", "float"}, true
+	if id, period, ok := SprigCapKey(name); ok && id != "" {
+		return Key{name, "per-sprig " + period + " cap", "float"}, true
 	}
 	if strings.HasPrefix(name, "limits.sprig.") && (strings.HasSuffix(name, ".tool_calls_per_minute") || strings.HasSuffix(name, ".actions_per_hour")) ||
 		strings.HasPrefix(name, "limits.integration.") && strings.HasSuffix(name, ".calls_per_minute") {
@@ -102,6 +105,8 @@ func (s *Settings) defaults() map[string]string {
 		"cheap_model":                         s.cfg.CheapModel,
 		"budget.daily_usd":                    strconv.FormatFloat(s.cfg.DailyBudgetUSD, 'f', -1, 64),
 		"budget.monthly_usd":                  strconv.FormatFloat(s.cfg.MonthlyBudgetUSD, 'f', -1, 64),
+		"budget.ask_above_usd":                "0.25",
+		"budget.kid_monthly_usd":              "1",
 		"consistency_check":                   "true",
 		"auto_route":                          "false",
 		"checkin_days":                        "3",
@@ -167,13 +172,13 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 	if !ok {
 		return fmt.Errorf("unknown setting %q", name)
 	}
-	if strings.HasPrefix(name, "budget.character.") {
+	if id, period, ok := SprigCapKey(name); ok {
 		// The cap is read back by character id, so only a real id works.
-		id := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(name, "budget.character."), ".daily_usd"))
+		id = strings.ToLower(id)
 		if s.CharacterExists == nil || !s.CharacterExists(id) {
 			return fmt.Errorf("no sprig with id %q; use the character id (e.g. juniper), not the nickname", id)
 		}
-		name = "budget.character." + id + ".daily_usd"
+		name = SprigCap(id, period)
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -182,7 +187,7 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 	switch k.Kind {
 	case "float":
 		f, err := strconv.ParseFloat(strings.TrimPrefix(value, "$"), 64)
-		if err != nil || f < 0 {
+		if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
 			return fmt.Errorf("%s needs a non-negative number", name)
 		}
 		value = strconv.FormatFloat(f, 'f', -1, 64)
@@ -234,6 +239,24 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 	}
 	return s.db.SetSetting(ctx, name, value)
 }
+
+// SprigCapKey splits budget.character.<id>.daily_usd or .monthly_usd into
+// the sprig's id and "daily" or "monthly".
+func SprigCapKey(name string) (id, period string, ok bool) {
+	rest, found := strings.CutPrefix(name, "budget.character.")
+	if !found {
+		return "", "", false
+	}
+	for _, p := range []string{"daily", "monthly"} {
+		if id, found := strings.CutSuffix(rest, "."+p+"_usd"); found {
+			return id, p, true
+		}
+	}
+	return "", "", false
+}
+
+// SprigCap is the setting that holds one sprig's daily or monthly cap.
+func SprigCap(id, period string) string { return "budget.character." + id + "." + period + "_usd" }
 
 // Describe returns all current settings as readable lines.
 func (s *Settings) Describe(ctx context.Context) []string {

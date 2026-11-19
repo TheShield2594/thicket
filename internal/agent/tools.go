@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +18,7 @@ import (
 	"github.com/theshield2594/thicket/internal/memory"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/secrets"
+	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -37,7 +39,13 @@ type Tool struct {
 	// Exec: the tool can run commands or programs. Offered only to sprigs
 	// whose owner turned exec on (see sandboxing.go).
 	Exec bool
-	Run  func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
+	// Trailed: the tool records itself in the trail (calendar entries),
+	// so a finished call isn't recorded again (actions.go).
+	Trailed bool
+	// Remote is an integration tool's own name (Name is the model-facing
+	// mcp_<server>__<tool>).
+	Remote string
+	Run    func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
 }
 
 // Label is shown in approval prompts.
@@ -117,6 +125,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Description: fmt.Sprintf("[%s integration] %s", st.Server, desc),
 				Params:      params,
 				Scope:       "mcp:" + st.Server,
+				Remote:      st.Tool.Name,
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
 				Exec:        st.Exec,
@@ -396,19 +405,29 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name: "set_initiative",
 			Description: "Show or change when a sprig may message the user unprompted (job and trigger results, check-ins, follow-ups): quiet_hours (\"22:00-08:00\" in the user's timezone, or \"off\") and daily_messages (how many such messages per person per day, 1-50; default 3). " +
+				"Also its check-in presets: morning_brief (a time like \"07:30\", or \"off\": a short brief of today's calendar and anything due), event_reminders (minutes before each calendar event for a heads-up; 0 = off) and due_reminders (true: a reminder when something noted as due is coming up). " +
 				"Held messages go out when quiet hours end or with the next day's budget. Replies, approvals, safety alerts and failures always get through. Omit both to show the current settings. Edits the sprig's character file (never overwrites manual edits).",
-			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50}}}`,
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50},"morning_brief":{"type":"string","description":"07:30, or off"},"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"0 = off, else 10-1440"},"due_reminders":{"type":"boolean"}}}`,
 			ChatOnly: true,
 			Run:      e.toolSetInitiative,
 		},
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd and .monthly_usd (one sprig's own caps; set_sprig_cap does the same), budget.ask_above_usd (above this estimate a sprig asks before something costly), budget.kid_monthly_usd (a new kid sprig's monthly cap), consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			Run:         e.toolSettings,
+		},
+		{
+			Name: "set_sprig_cap",
+			Description: "Show or change one sprig's own spend caps, in dollars: daily_usd and monthly_usd (0 = no cap of its own; the household caps still apply). " +
+				"A kid sprig's cap can only be raised by its parents; anyone who looks after a sprig can lower it. Omit both to show its caps and spend. Every change goes in the trail and can be undone.",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name"},"daily_usd":{"type":"number","minimum":0},"monthly_usd":{"type":"number","minimum":0}},"required":["sprig"]}`,
+			Scope:    "host",
+			ChatOnly: true,
+			Run:      e.toolSetSprigCap,
 		},
 		{
 			Name:        "spend_report",
@@ -449,9 +468,11 @@ func (e *Engine) builtinTools() []*Tool {
 			Name: "add_integration",
 			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
-				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
+				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools. " +
+				"undo declares, per tool that changes something, the call that reverses it (e.g. create_item → delete_item with id {{result.id}}), so sprigs can offer \"reply undo\" after using it; tools without one are said to be not undoable. To add undo to a connected integration, call this again with the same settings plus undo.",
 			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
 				`"exec":{"type":"boolean","description":"true if it can run commands or programs (a shell, a code runner): its tools are then offered only to sprigs with exec turned on (set_sprig_access)"},` +
+				`"undo":{"type":"object","description":"per tool name: the call that reverses it","additionalProperties":{"type":"object","properties":{"tool":{"type":"string","description":"the integration's tool that reverses it"},"args":{"type":"object","additionalProperties":{"type":"string"},"description":"its arguments; may use {{args.NAME}} (the original call's) and {{result.NAME}} (a field of its JSON result) or {{result}}"},"said":{"type":"string","description":"how to say what was done, e.g. 'I added {{args.item}} to {{args.list}}'"},"label":{"type":"string","description":"what undo does, e.g. 'remove it'"}},"required":["tool"]}},` +
 				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
 			Scope:     "admin",
 			AdminOnly: true,
@@ -954,6 +975,10 @@ const draftSchema = `{"type":"object","properties":{
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
 "check_ins":{"type":"boolean"},
+"morning_brief":{"type":"string","description":"a time like 07:30 for a short brief of today's calendar and anything due, if they want one"},
+"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"minutes before each calendar event for a heads-up, 10-1440 (0 = none)"},
+"due_reminders":{"type":"boolean","description":"remind them when something they noted as due is coming up"},
+"monthly_cap_usd":{"type":"number","minimum":0,"description":"the most it may spend a month on its own, in dollars, as agreed in the interview (0 or left out = no cap of its own)"},
 "routines":{"type":"array","description":"what they do on a schedule, from the interview","items":{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string","description":"cron, 5 fields, in the user's timezone, e.g. 0 8 * * 1-5"},"task":{"type":"string"}},"required":["name","schedule","task"]}},
 "look":{"type":"object","description":"their drawn avatar; anything left out is picked for them","properties":{"body":{"type":"string","enum":["round","tall","pear","bean"]},"hat":{"type":"string","enum":["sprout","curl","clover","fern","none"]},"hat_color":{"type":"string"},"accessory":{"type":"string","enum":["none","watering-can","glasses","scarf","book","lantern"]},"expression":{"type":"string","enum":["happy","calm","curious","sleepy","determined"]}}}
 },"required":["id","name","role","traits","voice_style"]}`
@@ -975,9 +1000,13 @@ type draftArgs struct {
 	Color         string            `json:"color"`
 	Background    string            `json:"background"`
 	CheckIns      bool              `json:"check_ins"`
+	MorningBrief  string            `json:"morning_brief"`
+	EventReminder int               `json:"event_reminders"`
+	DueReminders  bool              `json:"due_reminders"`
 	Routines      []routineArg      `json:"routines"`
 	Look          avatar.Params     `json:"look"`
 	Private       bool              `json:"private"`
+	MonthlyCapUSD float64           `json:"monthly_cap_usd"`
 }
 
 type routineArg struct {
@@ -1001,9 +1030,10 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		Voice:         character.Voice{Style: a.VoiceStyle, NeverSay: a.NeverSay},
 		Relationships: character.Relationships{User: a.RelToUser, Characters: a.Relationships},
 		Tools:         a.Tools,
-		Initiative:    character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
-		CreatedBy:     t.char.ID,
-		Body:          strings.TrimSpace(a.Background),
+		Initiative: character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages,
+			MorningBrief: strings.TrimSpace(a.MorningBrief), EventReminders: a.EventReminder, DueReminders: a.DueReminders},
+		CreatedBy: t.char.ID,
+		Body:      strings.TrimSpace(a.Background),
 	}
 	if a.Private {
 		c.BelongsTo = t.user.ID
@@ -1065,7 +1095,7 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", fmt.Sprintf("Preview of new sprig %s introduced itself: %s", c.DisplayName(), intro))
 	}
-	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines})
+	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines, monthlyCap: max(a.MonthlyCapUSD, 0)})
 	return fmt.Sprintf("The preview of %s has been posted in the chat (it said: %q). Ask the user what they think and whether anything feels off. Don't repeat the intro.", c.DisplayName(), intro), nil
 }
 
@@ -1118,9 +1148,12 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 // change a sprig that is theirs alone.
 func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		Sprig         string  `json:"sprig"`
-		QuietHours    *string `json:"quiet_hours"`
-		DailyMessages *int    `json:"daily_messages"`
+		Sprig          string  `json:"sprig"`
+		QuietHours     *string `json:"quiet_hours"`
+		DailyMessages  *int    `json:"daily_messages"`
+		MorningBrief   *string `json:"morning_brief"`
+		EventReminders *int    `json:"event_reminders"`
+		DueReminders   *bool   `json:"due_reminders"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -1136,9 +1169,24 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		if c.Initiative.QuietHours != "" {
 			quiet = "quiet hours " + c.Initiative.QuietHours
 		}
-		return fmt.Sprintf("%s: %s, up to %d unprompted messages a day per person (you've had %d today).", c.DisplayName(), quiet, c.DailyBudget(), e.sentToday(ctx, c, t.user))
+		in := c.Initiative
+		var presets []string
+		if in.MorningBrief != "" {
+			presets = append(presets, "a morning brief at "+in.MorningBrief)
+		}
+		if in.EventReminders > 0 {
+			presets = append(presets, fmt.Sprintf("a heads-up %d minutes before calendar events", in.EventReminders))
+		}
+		if in.DueReminders {
+			presets = append(presets, "reminders when something noted is due")
+		}
+		pre := "no morning brief or reminders"
+		if len(presets) > 0 {
+			pre = strings.Join(presets, ", ")
+		}
+		return fmt.Sprintf("%s: %s, up to %d unprompted messages a day per person (you've had %d today); %s.", c.DisplayName(), quiet, c.DailyBudget(), e.sentToday(ctx, c, t.user), pre)
 	}
-	if a.QuietHours == nil && a.DailyMessages == nil {
+	if a.QuietHours == nil && a.DailyMessages == nil && a.MorningBrief == nil && a.EventReminders == nil && a.DueReminders == nil {
 		return describe(c), nil
 	}
 	if c.IsKid() {
@@ -1173,6 +1221,29 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		}
 		cp.Initiative.DailyMessages = *a.DailyMessages
 	}
+	if a.MorningBrief != nil {
+		v := strings.TrimSpace(*a.MorningBrief)
+		if strings.EqualFold(v, "off") || strings.EqualFold(v, "none") {
+			v = ""
+		}
+		if v != "" {
+			m, err := character.ParseClock(v)
+			if err != nil {
+				return "", err
+			}
+			v = fmt.Sprintf("%02d:%02d", m/60, m%60)
+		}
+		cp.Initiative.MorningBrief = v
+	}
+	if a.EventReminders != nil {
+		if n := *a.EventReminders; n != 0 && (n < character.MinEventReminders || n > character.MaxEventReminders) {
+			return "", fmt.Errorf("event_reminders is minutes before an event, %d-%d (0 = off)", character.MinEventReminders, character.MaxEventReminders)
+		}
+		cp.Initiative.EventReminders = *a.EventReminders
+	}
+	if a.DueReminders != nil {
+		cp.Initiative.DueReminders = *a.DueReminders
+	}
 	path, err := e.Chars.Write(ctx, &cp)
 	if errors.Is(err, character.ErrUserEdited) {
 		return fmt.Sprintf("%s's file was edited by hand, so I didn't overwrite it. My proposed version is at %s; the user can merge it.", c.DisplayName(), path), nil
@@ -1181,7 +1252,8 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		return "", err
 	}
 	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "initiative changed",
-		fmt.Sprintf("quiet_hours %q, daily_messages %d", cp.Initiative.QuietHours, cp.DailyBudget()))
+		fmt.Sprintf("quiet_hours %q, daily_messages %d, morning_brief %q, event_reminders %d, due_reminders %t",
+			cp.Initiative.QuietHours, cp.DailyBudget(), cp.Initiative.MorningBrief, cp.Initiative.EventReminders, cp.Initiative.DueReminders))
 	return "Done. " + describe(&cp), nil
 }
 
@@ -1197,6 +1269,17 @@ func (e *Engine) toolSettings(ctx context.Context, t *turn, args json.RawMessage
 	}
 	if a.Name == "" {
 		return strings.Join(e.Settings.Describe(ctx), "\n"), nil
+	}
+	if id, period, ok := settings.SprigCapKey(a.Name); ok {
+		// One sprig's cap: its own rules (a kid sprig's parents raise it)
+		// and the trail.
+		usd := 0.0
+		if v := strings.TrimPrefix(strings.TrimSpace(a.Value), "$"); v != "" {
+			if usd, err = strconv.ParseFloat(v, 64); err != nil {
+				return "", fmt.Errorf("%s needs a number of dollars", a.Name)
+			}
+		}
+		return e.SetSprigCap(ctx, t.user, id, period, usd)
 	}
 	if err := e.Settings.Set(ctx, a.Name, a.Value); err != nil {
 		return "", err
@@ -1230,6 +1313,17 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 			}
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
+	}
+	for _, c := range e.Chars.All() {
+		if c.PrivateFrom(t.user.ID) {
+			continue
+		}
+		caps, err := e.Budget.SprigCapsOf(ctx, c.ID)
+		if err != nil || caps.Daily <= 0 && caps.Monthly <= 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s's own caps: daily %s (spent %s today), monthly %s (spent %s this month)\n", c.DisplayName(),
+			capText(caps.Daily), money(caps.SpentToday), capText(caps.Monthly), money(caps.SpentMonth))
 	}
 	if mix, err := e.DB.PromptMixSince(ctx, month); err == nil {
 		if line := budget.MixLine(mix); line != "" {

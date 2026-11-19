@@ -221,7 +221,11 @@ func (e *Engine) Welcome(ctx context.Context, u *store.User, chatRef string) err
 		return nil
 	}
 	if chatRef == "" {
-		return e.sendToUser(ctx, u, char, text)
+		err = e.sendToUser(ctx, u, char, text)
+		if err == nil && u.IsKid() {
+			e.greeted(ctx, u) // this was the hello; not again on their first message
+		}
+		return err
 	}
 	conv, err := e.DB.OpenConversation(ctx, u.ID, chatRef, e.Cfg.IdleAfter)
 	if err != nil {
@@ -229,6 +233,9 @@ func (e *Engine) Welcome(ctx context.Context, u *store.User, chatRef string) err
 	}
 	if err := e.send(ctx, chatRef, char, text); err != nil {
 		return err
+	}
+	if u.IsKid() {
+		e.greeted(ctx, u)
 	}
 	e.active.Store(chatRef, char.ID)
 	return e.DB.AddMessage(ctx, conv.ID, "assistant", char.ID, text)

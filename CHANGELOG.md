@@ -4,8 +4,43 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v25)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
 
+- Sprigs speak first: check-in presets per sprig, in the character file
+  (`initiative.morning_brief`, `initiative.event_reminders`,
+  `initiative.due_reminders`) or in chat (`set_initiative`, and Juni
+  offers them for new sprigs). A morning brief at a set time with today's
+  calendar and anything due; a heads-up some minutes before each calendar
+  event, once per event; a reminder when a follow-up with a due time is
+  coming up. Written in the sprig's voice and sent like every other
+  unprompted message (quiet hours, the daily budget, the worth-saying
+  gate). Kid sprigs stay out of it.
+- People who join later get the short tour of what's already there, not
+  the owner's setup: admins who came through an invite included. Juni
+  names the family sprigs from a list Thicket gives her (never anyone's
+  private sprigs). Kids get a kid-sized hello from their kid sprig on
+  arrival or on their first message, tracked so it happens once.
+- Show your work (schema v27): every act-level action, through an
+  integration or a built-in tool like scheduling a job, goes in the trail
+  with one plain sentence written by Thicket ("I added milk to
+  groceries."), posted in the chat right after the reply with how to undo
+  it. Reply **undo** to that line, or just say "undo", and it's reversed
+  in code. Integrations declare the call that reverses each tool
+  (`undo` on `add_integration`); tools without one are said to be not
+  undoable, before the action at `ask` level and after it. A sprig with
+  `actions.quiet: true` keeps routine work to the trail. New
+  `thicket trail [list | undo ID]` and `POST /api/v1/trail/{id}/undo`.
+- Per-sprig monthly caps and estimates before costly actions (schema
+  v26). `budget.character.<id>.monthly_usd` sits beside the daily one,
+  and both show on the dashboard's Costs section and in `thicket costs`.
+  Juni asks what a new sprig may spend a month while setting it up. Kid
+  sprigs start with a low monthly cap (`budget.kid_monthly_usd`, $1) that
+  only their parents can raise; at the cap the kid hears a plain message
+  and the parents get a note. Before a long PDF with OCR, a background
+  task, a run of searches or a long conversation on a big model, Thicket
+  estimates the cost: above `budget.ask_above_usd` ($0.25) it asks first
+  with the figure, and it refuses anything that would cross a cap, saying
+  by how much. Estimates are kept next to what things really cost.
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
   `likes` and `dislikes` (what annoyed you) sit with the existing

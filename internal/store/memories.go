@@ -104,6 +104,23 @@ func (s *Store) MemoryByID(ctx context.Context, id int64) (*Memory, error) {
 }
 
 // DueFollowups returns follow-up memories whose time has come.
+// FollowupsDueBetween lists one person's follow-ups due in [from, to) that
+// a sprig may mention (its own and shared ones, never another sprig's)
+// and that haven't expired by now, soonest first, for briefs and due
+// reminders. With skipClaimed set (a notice key prefix such as "due:"),
+// ones whose notice key prefix+id was already claimed are left out before
+// the limit.
+func (s *Store) FollowupsDueBetween(ctx context.Context, userID int64, character string, from, to, now time.Time, skipClaimed string) ([]Memory, error) {
+	q := "SELECT " + memCols + ` FROM memories WHERE user_id = ? AND kind = 'followup' AND household = 0 AND (character = '' OR character = ?)
+		AND due_at IS NOT NULL AND due_at >= ? AND due_at < ? AND (expires_at IS NULL OR expires_at > ?)`
+	args := []any{userID, character, from.Unix(), to.Unix(), now.Unix()}
+	if skipClaimed != "" {
+		q += " AND NOT EXISTS (SELECT 1 FROM notices n WHERE n.key = ? || memories.id)"
+		args = append(args, skipClaimed)
+	}
+	return s.queryMemories(ctx, q+" ORDER BY due_at LIMIT 20", args...)
+}
+
 func (s *Store) DueFollowups(ctx context.Context) ([]Memory, error) {
 	now := s.unix()
 	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE kind = 'followup' AND household = 0 AND due_at IS NOT NULL AND due_at <= ?

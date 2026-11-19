@@ -426,11 +426,21 @@ type runView struct {
 	Cost              string
 }
 
+type sprigCapView struct {
+	Label, Daily, Monthly, Today, Month string
+	Over                                bool // at or past a cap
+}
+
 type spendView struct {
 	Today, Month         string
 	DailyCap, MonthlyCap string
 	BySprig              []barView
 	ByDay                []barView
+	// Caps: sprigs with caps of their own, and their spend against them.
+	Caps []sprigCapView
+	// Estimates says how cost estimates compared with what things cost
+	// this month ("" if none finished).
+	Estimates string
 	// Mix: how this month's chat spend split between earlier
 	// conversation and kept PDF text ("" if nothing was measured).
 	Mix                  string
@@ -774,6 +784,29 @@ func (d *Dashboard) spend(ctx context.Context, u *store.User) (*spendView, error
 			label = "Background (memory review, summaries)"
 		}
 		s.BySprig = append(s.BySprig, barView{Label: label, Value: money(r.CostUSD), Pct: pct(r.CostUSD, top)})
+	}
+	for _, c := range d.Chars.All() {
+		dc, mc := d.Settings.Float(ctx, settings.SprigCap(c.ID, "daily")), d.Settings.Float(ctx, settings.SprigCap(c.ID, "monthly"))
+		if dc <= 0 && mc <= 0 {
+			continue
+		}
+		st, err := d.DB.SpendSince(ctx, day, c.ID)
+		if err != nil {
+			return nil, err
+		}
+		sm, err := d.DB.SpendSince(ctx, month, c.ID)
+		if err != nil {
+			return nil, err
+		}
+		label := c.DisplayName()
+		if c.PrivateFrom(u.ID) {
+			label = d.privateLabel(ctx, c)
+		}
+		s.Caps = append(s.Caps, sprigCapView{Label: label, Daily: capOf(dc), Monthly: capOf(mc), Today: money(st), Month: money(sm),
+			Over: dc > 0 && st >= dc || mc > 0 && sm >= mc})
+	}
+	if n, est, act, err := d.DB.EstimateAccuracy(ctx, month); err == nil && n > 0 {
+		s.Estimates = budget.EstimateLine(n, est, act)
 	}
 	mix, err := d.DB.PromptMixSince(ctx, month)
 	if err != nil {

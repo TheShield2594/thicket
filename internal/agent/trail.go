@@ -7,19 +7,21 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-// Every permission change and every sprig-created event goes in the trail
-// with what undoes it. Undo is one call (UndoTrail), from the dashboard,
-// the API or `thicket trail undo`.
+// Every permission change, every sprig-created event and every act-level
+// action (actions.go) goes in the trail with what undoes it, if anything
+// does. Undo is one call (UndoTrail): from the dashboard, the API,
+// `thicket trail undo ID`, or "undo" in the chat.
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
-	Type      string   `json:"type"` // level | grant | allow | event | role
+	Type      string   `json:"type"` // level | grant | allow | event | role | cap (Tool = period, Level = the cap to restore)
 	Character string   `json:"character,omitempty"`
 	Tool      string   `json:"tool,omitempty"`
 	Level     string   `json:"level,omitempty"` // the level to restore ("" = none set)
@@ -27,6 +29,12 @@ type trailUndo struct {
 	EventID   int64    `json:"event_id,omitempty"`
 	UserID    int64    `json:"user_id,omitempty"`
 	Role      string   `json:"role,omitempty"`
+	// An integration action's undo (Type mcp): the call that reverses it.
+	Server string          `json:"server,omitempty"`
+	Args   json.RawMessage `json:"args,omitempty"`
+	// Set is what a cap change set (Type cap): undo puts the old cap back
+	// only while that's still the cap, so a newer change isn't lost.
+	Set string `json:"set,omitempty"`
 }
 
 func (e *Engine) addTrail(ctx context.Context, userID int64, char, kind, summary, detail string, undo *trailUndo) int64 {
@@ -94,8 +102,24 @@ func listOr(s []string) string {
 	return strings.Join(s, ", ")
 }
 
-// ErrAlreadyUndone means the entry was undone before (or can't be).
-var ErrAlreadyUndone = errors.New("that was already undone, or there's nothing to undo")
+// ErrAlreadyUndone means the entry was undone before.
+var ErrAlreadyUndone = errors.New("that was already undone")
+
+// ErrUndoNotAllowed means the person may not undo that entry.
+var ErrUndoNotAllowed = errors.New("that isn't yours to undo")
+
+// ErrUndoStale means what the entry changed was changed again since.
+var ErrUndoStale = errors.New("undo the newer change first")
+
+// notAllowed is a refusal that reads as written but counts as
+// ErrUndoNotAllowed (the API answers it 403).
+type notAllowed string
+
+func (n notAllowed) Error() string        { return string(n) }
+func (n notAllowed) Is(target error) bool { return target == ErrUndoNotAllowed }
+
+// ErrNotUndoable means the entry has nothing that reverses it.
+var ErrNotUndoable = errors.New("there's no undo for that")
 
 // UndoTrail reverses one trail entry. Only admins undo permission changes;
 // a person may undo events a sprig put on their own calendar.
@@ -104,15 +128,18 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	if err != nil {
 		return "", err
 	}
-	if !t.Undoable {
+	if !t.UndoneAt.IsZero() {
 		return "", ErrAlreadyUndone
+	}
+	if !t.Undoable {
+		return "", ErrNotUndoable
 	}
 	var u trailUndo
 	if err := json.Unmarshal(t.Undo, &u); err != nil {
 		return "", fmt.Errorf("unreadable undo for trail entry %d: %w", id, err)
 	}
 	if by.IsKid() {
-		return "", errors.New("kids can't undo changes")
+		return "", fmt.Errorf("%w: kids can't undo changes", ErrUndoNotAllowed)
 	}
 	parentOf := func() bool {
 		c, ok := e.Chars.Get(u.Character)
@@ -121,22 +148,48 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	switch {
 	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
-		return "", fmt.Errorf("no sprig %q", u.Character)
+		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
+	case u.Type == "cap":
+		// Through SetSprigCap's own rules: only a kid sprig's parents
+		// raise its cap, whoever undoes.
+		if e.Chars.PrivateFrom(u.Character, by.ID) {
+			return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
+		}
+	case (u.Type == "mcp" || u.Type == "job") && e.Chars.PrivateFrom(u.Character, by.ID):
+		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
+	case (u.Type == "mcp" || u.Type == "job") && t.UserID == by.ID:
+		// the person it was done for
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
 	case (u.Type == "grant" || u.Type == "allow") && parentOf():
 		// a parent undoing a change to their kid's sprig
 	default:
-		return "", errors.New("only the owner or an admin can undo permission changes")
+		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
+	}
+	if u.Type == "cap" {
+		// Only the latest change to a cap is undone: an older one would
+		// put back a value a newer change replaced (even one that set the
+		// same figure again). Checked and restored under one lock.
+		e.capMu.Lock()
+		defer e.capMu.Unlock()
+		if latest, err := e.latestCapChange(ctx, u.Character, u.Tool); err != nil {
+			return "", err
+		} else if latest != id {
+			return "", fmt.Errorf("that cap was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
+		}
 	}
 	// Claim the undo first, so two at once can't both run it.
-	if ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID); err != nil || !ok {
+	ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID)
+	if err != nil {
+		return "", fmt.Errorf("couldn't record the undo: %w", err) // a database failure, not a conflict
+	}
+	if !ok {
 		return "", ErrAlreadyUndone
 	}
 	done, err := e.undo(ctx, by, u)
 	if err != nil {
-		_ = e.DB.ClearTrailUndone(ctx, id)
+		_ = e.DB.ClearTrailUndone(context.WithoutCancel(ctx), id) // the undo didn't happen, even if the caller left
 		return "", err
 	}
 	e.addTrail(ctx, by.ID, t.Character, store.TrailUndo, fmt.Sprintf("undid #%d: %s", id, t.Summary), done, nil)
@@ -181,7 +234,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		if !by.IsAdmin() && ev.UserID != by.ID {
-			return "", errors.New("that event isn't yours to undo")
+			return "", fmt.Errorf("%w: that event isn't yours to undo", ErrUndoNotAllowed)
 		}
 		if err := e.DB.DeleteSprigEvent(ctx, u.EventID); err != nil {
 			return "", err
@@ -193,7 +246,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		if !by.IsAdmin() && !ev.RemovableBy(by) {
-			return "", errors.New("that event isn't yours to put back")
+			return "", fmt.Errorf("%w: that event isn't yours to put back", ErrUndoNotAllowed)
 		}
 		if err := e.DB.RestoreSprigEvent(ctx, u.EventID); err != nil {
 			return "", err
@@ -206,6 +259,17 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		done = fmt.Sprintf("the invite for user %d is withdrawn", u.UserID)
 	case "exec", "path":
 		return e.undoAccess(ctx, by, u)
+	case "mcp", "job":
+		return e.undoAction(ctx, by, u)
+	case "cap":
+		// Checked to be the latest change in UndoTrail, under capMu; this
+		// restore isn't a new change in the trail (the undo entry is).
+		usd, _ := strconv.ParseFloat(u.Level, 64)
+		s, err := e.setSprigCap(ctx, by, u.Character, u.Tool, usd, false)
+		if err != nil {
+			return "", err
+		}
+		done = strings.TrimSuffix(s, ".")
 	case "role":
 		if err := e.DB.SetUserRole(ctx, u.UserID, u.Role); err != nil {
 			return "", err
@@ -243,4 +307,20 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 		return err
 	}
 	return e.setLevel(ctx, by, sprig, tool, level, "set through the API")
+}
+
+// latestCapChange is the newest cap change still in force for one sprig's
+// daily or monthly cap (0 if none).
+func (e *Engine) latestCapChange(ctx context.Context, sprig, period string) (int64, error) {
+	entries, err := e.DB.TrailOfKind(ctx, store.TrailCap, sprig, 100)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range entries {
+		var u trailUndo
+		if json.Unmarshal(t.Undo, &u) == nil && u.Type == "cap" && u.Tool == period {
+			return t.ID, nil
+		}
+	}
+	return 0, nil
 }

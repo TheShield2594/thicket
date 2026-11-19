@@ -75,7 +75,10 @@ type capCheck struct {
 	name   string
 	limit  float64
 	spent  float64
-	period string
+	period string // the period's label, e.g. 2026-11 (for alert keys)
+	sprig  string // set for one sprig's own cap
+	every  string // daily | monthly
+	resets time.Time
 }
 
 func (g *Guard) checks(ctx context.Context, m llm.Meta) ([]capCheck, error) {
@@ -88,17 +91,31 @@ func (g *Guard) checks(ctx context.Context, m llm.Meta) ([]capCheck, error) {
 	if err != nil {
 		return nil, err
 	}
+	nextDay, nextMonth := dayStart(now).AddDate(0, 0, 1), monthStart(now).AddDate(0, 1, 0)
 	out := []capCheck{
-		{"daily", g.Settings.Float(ctx, "budget.daily_usd"), day, dayStart(now).Format("2006-01-02")},
-		{"monthly", g.Settings.Float(ctx, "budget.monthly_usd"), month, monthStart(now).Format("2006-01")},
+		{name: "daily", limit: g.Settings.Float(ctx, "budget.daily_usd"), spent: day, period: dayStart(now).Format("2006-01-02"), every: "daily", resets: nextDay},
+		{name: "monthly", limit: g.Settings.Float(ctx, "budget.monthly_usd"), spent: month, period: monthStart(now).Format("2006-01"), every: "monthly", resets: nextMonth},
 	}
 	if m.Character != "" {
-		if lim := g.Settings.Float(ctx, "budget.character."+m.Character+".daily_usd"); lim > 0 {
-			spent, err := g.DB.SpendSince(ctx, dayStart(now), m.Character)
+		for _, p := range []struct {
+			every  string
+			since  time.Time
+			label  string
+			resets time.Time
+		}{
+			{"daily", dayStart(now), dayStart(now).Format("2006-01-02"), nextDay},
+			{"monthly", monthStart(now), monthStart(now).Format("2006-01"), nextMonth},
+		} {
+			lim := g.Settings.Float(ctx, settings.SprigCap(m.Character, p.every))
+			if lim <= 0 {
+				continue
+			}
+			spent, err := g.DB.SpendSince(ctx, p.since, m.Character)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, capCheck{m.Character + " daily", lim, spent, dayStart(now).Format("2006-01-02")})
+			out = append(out, capCheck{name: m.Character + " " + p.every, limit: lim, spent: spent, period: p.label,
+				sprig: m.Character, every: p.every, resets: p.resets})
 		}
 	}
 	return out, nil
@@ -172,10 +189,86 @@ func (g *Guard) admit(ctx context.Context, m llm.Meta) ([]capCheck, error) {
 	for _, c := range cs {
 		if c.limit > 0 && c.spent >= c.limit {
 			g.capAlert(ctx, c, c.spent)
-			return nil, &llm.BudgetError{Reason: fmt.Sprintf("%s cap $%.2f reached", c.name, c.limit)}
+			return nil, c.err()
 		}
 	}
 	return cs, nil
+}
+
+func (c capCheck) err() *llm.BudgetError {
+	return &llm.BudgetError{Reason: fmt.Sprintf("%s cap $%.2f reached", c.name, c.limit), Sprig: c.sprig, Period: c.every, Limit: c.limit, Resets: c.resets}
+}
+
+// Headroom is how much can still be spent before the tightest cap that
+// applies to this sprig (character may be empty), and that cap's error,
+// to say which one. ok is false when no cap applies.
+func (g *Guard) Headroom(ctx context.Context, character string) (left float64, tightest *llm.BudgetError, ok bool, err error) {
+	cs, err := g.checks(ctx, llm.Meta{Character: character})
+	if err != nil {
+		return 0, nil, false, err
+	}
+	for _, c := range cs {
+		if c.limit <= 0 {
+			continue
+		}
+		if l := max(c.limit-c.spent, 0); !ok || l < left {
+			left, tightest, ok = l, c.err(), true
+		}
+	}
+	return left, tightest, ok, nil
+}
+
+// SprigCaps is one sprig's own caps and what it has spent against them.
+type SprigCaps struct {
+	Daily, Monthly         float64 // 0 = no cap
+	SpentToday, SpentMonth float64
+}
+
+// SprigCapsOf reads one sprig's caps and spend.
+func (g *Guard) SprigCapsOf(ctx context.Context, character string) (SprigCaps, error) {
+	now := g.now()
+	var s SprigCaps
+	var err error
+	s.Daily = g.Settings.Float(ctx, settings.SprigCap(character, "daily"))
+	s.Monthly = g.Settings.Float(ctx, settings.SprigCap(character, "monthly"))
+	if s.SpentToday, err = g.DB.SpendSince(ctx, dayStart(now), character); err != nil {
+		return s, err
+	}
+	s.SpentMonth, err = g.DB.SpendSince(ctx, monthStart(now), character)
+	return s, err
+}
+
+// Meter adds up what the model calls made under one context cost, so an
+// estimate can be compared with what really happened.
+type Meter struct {
+	mu  sync.Mutex
+	usd float64
+}
+
+// USD is what was spent under the meter so far.
+func (m *Meter) USD() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.usd
+}
+
+type meterKey struct{}
+
+// WithMeter returns a context whose paid calls are added to the meter.
+// Meters nest: a call counts towards every meter around it.
+func WithMeter(ctx context.Context) (context.Context, *Meter) {
+	m := &Meter{}
+	parents, _ := ctx.Value(meterKey{}).([]*Meter)
+	return context.WithValue(ctx, meterKey{}, append(append([]*Meter(nil), parents...), m)), m
+}
+
+func addToMeters(ctx context.Context, usd float64) {
+	ms, _ := ctx.Value(meterKey{}).([]*Meter)
+	for _, m := range ms {
+		m.mu.Lock()
+		m.usd += usd
+		m.mu.Unlock()
+	}
 }
 
 // Speak makes a spoken reply, under the same caps as model calls. The
@@ -232,6 +325,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 // record stores a paid call's usage and raises the 80% and 100% alerts it
 // crossed.
 func (g *Guard) record(ctx context.Context, cs []capCheck, u store.Usage) {
+	addToMeters(ctx, u.CostUSD)
 	// The call is paid for even if the caller has gone away: record it
 	// regardless of cancellation, and keep it for retry if the write fails.
 	if rerr := g.DB.RecordUsage(context.WithoutCancel(ctx), u); rerr != nil {
@@ -282,6 +376,19 @@ func (g *Guard) savingTip(ctx context.Context) string {
 		tip += fmt.Sprintf(" About %.0f%% went on PDF text kept for follow-up questions; lowering document_chars (now %d) keeps less of each PDF.", 100*d, g.Settings.Int(ctx, "document_chars"))
 	}
 	return tip
+}
+
+// EstimateLine says how cost estimates compared with what things cost.
+func EstimateLine(n int, estimated, actual float64) string {
+	things := fmt.Sprintf("%d costly actions", n)
+	if n == 1 {
+		things = "1 costly action"
+	}
+	line := fmt.Sprintf("Cost estimates: %s were estimated at $%.2f and cost $%.2f", things, estimated, actual)
+	if estimated > 0 {
+		line += fmt.Sprintf(" (%.0f%% of the estimate)", 100*actual/estimated)
+	}
+	return line + "."
 }
 
 // MixLine describes how chat spend split between earlier conversation

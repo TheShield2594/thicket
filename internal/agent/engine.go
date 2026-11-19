@@ -112,9 +112,12 @@ type Engine struct {
 	// rememberAsks: user id -> rememberAsk ("just for you, or for the
 	// family?" waiting for an answer)
 	rememberAsks sync.Map
-	linkMu       sync.Mutex
-	links        map[string]linkCode    // code -> pending link
-	linkFails    map[string][]time.Time // channel:user -> failed attempts
+	// costAsks: chatRef -> *costAsk (a costly turn waiting for "go ahead")
+	costAsks  sync.Map
+	capMu     sync.Mutex // a sprig cap change, or the check and restore of its undo
+	linkMu    sync.Mutex
+	links     map[string]linkCode    // code -> pending link
+	linkFails map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -299,7 +302,10 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleSecrets(ctx, in, user, host); handled || err != nil {
 		return err
 	}
-	// 2. Answers to a pending approval.
+	// 2. "Go ahead" after a cost question, then answers to a pending approval.
+	if handled, err := e.answerCostAsk(ctx, in, user); handled || err != nil {
+		return err
+	}
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
@@ -349,13 +355,29 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, packages: media.packages, userMsgID: msgID,
-		spokenTo: media.spoken}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages,
+		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken}
 	if user.IsKid() {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
 	}
-	return e.respond(ctx, t, "")
+	if err := e.respond(ctx, t, ""); err != nil {
+		return err
+	}
+	if user.IsKid() && user.OnboardedAt.IsZero() && t.replied {
+		e.greeted(ctx, user) // their kid sprig said its first hello
+	}
+	return nil
+}
+
+// greeted records that a kid's sprig has said its first hello, so it
+// happens once (the kid's onboarded_at, as for adults' tours).
+func (e *Engine) greeted(ctx context.Context, u *store.User) {
+	if err := e.DB.MarkOnboarded(context.WithoutCancel(ctx), u.ID); err != nil {
+		e.Log.Warn("mark a kid greeted", "user", u.ID, "err", err)
+		return
+	}
+	u.OnboardedAt = e.now()
 }
 
 // replySprig is the sprig that answers this message, before any
@@ -382,12 +404,33 @@ func (e *Engine) replySprig(in channel.Incoming, user *store.User, addressed *ch
 func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	ctx = llm.WithMeta(ctx, llm.Meta{UserID: t.user.ID, Character: t.char.ID, Purpose: "chat"})
 	reply, err := e.runTurn(ctx, t, event)
-	if errors.Is(err, ErrPaused) {
+	paused := errors.Is(err, ErrPaused)
+	if paused {
 		err, reply = nil, pausedReply(err)
 	}
+	var hold *costHold
+	if errors.As(err, &hold) {
+		// Said in code, and nothing else happens (no PDF is read, nothing
+		// summarised) until the person agrees.
+		ids, err := e.sendIDs(ctx, t.chatRef, t.char, hold.msg)
+		if err == nil && t.conv != nil {
+			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, hold.msg); err == nil {
+				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
+			}
+		}
+		return err
+	}
 	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
-		// Stopped: no reply, no approval prompts, no handoff.
+		// Stopped: no reply, no approval prompts, no handoff. What was
+		// already done is still said, so it can be undone.
 		e.stopAck(ctx, t, f)
+		for _, p := range t.afterReply {
+			if p.trailID != 0 {
+				if err := e.postAction(context.WithoutCancel(ctx), t, t.char, p); err != nil {
+					e.Log.Error("say what was done", "err", err)
+				}
+			}
+		}
 		return nil
 	}
 	if err != nil {
@@ -397,7 +440,9 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	if reply != "" {
 		var ids []string
 		var msgID int64
-		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
+		ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply)
+		t.replied = sendErr == nil && err == nil && !paused // a real reply, not a failure or pause notice
+		if sendErr == nil && t.conv != nil {
 			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
 				msgID = id
 				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
@@ -420,9 +465,12 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		if p.as != nil {
 			who = p.as
 		}
-		if p.approval != nil {
+		switch {
+		case p.approval != nil:
 			err = e.deliverApproval(ctx, who, p.approval, p.text)
-		} else {
+		case p.trailID != 0:
+			err = e.postAction(ctx, t, who, p)
+		default:
 			err = e.send(ctx, t.chatRef, who, p.text)
 		}
 		if err != nil {
@@ -476,9 +524,12 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 func (e *Engine) failureReply(ctx context.Context, t *turn, err error) string {
 	e.Log.Error("turn failed", "character", t.char.ID, "err", err)
 	e.logActivity(ctx, "error", "model", t.char.ID, t.user.ID, "reply failed", err.Error())
+	var be *llm.BudgetError
 	switch {
-	case llm.IsBudget(err):
-		return "I've hit the spending cap, so I'm going quiet to save your wallet. You can raise it by telling me a new daily or monthly cap."
+	case errors.As(err, &be) && t.user.IsKid():
+		return e.kidCapReply(ctx, t, be)
+	case errors.As(err, &be):
+		return budgetReply(t, be)
 	case errors.Is(err, llm.ErrNoKey):
 		return "I can't reach my brain right now: there's no model API key set up. DM me your OpenRouter key and I'll be back."
 	case llm.Fatal(err):
@@ -722,4 +773,21 @@ func quoteJoin(names []string) string {
 		q[i] = "“" + n + "”"
 	}
 	return strings.Join(q, ", ")
+}
+
+// postAction posts the line saying what a sprig did, keeping its ids so
+// "undo" in reply finds the trail entry.
+func (e *Engine) postAction(ctx context.Context, t *turn, who *character.Character, p post) error {
+	ids, err := e.sendIDs(ctx, t.chatRef, who, p.text)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		ids = []string{fmt.Sprintf("trail-%d", p.trailID)}
+	}
+	_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, ids...)
+	if t.conv != nil {
+		_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", who.ID, p.text)
+	}
+	return nil
 }

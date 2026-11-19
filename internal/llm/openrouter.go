@@ -259,7 +259,15 @@ func IsBudget(err error) bool {
 }
 
 // BudgetError is returned when a spend cap would be exceeded.
-type BudgetError struct{ Reason string }
+type BudgetError struct {
+	Reason string
+	// Sprig is set when the cap that was hit is one sprig's own; Period
+	// is "daily" or "monthly", Limit the cap and Resets when it resets.
+	Sprig  string
+	Period string
+	Limit  float64
+	Resets time.Time
+}
 
 func (e *BudgetError) Error() string { return "spend cap reached: " + e.Reason }
 

@@ -325,6 +325,13 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 			return m.hang(ctx)
 		}
 	}
+	// Check-in presets: echo what the sprig was asked to say, so each
+	// message is different (and the test can see what it was given).
+	for _, tag := range []string{"[Morning brief]", "[Event heads-up]", "[Due reminder]"} {
+		if strings.Contains(last.Content, tag) && strings.HasPrefix(sys, "You are ") {
+			return text("Said: " + strings.TrimPrefix(last.Content, "[Thicket event] ")), nil
+		}
+	}
 	switch {
 	case strings.Contains(sys, "You check whether a chat reply"):
 		return text(`{"in_character": true}`), nil
@@ -410,6 +417,14 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("create_trigger", map[string]any{"name": "Bad", "task": "x", "integration": "ha", "tool": "turn_on", "owner": "hal"}), nil
 	case strings.Contains(u, "on your computer"):
 		return toolCall("mcp_sandbox__run_command", map[string]any{"command": "echo built > out.txt && cat out.txt"}), nil
+	case u == "add the hidden item":
+		// The model puts a secret in a call by itself (it's in the tool's
+		// arguments, never in what the user typed).
+		return toolCall("mcp_todo__add_item", map[string]any{"item": "tok<en-secret-9876", "list": "groceries"}), nil
+	case strings.HasPrefix(u, "add ") && strings.Contains(u, " to "):
+		// "add ITEM to LIST": the to-do integration.
+		item, list, _ := strings.Cut(strings.TrimPrefix(u, "add "), " to ")
+		return toolCall("mcp_todo__add_item", map[string]any{"item": item, "list": list}), nil
 	case strings.Contains(u, "turn on the light"):
 		return toolCall("mcp_ha__turn_on", map[string]any{"entity": "light.kitchen"}), nil
 	case strings.Contains(u, "check the light"):

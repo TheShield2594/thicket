@@ -24,6 +24,8 @@ import (
 //     conversation; a sprig's message is deleted from the chat too.
 //   - "delete that" (not a reply) deletes the sprig's last message from
 //     the chat and the conversation.
+//   - "undo" (as a reply to the line saying what a sprig did, or alone
+//     for the newest one) reverses that action (actions.go).
 //   - Deleting a message in Discord or the web app removes it from the
 //     conversation as well (Telegram doesn't tell bots about deletions).
 //
@@ -64,6 +66,15 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 			return true, err
 		}
 		return true, e.confirmRemember(ctx, in.ChatRef(), user, who, ack, memID)
+	}
+	// "undo": what a sprig just did (actions.go).
+	if undoRe.MatchString(text) {
+		if ack, handled, err := e.undoCommand(ctx, in, user); handled || err != nil {
+			if err != nil || who == nil {
+				return true, err
+			}
+			return true, e.send(ctx, in.ChatRef(), who, ack)
+		}
 	}
 	if reply && forgetMsgRe.MatchString(text) {
 		if ack, handled, err := e.forgetRemembered(ctx, in, user); handled || err != nil {

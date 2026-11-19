@@ -164,6 +164,24 @@ func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
 	return v, err == nil, err
 }
 
+// SettingNames lists the stored settings whose names start with prefix.
+func (s *Store) SettingNames(ctx context.Context, prefix string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key FROM settings WHERE substr(key, 1, ?) = ? ORDER BY key", len(prefix), prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, s.unix())
@@ -255,12 +273,36 @@ type MCPServer struct {
 	// Exec marks a server that can run commands or programs: its tools
 	// are offered only to sprigs with exec turned on.
 	Exec bool `json:"exec,omitempty"`
+	// Undo declares, per tool, the call that reverses it. A tool with no
+	// entry is recorded in the trail as not undoable.
+	Undo map[string]InverseCall `json:"undo,omitempty"`
+}
+
+// InverseCall is the call that undoes one of an integration's tools.
+// Values in Args and Said may use {{args.NAME}} (what the tool was called
+// with) and {{result.NAME}} (a field of its JSON result, or {{result}} for
+// the whole text).
+type InverseCall struct {
+	Tool string            `json:"tool"`
+	Args map[string]string `json:"args,omitempty"`
+	// Said is how Thicket says what was done ("I added {{args.item}} to
+	// {{args.list}}"); Label what undo does ("remove it").
+	Said  string `json:"said,omitempty"`
+	Label string `json:"label,omitempty"`
 }
 
 func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	args, _ := json.Marshal(nonNilSlice(m.Args))
 	env, _ := json.Marshal(nonNilMap(m.Env))
 	hdr, _ := json.Marshal(nonNilMap(m.Headers))
+	// No Undo map keeps what's stored (re-adding an integration doesn't
+	// forget how to undo its tools); an empty one clears it. One
+	// statement, so it's saved whole or not at all.
+	keep := m.Undo == nil
+	undo, _ := json.Marshal(m.Undo)
+	if keep {
+		undo = []byte("{}")
+	}
 	en, ex := 0, 0
 	if m.Enabled {
 		en = 1
@@ -268,15 +310,16 @@ func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	if m.Exec {
 		ex = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, undo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET transport = excluded.transport, target = excluded.target, args = excluded.args,
-		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec`,
-		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, s.unix())
+		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec,
+		undo = CASE WHEN ? THEN mcp_servers.undo ELSE excluded.undo END`,
+		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, string(undo), s.unix(), keep)
 	return err
 }
 
 func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled, exec FROM mcp_servers ORDER BY name")
+	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled, exec, undo FROM mcp_servers ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -284,14 +327,15 @@ func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
 	var out []MCPServer
 	for rows.Next() {
 		var m MCPServer
-		var args, env, hdr string
+		var args, env, hdr, undo string
 		var en, ex int
-		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en, &ex); err != nil {
+		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en, &ex, &undo); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(args), &m.Args)
 		_ = json.Unmarshal([]byte(env), &m.Env)
 		_ = json.Unmarshal([]byte(hdr), &m.Headers)
+		_ = json.Unmarshal([]byte(undo), &m.Undo)
 		m.Enabled = en == 1
 		m.Exec = ex == 1
 		out = append(out, m)
@@ -330,11 +374,13 @@ type Approval struct {
 	Status    string
 	Result    string
 	CreatedAt time.Time
+	// EstimateID is the cost estimate the person was asked with (0: none).
+	EstimateID int64
 }
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix())
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID)
 	if err != nil {
 		return 0, err
 	}
@@ -351,9 +397,9 @@ func (s *Store) LatestPendingApproval(ctx context.Context, userID int64, chatRef
 	}
 	var a Approval
 	var at int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at FROM approvals
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals
 		WHERE user_id = ? AND chat_ref = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`, userID, chatRef).
-		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at)
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

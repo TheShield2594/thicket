@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -33,6 +34,8 @@ type turn struct {
 	// the model with it, this turn only.
 	images []llm.Image
 	pdfs   []llm.File
+	// pdfPages counts each PDF's pages, for the cost estimate.
+	pdfPages []int
 	// packages are sprig packages sent with the newest message.
 	packages map[string][]byte
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
@@ -57,6 +60,24 @@ type turn struct {
 	// spokenTo: the message this answers was a voice message (it was
 	// transcribed), so a sprig that speaks when spoken to answers aloud.
 	spokenTo bool
+	// replied: respond posted a real reply (not a failure notice, a
+	// pause or a cost question).
+	replied bool
+
+	// Costs (costs.go): costOK once the person agreed to this turn's
+	// estimate; estimateID is the recorded estimate this turn's spend is
+	// measured against; toolUSD adds up the tool estimates so far;
+	// toolEstimate is the estimate for the tool call running now;
+	// promptChars is the size of the turn's prompt.
+	costOK       bool
+	estimateID   int64
+	toolUSD      float64
+	toolEstimate int64
+	promptChars  int
+	// askEstimate is the estimate an approval being requested carries;
+	// approvedEstimate the one the approval being run was asked with.
+	askEstimate      int64
+	approvedEstimate int64
 
 	// Taint (taint.go): the outside sources that entered this turn, and
 	// the person's own words for it.
@@ -69,6 +90,7 @@ type turn struct {
 
 type post struct {
 	text     string
+	trailID  int64                // the trail entry it says (its ids are kept for "undo")
 	approval *store.Approval      // registered only once the prompt is delivered
 	as       *character.Character // who posts it (default: the turn's sprig)
 }
@@ -87,6 +109,12 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 	defer e.mark(t.char.ID, false)()
 	msgs, err := e.buildMessages(ctx, t, event)
 	if err != nil {
+		return "", err
+	}
+	t.promptChars = llm.PromptChars(msgs)
+	ctx, measured := e.meterTurn(ctx, t)
+	defer measured()
+	if err := e.checkTurnCost(ctx, t, msgs, t.char.Model); err != nil {
 		return "", err
 	}
 	tools := e.toolsFor(ctx, t)
@@ -152,6 +180,14 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 		}
 		if err != nil {
 			return "", err
+		}
+		if i == 0 && t.taskFrom == nil {
+			// A reply's or a scheduled job's estimate is for its first model
+			// call (with any PDFs): compared with that call alone, not with
+			// the tools it then ran, which are estimated on their own. A
+			// background task's estimate is for the whole task, so it's
+			// measured whole.
+			measured()
 		}
 		m := resp.Message
 		if len(m.Annotations) > 0 {
@@ -379,8 +415,19 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if msg := e.rateLimited(ctx, t, tool, true); msg != "" {
 		return msg
 	}
+	t.toolEstimate = 0
+	if msg, ok := e.costGate(ctx, t, tool, args); !ok {
+		return msg
+	}
 	done := e.mark(t.char.ID, true)
-	out, err := tool.Run(ctx, t, args)
+	runCtx, finish := ctx, func() {}
+	if id := t.toolEstimate; id != 0 && tool.Name != "delegate_task" { // a background task is measured where it runs
+		var m *budget.Meter
+		runCtx, m = budget.WithMeter(ctx)
+		finish = func() { _ = e.DB.FinishEstimate(context.WithoutCancel(ctx), id, m.USD()) }
+	}
+	out, err := tool.Run(runCtx, t, args)
+	finish()
 	done()
 	level, summary := "info", "called "+name
 	if err != nil {
@@ -389,6 +436,7 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	} else {
 		t.done = append(t.done, tool.Label())
 	}
+	raw := out // what the undo is built from (actions.go); never shown as is
 	detail := e.Secrets.Redact(truncate(string(args), 500) + " → " + truncate(out, 500))
 	if e.privateDraft(t, name, args) {
 		detail = "(a private sprig's draft: not logged)" // admins read the activity log
@@ -396,6 +444,9 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, detail)
 	// Tool output goes back to the model: no secret values in it.
 	out = e.Secrets.Redact(out)
+	if err == nil {
+		e.recordAction(ctx, t, tool, args, raw)
+	}
 	if tool.Untrusted {
 		t.addTaint(tool.Label())
 		return wrapUntrusted(name, out)
@@ -446,6 +497,12 @@ func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a 
 }
 
 func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
+	return e.requestApprovalNote(ctx, t, tool, args, "")
+}
+
+// requestApprovalNote is requestApproval with a line under the details
+// (what it will cost, or that it can't be undone).
+func (e *Engine) requestApprovalNote(ctx context.Context, t *turn, tool *Tool, args json.RawMessage, note string) string {
 	chatRef := t.chatRef
 	if chatRef == "" {
 		// Jobs have no chat: ask in DMs.
@@ -456,8 +513,12 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		chatRef = ref
 	}
 	pretty := prettyArgs(args)
-	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
-	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
+	if note != "" {
+		note += "\n"
+	}
+	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\n%sReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500), note)
+	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args), EstimateID: t.askEstimate}
+	t.askEstimate = 0
 	if t.chatRef != "" {
 		// Posted after the reply; registered by respond once delivered.
 		t.afterReply = append(t.afterReply, post{text: msg, approval: a})

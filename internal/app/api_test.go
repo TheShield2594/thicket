@@ -216,3 +216,28 @@ func apiCallRaw(t *testing.T, srv *httptest.Server, token, method, path string, 
 	json.NewDecoder(resp.Body).Decode(out)
 	return resp.StatusCode
 }
+
+// Undo through the API answers by cause: 404 missing, 409 nothing to undo
+// or already undone, 200 when it worked.
+func TestAPIUndoStatusCodes(t *testing.T) {
+	a, _, _, ctx, srv, token := setupAPI(t)
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	if r := apiCall(t, srv, token, "POST", "/api/v1/trail/99999/undo", nil); r.Code != 404 {
+		t.Fatalf("missing entry: %d", r.Code)
+	}
+	plain, _ := a.DB.AddTrailID(ctx, store.TrailEntry{UserID: owner.ID, Kind: store.TrailAction, Summary: "I sent an email."})
+	if r := apiCall(t, srv, token, "POST", "/api/v1/trail/"+itoa(plain)+"/undo", nil); r.Code != 409 {
+		t.Fatalf("nothing to undo: %d", r.Code)
+	}
+	if _, err := a.Engine.SetSprigCap(ctx, owner, "juniper", "monthly", 3); err != nil {
+		t.Fatal(err)
+	}
+	trail, _ := a.DB.Trail(ctx, 0, 1)
+	path := "/api/v1/trail/" + itoa(trail[0].ID) + "/undo"
+	if r := apiCall(t, srv, token, "POST", path, nil); r.Code != 200 {
+		t.Fatalf("undo: %d", r.Code)
+	}
+	if r := apiCall(t, srv, token, "POST", path, nil); r.Code != 409 {
+		t.Fatalf("undone twice: %d", r.Code)
+	}
+}
