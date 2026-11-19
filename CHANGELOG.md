@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v23)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v24)
 
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
@@ -22,7 +22,7 @@ stated.
   one; deleting forgets for good. Parents see and change what a kid
   sprig they set up remembers about its kids. API v2 has the same:
   `GET/POST /api/v2/memories`, `PATCH`/`DELETE /api/v2/memories/{id}`,
-  `PUT …/lock`, `POST …/undo`. Migration 0025 records where each memory
+  `PUT …/lock`, `POST …/undo`. Migration 0024 records where each memory
   came from and who changed it.
 - "Remember this": reply to any message with **remember this** (or say
   "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
