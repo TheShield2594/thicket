@@ -59,6 +59,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/chats/{chat}/messages", a.bearer(a.post))
 	mux.HandleFunc("DELETE /api/v2/chats/{chat}/messages/{id}", a.bearer(a.deleteMessage))
 	mux.HandleFunc("POST /api/v2/chats/{chat}/messages/{id}/pin", a.bearer(a.pinMessage))
+	mux.HandleFunc("GET /api/v2/chats/{chat}/messages/{id}/audio", a.bearer(a.audio))
+	mux.HandleFunc("PUT /api/v2/sprigs/{id}/voice", a.bearer(a.setVoice))
 	mux.HandleFunc("GET /api/v2/events", a.bearer(a.events))
 	// Calendar.
 	mux.HandleFunc("GET /api/v2/calendar", a.bearer(a.v2Calendar))

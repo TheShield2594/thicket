@@ -28,6 +28,32 @@ type fakeAPI struct {
 	allowed []any
 	// rejectHTML makes sendMessage refuse parse_mode HTML once.
 	rejectHTML bool
+	// noVoice refuses sendVoice, as for a user who blocks voice messages.
+	noVoice bool
+}
+
+// multipartParams reads an upload's fields, and its file as "<field>"
+// (the bytes), "<field>.name" and "<field>.type".
+func multipartParams(t *testing.T, r *http.Request) map[string]any {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		t.Errorf("bad multipart upload: %v", err)
+		return map[string]any{}
+	}
+	p := map[string]any{}
+	for k, v := range r.MultipartForm.Value {
+		p[k] = v[0]
+	}
+	for k, fs := range r.MultipartForm.File {
+		f, err := fs[0].Open()
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		b, _ := io.ReadAll(f)
+		f.Close()
+		p[k], p[k+".name"], p[k+".type"] = string(b), fs[0].Filename, fs[0].Header.Get("Content-Type")
+	}
+	return p
 }
 
 func (f *fakeAPI) handler(t *testing.T) http.Handler {
@@ -44,7 +70,11 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			return
 		}
 		var p map[string]any
-		json.NewDecoder(r.Body).Decode(&p)
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			p = multipartParams(t, r)
+		} else {
+			json.NewDecoder(r.Body).Decode(&p)
+		}
 		ok := func(v any) { b, _ := json.Marshal(map[string]any{"ok": true, "result": v}); w.Write(b) }
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -69,6 +99,14 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			}
 			f.sent = append(f.sent, p)
 			ok(map[string]any{"message_id": 1})
+		case "sendVoice", "sendAudio":
+			if f.noVoice && method == "sendVoice" {
+				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: VOICE_MESSAGES_FORBIDDEN"}`))
+				return
+			}
+			p["method"] = method
+			f.sent = append(f.sent, p)
+			ok(map[string]any{"message_id": 2})
 		case "getFile":
 			if p["file_id"] == "big" {
 				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: file is too big"}`))

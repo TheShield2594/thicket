@@ -49,6 +49,10 @@ var Known = []Key{
 	{"limits.tool_calls_per_minute", "most tool calls one sprig makes in a minute (0 = no limit); limits.sprig.<id>.tool_calls_per_minute sets one sprig's", "int"},
 	{"limits.actions_per_hour", "most actions one sprig takes in an hour without asking (tools that change something, at act level; 0 = no limit); limits.sprig.<id>.actions_per_hour sets one sprig's", "int"},
 	{"limits.integration_calls_per_minute", "most calls to one integration in a minute, from all sprigs together (0 = no limit); limits.integration.<name>.calls_per_minute sets one integration's", "int"},
+	{"speech_url", "where spoken replies are made: empty = the model server (model_url), or a local OpenAI-compatible speech server such as http://192.168.1.20:8880/v1 (Kokoro)", "url"},
+	{"speech_model", "model that reads replies aloud (an OpenRouter speech model id, or the local speech server's model, e.g. kokoro)", "string"},
+	{"speech_voice", "voice sprigs speak in when their character file names none (e.g. alloy, or af_heart on Kokoro)", "string"},
+	{"speech_usd_per_1k_chars", "what OpenRouter speech costs per 1,000 characters read aloud, for the spend caps (a local speech server costs nothing)", "float"},
 }
 
 // cronParser reads backup_schedule the way job schedules are read.
@@ -115,6 +119,11 @@ func (s *Settings) defaults() map[string]string {
 		"backup_dir":                          "",
 		"backup_schedule":                     "0 3 * * *",
 		"backup_keep":                         "7",
+		"speech_url":                          "",
+		"speech_model":                        "openai/gpt-4o-mini-tts",
+		"speech_voice":                        "alloy",
+		// gpt-4o-mini-tts is about $0.015 a minute, ~1,000 characters.
+		"speech_usd_per_1k_chars": "0.015",
 	}
 }
 

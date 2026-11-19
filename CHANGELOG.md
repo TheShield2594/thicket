@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v24)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v25)
 
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
@@ -24,6 +24,20 @@ stated.
   `GET/POST /api/v2/memories`, `PATCH`/`DELETE /api/v2/memories/{id}`,
   `PUT …/lock`, `POST …/undo`. Migration 0024 records where each memory
   came from and who changed it.
+- Spoken replies (schema v25): send a sprig a voice message and it
+  answers with one, after the text, in its own voice: a voice note on
+  Telegram, an audio file on Discord, a player in the web app. The
+  character file's `voice.speaks` says when (`never`, `when_spoken_to`,
+  the default, or `always`) and `voice.sounds_like` which voice. Each
+  person picks per sprig: **full** (the whole reply read aloud),
+  **brief** (a short spoken version, the full text alongside) or **off**,
+  by saying "voice brief" / "voice full" / "voice off", or in the web
+  app's sprig details (`PUT /api/v2/sprigs/{id}/voice`). Speech comes
+  from an OpenAI-compatible `/audio/speech` endpoint: OpenRouter by
+  default, or a local speech server such as Kokoro beside Ollama
+  (`speech_url`, `speech_model`, `speech_voice`), and counts against the
+  spend caps (`speech_usd_per_1k_chars` for OpenRouter; local is free).
+  Kid sprigs speak only when a parent allows `voice`.
 - "Remember this": reply to any message with **remember this** (or say
   "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
   or tap the new brain button in the web app, and it becomes a locked

@@ -54,6 +54,9 @@ type turn struct {
 	taskFrom        *character.Character // background task given by this sprig
 	afterReply      []post               // canned posts after the reply (approval prompts)
 	noTools         bool
+	// spokenTo: the message this answers was a voice message (it was
+	// transcribed), so a sprig that speaks when spoken to answers aloud.
+	spokenTo bool
 
 	// Taint (taint.go): the outside sources that entered this turn, and
 	// the person's own words for it.

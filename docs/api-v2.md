@@ -32,9 +32,13 @@ thread, `<user id>.all` for the room where sprigs are named.
 | `POST /api/v2/chats/{chat}/messages` | `{"text": "…"}`, or a multipart form with `text` and `file` parts (images, PDFs, voice messages) |
 | `DELETE /api/v2/chats/{chat}/messages/{id}` | delete (not in kids' chats) |
 | `POST /api/v2/chats/{chat}/messages/{id}/pin` | `{"pinned": true}` |
-| `GET /api/v2/events` | server-sent events: new messages, typing, deletions |
+| `GET /api/v2/chats/{chat}/messages/{id}/audio` | a spoken reply's audio, for messages with `"audio": true` |
+| `PUT /api/v2/sprigs/{id}/voice` | `{"mode": "brief" \| "full" \| "off"}`: how this sprig speaks to you |
+| `GET /api/v2/events` | server-sent events: new messages, typing, deletions, `audio` (a spoken reply was added to message `id`) |
 
-Replies arrive on the event stream (or poll the history).
+Replies arrive on the event stream (or poll the history). Each sprig in
+`/me` has `speaks` (`never`, `when_spoken_to`, `always`) and `voice_mode`
+(`brief`, `full`, `off`).
 
 ## Approvals and the trail
 

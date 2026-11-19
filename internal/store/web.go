@@ -131,6 +131,9 @@ type WebMessage struct {
 	CreatedAt time.Time `json:"at"`
 	// Pinned: the conversation message this is a copy of is pinned.
 	Pinned bool `json:"pinned,omitempty"`
+	// Audio: the message has a spoken version to play, served at
+	// .../messages/{id}/audio.
+	Audio bool `json:"audio,omitempty"`
 }
 
 func (s *Store) AddWebMessage(ctx context.Context, userID int64, m WebMessage) (WebMessage, error) {
@@ -160,9 +163,12 @@ func (s *Store) DeleteWebMessage(ctx context.Context, chatID string, id int64) (
 const webPinned = `COALESCE((SELECT m.pinned FROM message_refs r JOIN messages m ON m.id = r.message_id
 	WHERE r.chat_ref = 'web:' || w.chat_id AND r.platform_id = CAST(w.id AS TEXT)), 0)`
 
+// webHasAudio is whether web message w has a spoken version to play.
+const webHasAudio = `EXISTS (SELECT 1 FROM web_audio a WHERE a.message_id = w.id)`
+
 // WebMessageByID returns one message of a web chat.
 func (s *Store) WebMessageByID(ctx context.Context, chatID string, id int64) (*WebMessage, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+` FROM web_messages w
+	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+`, `+webHasAudio+` FROM web_messages w
 		WHERE chat_id = ? AND id = ?`, chatID, id)
 	if err != nil {
 		return nil, err
@@ -183,7 +189,7 @@ func scanWebMessages(rows *sql.Rows) ([]WebMessage, error) {
 	for rows.Next() {
 		var m WebMessage
 		var at int64
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.Role, &m.Character, &m.Name, &m.Content, &at, &m.Pinned); err != nil {
+		if err := rows.Scan(&m.ID, &m.ChatID, &m.Role, &m.Character, &m.Name, &m.Content, &at, &m.Pinned, &m.Audio); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = time.Unix(at, 0)
@@ -198,7 +204,7 @@ func (s *Store) WebMessages(ctx context.Context, chatID string, beforeID int64, 
 	if beforeID <= 0 {
 		beforeID = 1<<62 - 1
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+` FROM
+	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+`, `+webHasAudio+` FROM
 		(SELECT * FROM web_messages WHERE chat_id = ? AND id < ? ORDER BY id DESC LIMIT ?) w ORDER BY id`, chatID, beforeID, limit)
 	if err != nil {
 		return nil, err
@@ -208,7 +214,7 @@ func (s *Store) WebMessages(ctx context.Context, chatID string, beforeID int64, 
 
 // LatestWebMessages returns the newest message in each of the user's chats.
 func (s *Store) LatestWebMessages(ctx context.Context, userID int64) ([]WebMessage, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+` FROM web_messages w
+	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, role, character, name, content, created_at, `+webPinned+`, `+webHasAudio+` FROM web_messages w
 		WHERE id IN (SELECT MAX(id) FROM web_messages WHERE user_id = ? GROUP BY chat_id)`, userID)
 	if err != nil {
 		return nil, err

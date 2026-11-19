@@ -46,7 +46,7 @@ const (
 
 // Event is pushed to a signed-in browser over the event stream.
 type Event struct {
-	Type    string            `json:"type"` // message | typing | deleted | sprigs
+	Type    string            `json:"type"` // message | typing | deleted | sprigs | audio
 	Chat    string            `json:"chat,omitempty"`
 	Message *store.WebMessage `json:"message,omitempty"`
 	ID      int64             `json:"id,omitempty"`
@@ -347,6 +347,8 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
 	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
 	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/remember", a.auth(a.rememberMessage))
+	mux.HandleFunc("GET /api/chats/{chat}/messages/{id}/audio", a.auth(a.audio))
+	mux.HandleFunc("PUT /api/sprigs/{id}/voice", a.auth(a.setVoice))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
 	// The calendar and kid chats screens (same handlers as API v2).
 	mux.HandleFunc("GET /api/calendar", a.auth(a.v2Calendar))
@@ -508,6 +510,11 @@ type sprigView struct {
 	// DailyMessages is the sprig's daily budget of unprompted messages per
 	// person (0 for kid sprigs, which send none).
 	DailyMessages int `json:"daily_messages,omitempty"`
+	// Speaks is when the sprig answers out loud (never, when_spoken_to,
+	// always); VoiceMode is how it speaks to this person (brief, full,
+	// off).
+	Speaks    string `json:"speaks"`
+	VoiceMode string `json:"voice_mode"`
 }
 
 func (a *Adapter) avatarURL(c *character.Character) string {
@@ -546,10 +553,11 @@ func (a *Adapter) sprigViews(ctx context.Context, u *store.User) []sprigView {
 	for _, c := range a.Chars.For(u) { // shared sprigs and their own
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), FullName: c.Name, Role: c.Role, Color: c.Color, Avatar: a.avatarURL(c),
 			Host: c.Host, Traits: c.Personality.Traits, Abilities: abilities(c), Memories: counts[c.ID],
-			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours}
+			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours, Speaks: speaks(c)}
 		if !c.IsKid() {
 			v.DailyMessages = c.DailyBudget()
 		}
+		v.VoiceMode, _ = a.DB.SpeechMode(ctx, u.ID, c.ID)
 		if v.Color == "" {
 			v.Color = "#7c8cff"
 		}

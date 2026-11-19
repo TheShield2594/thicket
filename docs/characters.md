@@ -73,6 +73,8 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `personality.catchphrases` | | Used sparingly, not in every message. |
 | `voice.style` | yes | Rules for how they talk. |
 | `voice.never_say` | | Phrases they never say. Checked in code before every reply; a reply that uses one is rewritten. |
+| `voice.speaks` | | When they answer out loud: `never`, `when_spoken_to` (the default: a voice message gets a voice message back) or `always`. See [Speaking out loud](#speaking-out-loud). |
+| `voice.sounds_like` | | The speech voice they speak in, as the speech server names it (`nova`, `af_heart`). Empty: the `speech_voice` setting. |
 | `relationships.user` | | How they see you. |
 | `relationships.characters` | | How they see other sprigs, keyed by id. |
 | `tools` | | Tool scopes, below. |
@@ -86,9 +88,48 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `household` | | The sprig's tier: `solo` (one person's: needs `belongs_to`), `family` (shared by every adult; the default without `belongs_to`) or `kid`. See [Households](household.md). |
 | `kids` | kid sprigs | User ids of the kids it talks to. |
 | `parents` | kid sprigs | User ids of the adults who set it up: they read its chats, get its safety alerts and choose what it may use. |
-| `allow` | | Kid sprigs only: adult data a parent lets it see, `family_memory` and/or `calendar`. Nothing by default. |
+| `allow` | | Kid sprigs only: adult data a parent lets it see, `family_memory` and/or `calendar`, and `voice` to let it answer out loud. Nothing by default. |
 
 Unknown fields are an error, so typos don't silently do nothing.
+
+### Speaking out loud
+
+Send a sprig a voice message (a Telegram voice note, a Discord audio
+file, or the web app's recorder) and, by default, it answers with one:
+the text reply first, then the same reply read aloud in its voice.
+Telegram gets a voice note, Discord an audio attachment, and the web app
+a player under the reply. `voice.speaks: always` has it answer out loud
+every time; `never` keeps it to text. Scheduled jobs, check-ins and
+notices are never spoken.
+
+```yaml
+voice:
+  style:
+    - Brisk, cheerful, short sentences.
+  speaks: when_spoken_to
+  sounds_like: nova
+```
+
+Each person chooses how each sprig talks back to them: **full** reads the
+whole reply (the default), **brief** says a short version and sends the
+full text alongside, **off** is text only. Say "voice brief", "voice
+full" or "voice off" to the sprig (or "voice" to hear how it's set), or
+use the Voice buttons in its details in the web app. Code, links and
+formatting aren't read out, and very long replies are cut at about 4,000
+characters with "the rest is in the message".
+
+Speech is made by an OpenAI-compatible speech endpoint
+(`POST /v1/audio/speech`): by default the model server (`model_url`,
+OpenRouter), or a local speech server such as Kokoro-FastAPI beside
+Ollama, set with `speech_url`. `speech_model` and `speech_voice` choose
+the model and the default voice. Spoken replies count against the spend
+caps like any model call: OpenRouter speech is priced at
+`speech_usd_per_1k_chars` (default $0.015 per 1,000 characters), and a
+local speech server is free. If speech fails, the text has already gone
+out, and admins are told once a day.
+
+Kid sprigs speak only once a parent allows it (`allow: [voice]`, or the
+Voice box on the web app's kid screen).
 
 ### Quiet hours and the daily budget
 
