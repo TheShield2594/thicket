@@ -196,7 +196,7 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "couldn't make a token")
 		return
 	}
-	id, err := a.DB.CreateAPIToken(ctx, uid, "app: "+truncateName(device), hash)
+	id, err := a.DB.CreateAPIToken(ctx, uid, store.AppTokenPrefix+truncateName(device), hash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return

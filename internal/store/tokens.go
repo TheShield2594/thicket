@@ -71,3 +71,19 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// AppTokenPrefix starts the name of a token the apps get at sign-in
+// (POST /api/v2/auth/login), as opposed to one made with the CLI.
+const AppTokenPrefix = "app: "
+
+// RevokeAppTokens deletes a user's app sign-in tokens except the one
+// with hash keep (if given), returning how many were deleted. Tokens made
+// with the CLI (for scripts and MCP) are left alone.
+func (s *Store) RevokeAppTokens(ctx context.Context, userID int64, keep string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM api_tokens WHERE user_id = ? AND substr(name, 1, ?) = ? AND hash != ?",
+		userID, len(AppTokenPrefix), AppTokenPrefix, keep)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

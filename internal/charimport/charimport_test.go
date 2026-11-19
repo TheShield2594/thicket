@@ -337,3 +337,25 @@ func TestSlug(t *testing.T) {
 		}
 	}
 }
+
+// An avatar that's a symlink out of the workspace isn't copied (it
+// would be served publicly as the sprig's picture).
+func TestOpenClawAvatarSymlinkOutside(t *testing.T) {
+	home := t.TempDir()
+	ws := filepath.Join(home, "workspace")
+	writeFile(t, ws, "IDENTITY.md", "- **Name:** Clawdia\n- **Avatar:** avatars/me.png\n")
+	writeFile(t, home, "secret.png", "-----BEGIN OPENSSH PRIVATE KEY-----")
+	if err := os.MkdirAll(filepath.Join(ws, "avatars"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "secret.png"), filepath.Join(ws, "avatars", "me.png")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	d, err := Load(ws, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Avatar != nil || !strings.Contains(strings.Join(d.Notes, "\n"), "links outside the workspace") {
+		t.Fatalf("avatar %q, notes %v", d.Avatar, d.Notes)
+	}
+}

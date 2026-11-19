@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/api"
 	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -249,6 +250,14 @@ func (a *Adapter) changePassword(w http.ResponseWriter, r *http.Request, u *stor
 		keep = c.Value
 	}
 	ended, _ := a.DB.RevokeUserSessions(ctx, u.ID, keep)
+	// The apps' sign-in tokens end too (an app changing the password
+	// keeps its own), so a stolen password's token doesn't outlive it.
+	keepToken := ""
+	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		keepToken = api.HashToken(strings.TrimSpace(tok))
+	}
+	apps, _ := a.DB.RevokeAppTokens(ctx, u.ID, keepToken)
+	ended += apps
 	_ = a.DB.LogActivity(ctx, store.Activity{Level: "info", Kind: "system", UserID: u.ID, Summary: "changed their web app password"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": username, "signed_out": ended})
 }

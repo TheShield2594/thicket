@@ -164,6 +164,16 @@ func (d *Draft) openClawAvatar(dir, avatar string) error {
 		d.Notes = append(d.Notes, "the avatar "+avatar+" isn't an image inside the workspace, so it was left out")
 		return nil
 	}
+	// The name is inside the workspace; the file must be too, so a
+	// symlink can't publish ~/.ssh/id_ed25519 as an avatar.
+	real, err := filepath.EvalSymlinks(filepath.Join(dir, rel))
+	if err == nil {
+		root, rerr := filepath.EvalSymlinks(dir)
+		if r, _ := filepath.Rel(root, real); rerr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) || filepath.IsAbs(r) {
+			d.Notes = append(d.Notes, "the avatar "+avatar+" links outside the workspace, so it was left out")
+			return nil
+		}
+	}
 	b, err := readLimited(filepath.Join(dir, rel))
 	if errors.Is(err, os.ErrNotExist) {
 		d.Notes = append(d.Notes, "the avatar file "+avatar+" wasn't found")

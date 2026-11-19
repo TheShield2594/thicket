@@ -59,7 +59,7 @@ func TestLocalModelOnboarding(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
-	if h := a.health(ctx); !h["model_key"].OK || !strings.Contains(h["model_key"].Detail, srv.URL) {
+	if h := a.health(ctx); !h["model_key"].OK || h["model_key"].Detail != "local model server" {
 		t.Fatalf("health: %+v", h["model_key"])
 	}
 
