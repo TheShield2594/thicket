@@ -146,6 +146,9 @@ func buildSystemPrompt(in promptInput) string {
 		if in.user.OwnSprig {
 			b.WriteString(newcomerOwnSprig)
 		}
+		if !in.isDM {
+			b.WriteString("This is a group channel: say hello, then suggest continuing in a DM. Never interview them for a sprig of their own here.\n")
+		}
 		if in.user.Timezone != "" {
 			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): only ask if it seems wrong for them.\n")
 		}

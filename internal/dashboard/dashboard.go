@@ -519,6 +519,9 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		if n, ok := names[id]; ok {
 			return n
 		}
+		if id != "" {
+			return removedSprig // its file is gone: it may have been someone's private sprig
+		}
 		return id
 	}
 
@@ -662,6 +665,9 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	return p, nil
 }
 
+// removedSprig labels a sprig id that no longer loads.
+const removedSprig = "a removed sprig"
+
 // privateLabel names someone's solo sprig without saying anything about
 // it: "Kim's private sprig".
 func (d *Dashboard) privateLabel(ctx context.Context, c *character.Character) string {
@@ -765,7 +771,9 @@ func (d *Dashboard) spend(ctx context.Context, u *store.User) (*spendView, error
 			if c.PrivateFrom(u.ID) {
 				label = d.privateLabel(ctx, c)
 			}
-		} else if label == "" {
+		} else if label != "" {
+			label = removedSprig
+		} else {
 			label = "Background (memory review, summaries)"
 		}
 		s.BySprig = append(s.BySprig, barView{Label: label, Value: money(r.CostUSD), Pct: pct(r.CostUSD, top)})

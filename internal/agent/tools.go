@@ -930,6 +930,9 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	if err != nil {
 		return "", err
 	}
+	if a.Private && !t.isDM {
+		return "A private sprig is previewed in a DM, never in a group channel: ask them to continue in a DM (or the web app) and preview it there.", nil
+	}
 	c := &character.Character{
 		ID: strings.ToLower(strings.TrimSpace(a.ID)), Name: strings.TrimSpace(a.Name), Nickname: strings.TrimSpace(a.Nickname),
 		Role: a.Role, Avatar: a.Avatar, Color: a.Color,
@@ -1159,8 +1162,11 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 		name := r.Key
 		if name == "" {
 			name = "(background: memory review)"
-		} else if c, ok := e.Chars.Get(r.Key); ok && c.PrivateFrom(t.user.ID) {
-			name = e.privateLabel(ctx, c)
+		} else if e.Chars.PrivateFrom(r.Key, t.user.ID) {
+			name = "a removed sprig"
+			if c, ok := e.Chars.Get(r.Key); ok {
+				name = e.privateLabel(ctx, c)
+			}
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
 	}
@@ -1294,9 +1300,7 @@ func (e *Engine) toolListIntegrations(ctx context.Context, t *turn, _ json.RawMe
 		for _, c := range e.Chars.All() {
 			for _, sc := range c.Tools {
 				if strings.HasPrefix(sc, "mcp:"+s.Name) {
-					if c.PrivateFrom(t.user.ID) {
-						who = append(who, "a private sprig")
-					} else {
+					if !c.PrivateFrom(t.user.ID) { // someone else's private sprig isn't listed at all
 						who = append(who, c.DisplayName())
 					}
 					break

@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -137,11 +139,16 @@ func TestAddPartnersPrivateSprig(t *testing.T) {
 	noSecrets("owner's dashboard", body)
 	req, _ := http.NewRequest("GET", srv.URL+"/dashboard/state.json", nil)
 	req.AddCookie(&http.Cookie{Name: "thicket_session", Value: session})
-	if res, err := http.DefaultClient.Do(req); err == nil {
-		b, _ := io.ReadAll(res.Body)
-		res.Body.Close()
-		noSecrets("state.json", string(b))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
+	b, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("state.json: %d %v", res.StatusCode, err)
+	}
+	noSecrets("state.json", string(b))
 	// Robin's own dashboard does show it.
 	rs, _ := a.DB.CreateWebSession(ctx, robin.ID, "test", web.SessionTTL)
 	if _, rbody := getDashboard(t, srv, rs); !strings.Contains(rbody, "Wren") {
@@ -198,7 +205,30 @@ func TestAddPartnersPrivateSprig(t *testing.T) {
 		t.Fatal("expected a trail entry for Wren to hide")
 	}
 
-	// 6. Nor can the owner change it from chat.
+	// 6. If Wren's file goes away, its history stays hidden.
+	if err := os.Remove(filepath.Join(a.Cfg.CharactersDir, "wren.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	_, body = getDashboard(t, srv, session)
+	noSecrets("owner's dashboard after Wren's file was removed", body)
+
+	// 7. A private sprig is never previewed in a group channel.
+	group := partnerDM("robin", "bring on my own wren")
+	group.ChatID, group.IsDM, group.Mentioned = "group-1", false, true
+	a.Engine.HandleIncoming(ctx, group)
+	for _, s := range fc.take() {
+		if strings.Contains(s.text, "secret reading list") || strings.Contains(s.persona, "preview") {
+			t.Fatalf("a private preview reached the group: %+v", s)
+		}
+	}
+	if res := lastToolResult(fm); !strings.Contains(res, "previewed in a DM") {
+		t.Fatalf("group preview: %q", res)
+	}
+
+	// 8. Nor can the owner change it from chat.
 	if err := a.Engine.SetToolLevel(ctx, owner, "wren", "web", store.LevelAct); err == nil {
 		t.Error("the owner changed a level on Robin's private sprig")
 	}

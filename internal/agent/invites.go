@@ -11,6 +11,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -212,7 +213,7 @@ func (e *Engine) Welcome(ctx context.Context, u *store.User, chatRef string) err
 		event = "[Thicket event] A kid you're set up for just arrived. Say a short, friendly, kid-sized hello and ask what they'd like to do. Nothing about grown-up features."
 	}
 	t := &turn{user: u, char: char, query: event, noTools: true, isDM: true}
-	text, err := e.runTurn(ctx, t, event)
+	text, err := e.runTurn(llm.WithMeta(ctx, llm.Meta{UserID: u.ID, Character: char.ID, Purpose: "chat"}), t, event)
 	if err != nil {
 		return err
 	}
