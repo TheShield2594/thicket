@@ -348,9 +348,14 @@ func (a *Adapter) incoming(m *message) (channel.Incoming, bool) {
 	}
 	mentioned := m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.ID == a.botID
 	text, mentioned = a.stripMentions(text, ents, mentioned)
-	// /start opens every new chat with a bot: treat it as a hello.
-	if cmd, _, _ := strings.Cut(strings.TrimSpace(text), " "); strings.EqualFold(cmd, "/start") {
+	// /start opens every new chat with a bot: treat it as a hello, unless
+	// it came from an invite link (t.me/bot?start=join-...): then it's the
+	// invite code.
+	if cmd, arg, _ := strings.Cut(strings.TrimSpace(text), " "); strings.EqualFold(cmd, "/start") {
 		text = "Hello!"
+		if arg = strings.TrimSpace(arg); len(arg) > 5 && strings.EqualFold(arg[:5], "join-") {
+			text = arg
+		}
 		mentioned = true
 	}
 	atts := a.attachments(m)

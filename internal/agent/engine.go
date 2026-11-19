@@ -200,6 +200,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if in.IsDM && in.UserRef == 0 && linkCodeRe.MatchString(in.Text) {
 		return e.redeemLinkCode(ctx, in)
 	}
+	if in.IsDM && in.UserRef == 0 && joinCodeRe.MatchString(in.Text) {
+		return e.redeemJoinCode(ctx, in)
+	}
 	user, err := e.resolveUser(ctx, in)
 	if err != nil || user == nil {
 		return err

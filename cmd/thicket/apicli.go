@@ -269,6 +269,13 @@ func jobsCmd() error {
 			Enabled  bool   `json:"enabled"`
 			LastRun  string `json:"last_run"`
 		} `json:"jobs"`
+		Tasks []struct {
+			ID        int64  `json:"id"`
+			Sprig     string `json:"sprig"`
+			Task      string `json:"task"`
+			Status    string `json:"status"`
+			StartedAt string `json:"started_at"`
+		} `json:"tasks"`
 	}
 	if err := c.do(http.MethodGet, "/api/v1/jobs", nil, &resp); err != nil {
 		return err
@@ -290,6 +297,20 @@ func jobsCmd() error {
 			last = "never run"
 		}
 		fmt.Printf("%4d  %-24s %-14s by %-10s last: %s%s\n", j.ID, j.Name, when, j.Sprig, last, state)
+	}
+	if len(resp.Tasks) > 0 {
+		fmt.Println("\nbackground tasks (newest first):")
+	}
+	for _, t := range resp.Tasks {
+		task := t.Task
+		if r := []rune(task); len(r) > 48 {
+			task = string(r[:47]) + "…"
+		}
+		started := t.StartedAt
+		if ts, err := time.Parse(time.RFC3339, t.StartedAt); err == nil {
+			started = ts.Local().Format("Jan 2 15:04")
+		}
+		fmt.Printf("%4d  %-11s %-10s %s  %s\n", t.ID, t.Status, t.Sprig, started, task)
 	}
 	return nil
 }

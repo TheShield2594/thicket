@@ -120,7 +120,10 @@ func (e *Engine) toolSetLevel(ctx context.Context, t *turn, args json.RawMessage
 	}
 	who, label := store.AllSprigs, "every sprig"
 	if s := strings.TrimSpace(a.Sprig); s != "" && s != store.AllSprigs {
-		c, err := e.findSprig(nil, s) // admins set levels on any sprig
+		c, err := e.findSprig(nil, s) // admins set levels on any sprig but someone else's private one
+		if err == nil && c.PrivateFrom(t.user.ID) {
+			err = fmt.Errorf("there's no sprig called %q", s)
+		}
 		if err != nil {
 			return "", err
 		}

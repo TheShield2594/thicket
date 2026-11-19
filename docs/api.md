@@ -92,7 +92,11 @@ command line: `thicket stop [--conversation NAME]`. Pressing Ctrl-C during
 ### `GET /api/v1/jobs`
 
 The token's jobs: `id`, `name`, `kind` (`cron` or `webhook`), `schedule`,
-`sprig`, `enabled` and the status of the `last_run`.
+`sprig`, `enabled` and the status of the `last_run`. Also `tasks`: the ten
+most recent background tasks (`delegate_task`), each with `id`, `sprig`
+(who did it), `from` (who gave it), `task`, `status` (`running`, `ok`,
+`empty`, `error`, `stopped` or `interrupted`), `error`, `started_at` and
+`finished_at`. `thicket jobs` lists them after the jobs.
 
 ### `POST /api/v1/jobs/{id}/run`
 

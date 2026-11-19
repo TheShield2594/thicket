@@ -84,6 +84,9 @@ type Adapter struct {
 	Calendar     *calendar.Service
 	MakeKidSprig KidSprigMaker
 	BaseURL      string
+	// Joined is called when someone new accepts an invite: the engine's
+	// WebJoined, which greets them in the background.
+	Joined func(ctx context.Context, u *store.User)
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration

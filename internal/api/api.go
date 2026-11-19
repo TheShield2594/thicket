@@ -307,7 +307,32 @@ func (a *API) getJobs(w http.ResponseWriter, r *http.Request, c caller) {
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
+	tasks, err := a.DB.UserTasks(r.Context(), c.user.ID, 10)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "couldn't list tasks")
+		return
+	}
+	tv := []taskView{}
+	for _, t := range tasks {
+		v := taskView{ID: t.ID, Sprig: t.Character, From: t.From, Task: t.Prompt, Status: t.Status, Error: t.Error, StartedAt: t.StartedAt.UTC().Format(time.RFC3339)}
+		if !t.FinishedAt.IsZero() {
+			v.FinishedAt = t.FinishedAt.UTC().Format(time.RFC3339)
+		}
+		tv = append(tv, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": out, "tasks": tv})
+}
+
+// taskView is a background task one sprig gave another (delegate_task).
+type taskView struct {
+	ID         int64  `json:"id"`
+	Sprig      string `json:"sprig"`
+	From       string `json:"from"`
+	Task       string `json:"task"`
+	Status     string `json:"status"` // running | ok | empty | error | stopped | interrupted
+	Error      string `json:"error,omitempty"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
 }
 
 func (a *API) runJob(w http.ResponseWriter, r *http.Request, c caller) {

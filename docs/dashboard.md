@@ -15,13 +15,20 @@ read-mostly: the only things you can do here are answer what needs you.
   The sprig reports back in the chat the request came from.
 - **Trail**: what sprigs did, newest first: tools used, approvals,
   drafts, handoffs between sprigs, jobs.
-- What they remember about you, your jobs and their recent runs, and the
-  skill library.
+- What they remember about you, your jobs and their recent runs, your
+  recent background tasks (work one sprig gave another, with how it
+  ended: done, nothing found, failed, stopped, or interrupted by a
+  restart), and the skill library.
 
 Owners and admins also see **costs** (today and this month against the
 caps; this month per sprig split into heartbeat and task, and per model;
 the last 14 days) and **health**, and the trail of everyone's sprigs.
 Everyone else sees only their own memories, jobs, inbox and trail.
+
+Someone else's solo sprig is private, admins included: the roster shows
+it as "Kim's private sprig" with only its state and whether it has
+logged errors in the last day, and Costs show what it spends under that
+label. Its name, role, tools, activity and changes never appear.
 
 ## Signing in
 

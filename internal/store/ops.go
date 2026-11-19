@@ -46,6 +46,14 @@ func (s *Store) UserActivity(ctx context.Context, userID int64, limit int) ([]Ac
 		WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
 }
 
+// CharacterErrorsSince counts a sprig's logged errors since a time: how
+// healthy it is, without saying what went wrong.
+func (s *Store) CharacterErrorsSince(ctx context.Context, character string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity WHERE character = ? AND level = 'error' AND at >= ?", character, since.Unix()).Scan(&n)
+	return n, err
+}
+
 func (s *Store) activity(ctx context.Context, q string, args ...any) ([]Activity, error) {
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

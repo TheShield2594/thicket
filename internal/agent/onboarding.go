@@ -131,7 +131,13 @@ func (e *Engine) toolCreateCharacter(ctx context.Context, t *turn, args json.Raw
 	b, _ := json.Marshal(p)
 	ap := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: t.chatRef, Tool: internalPrefix + "create_sprig", Args: string(b)}
 	t.askAs(t.char, p.diffMessage(d.char.DisplayName()), ap)
-	e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed new sprig "+d.char.DisplayName(), "")
+	if d.char.BelongsTo != 0 {
+		// A private sprig: the activity log (which admins read) says only
+		// that one was proposed.
+		e.logActivity(ctx, "info", "character", "", t.user.ID, "proposed a new private sprig", "")
+	} else {
+		e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed new sprig "+d.char.DisplayName(), "")
+	}
 	return fmt.Sprintf("PENDING: the user is being shown every file %s will get, as a diff, and asked to approve. Tell them briefly to look it over; don't say it's created.", d.char.DisplayName()), nil
 }
 

@@ -463,6 +463,15 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolInvite,
 		},
 		{
+			Name:        "invite_person",
+			Description: "Make a one-time invite link for someone joining this household (a partner, a housemate, a kid), for the app they'll chat on: web (the web app; always works), telegram or discord. Thicket posts the link right after your reply for the user to send them; you never see it. own_sprig=true (adults only) means you'll help them make their own private sprig as soon as they arrive, e.g. for \"add my wife's sprig\". Use invite_user instead when you already have their Discord or Telegram user id.",
+			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"what they're called"},"app":{"type":"string","enum":["web","telegram","discord"]},"role":{"type":"string","enum":["member","admin","kid"],"description":"default member (an adult)"},"own_sprig":{"type":"boolean"}},"required":["name","app"]}`,
+			Scope:       "admin",
+			AdminOnly:   true,
+			ChatOnly:    true,
+			Run:         e.toolInvitePerson,
+		},
+		{
 			Name:        "link_account",
 			Description: "When the user wants to talk to Thicket from another chat app too (Discord or Telegram) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
 			Params:      `{"type":"object","properties":{}}`,
@@ -742,11 +751,15 @@ func (e *Engine) toolListJobs(ctx context.Context, t *turn, _ json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-	if len(jobs) == 0 {
+	tasks, _ := e.DB.UserTasks(ctx, t.user.ID, 5)
+	if len(jobs) == 0 && len(tasks) == 0 {
 		return "No scheduled jobs.", nil
 	}
 	loc := t.user.Location()
 	var b strings.Builder
+	if len(jobs) == 0 {
+		b.WriteString("No scheduled jobs.\n")
+	}
 	for _, j := range jobs {
 		state := "active"
 		if !j.Enabled {
@@ -771,6 +784,13 @@ func (e *Engine) toolListJobs(ctx context.Context, t *turn, _ json.RawMessage) (
 			}
 		}
 		fmt.Fprintf(&b, "#%d %q by %s, %s (%s), %s%s\n", j.ID, j.Name, e.charName(j.Character), j.Schedule, state, last, next)
+	}
+	if len(tasks) > 0 {
+		b.WriteString("Recent background tasks (delegate_task), newest first:\n")
+		for _, tk := range tasks {
+			fmt.Fprintf(&b, "task #%d for %s from %s, started %s: %s (%s)\n", tk.ID, e.charName(tk.Character), e.charName(tk.From),
+				tk.StartedAt.In(loc).Format("Mon 2 Jan 15:04"), tk.Status, truncate(tk.Prompt, 120))
+		}
 	}
 	return b.String(), nil
 }
@@ -995,7 +1015,7 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 		return "", err
 	}
 	c, ok := e.Chars.Get(a.Character)
-	if !ok {
+	if !ok || c.PrivateFrom(t.user.ID) { // someone else's private sprig is theirs to change
 		return "", fmt.Errorf("no sprig with id %q", a.Character)
 	}
 	cp := *c
@@ -1139,6 +1159,8 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 		name := r.Key
 		if name == "" {
 			name = "(background: memory review)"
+		} else if c, ok := e.Chars.Get(r.Key); ok && c.PrivateFrom(t.user.ID) {
+			name = e.privateLabel(ctx, c)
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
 	}
@@ -1166,6 +1188,9 @@ func (e *Engine) toolActivity(ctx context.Context, t *turn, args json.RawMessage
 	loc := t.user.Location()
 	var b strings.Builder
 	for _, x := range acts {
+		if e.Chars.PrivateFrom(x.Character, t.user.ID) {
+			continue // someone else's private sprig: none of its activity
+		}
 		fmt.Fprintf(&b, "%s [%s/%s] %s %s\n", x.At.In(loc).Format("Jan 2 15:04"), x.Level, x.Kind, x.Character, x.Summary)
 	}
 	if b.Len() == 0 {
@@ -1269,7 +1294,11 @@ func (e *Engine) toolListIntegrations(ctx context.Context, t *turn, _ json.RawMe
 		for _, c := range e.Chars.All() {
 			for _, sc := range c.Tools {
 				if strings.HasPrefix(sc, "mcp:"+s.Name) {
-					who = append(who, c.DisplayName())
+					if c.PrivateFrom(t.user.ID) {
+						who = append(who, "a private sprig")
+					} else {
+						who = append(who, c.DisplayName())
+					}
 					break
 				}
 			}

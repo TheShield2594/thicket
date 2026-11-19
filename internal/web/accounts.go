@@ -195,6 +195,7 @@ func (a *Adapter) redeemInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "couldn't hash the password")
 		return
 	}
+	inv, _ := a.DB.InviteByToken(r.Context(), body.Token)
 	u, err := a.DB.RedeemInvite(r.Context(), store.HashToken(body.Token), body.Username, hash)
 	a.loginEnd(errors.Is(err, store.ErrNotFound))
 	switch {
@@ -213,7 +214,18 @@ func (a *Adapter) redeemInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	if inv != nil && inv.UserID == 0 {
+		a.joined(r.Context(), u)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// joined tells the engine someone new arrived from an invite, so the
+// right sprig can greet them in their chat (it doesn't wait for that).
+func (a *Adapter) joined(ctx context.Context, u *store.User) {
+	if a.Joined != nil {
+		a.Joined(context.WithoutCancel(ctx), u)
+	}
 }
 
 // changePassword sets (or first creates) the signed-in user's username
@@ -483,6 +495,7 @@ func (a *Adapter) oidcUser(ctx context.Context, cl *auth.Claims, inviteHash stri
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, "", err
 	case inviteHash != "":
+		inv, _ := a.DB.InviteByHash(ctx, inviteHash)
 		if u, err = a.DB.RedeemInvite(ctx, inviteHash, "", ""); errors.Is(err, store.ErrNotFound) {
 			return nil, "That invite has expired or was already used. Ask for a new one.", nil
 		} else if err != nil {
@@ -490,6 +503,10 @@ func (a *Adapter) oidcUser(ctx context.Context, cl *auth.Claims, inviteHash stri
 		}
 		if u.Name == "" && name != "" {
 			_ = a.DB.UpdateUserProfile(ctx, u.ID, name, "")
+			u.Name = name
+		}
+		if inv != nil && inv.UserID == 0 {
+			a.joined(ctx, u)
 		}
 	default:
 		if email != "" {

@@ -13,15 +13,59 @@ kids get sprigs of their own that are locked down in code.
 | member | adults | talk to family sprigs and their own solo sprigs, connect their calendars, approve what their sprigs do |
 | kid | kids | talk only to the kid sprigs set up for them |
 
-Admins add people by asking Juni ("invite 1234567890 on Discord as a kid"),
-from the dashboard's invite link, or with the app API
-(`POST /api/v2/household/invites` with `"role": "kid"`). Role changes go in
-the [trail](#the-trail) and can be undone.
+Admins add people by asking Juni ("add my wife's sprig", "invite my
+housemate", "invite 1234567890 on Discord as a kid"), from the dashboard's
+invite link, or with the app API (`POST /api/v2/household/invites` with
+`"role": "kid"`). Role changes go in the [trail](#the-trail) and can be
+undone.
+
+## Adding someone, start to finish
+
+Ask Juni: "add my partner's sprig". She asks their name and how they'll
+chat, and posts one invite link (valid 7 days, single use) for you to send
+them privately:
+
+- **Web app**: the link opens the invite page, where they choose a
+  username and password.
+- **Telegram**: the link opens a chat with the bot; pressing **Start**
+  uses the invite.
+- **Discord**: they need to share a server with the bot. They DM the bot
+  the `join-…` code from the invite.
+
+As soon as they arrive, Juni greets *them* (never you): she learns their
+name, explains in two lines what's private and what's shared, introduces
+the family sprigs, points them to the calendar, and offers to make them a
+sprig of their own. If the invite asked for one ("add my partner's
+sprig", or `own_sprig` in the API), she goes straight to that interview.
+You never see the interview, the preview, the approval or the sprig.
+
+Kids invited this way are greeted by their kid sprig if one is set up for
+them; Juni never talks to kids.
+
+## Private means private
+
+Another adult's solo sprig is theirs alone, whoever you are:
+
+- The dashboard shows "Kim's private sprig": that it exists, its state,
+  whether it has logged errors in the last day, and under Costs what it
+  spends. Not its name, role, tools, activity or changes.
+- The app API leaves it out of the trail and lists it in the household
+  only as `{"tier": "solo", "private": true, "belongs_to": 3}`. Its live
+  state isn't sent to anyone else's dashboard.
+- In chat, Juni's activity and spend reports label it the same way, and
+  admins can't change its tools or permission levels.
+- Memories and chats were already per person; nobody else can read them.
+
+Whoever runs the server can technically open the database file, which
+holds everything. Thicket won't show it to them, and Juni says so plainly
+when you add someone.
 
 ## Three kinds of sprig
 
 **Solo sprigs** are one person's: a comics tracker, a homelab helper. Set
-`belongs_to` to their user id. Nobody else can see or talk to them.
+`belongs_to` to their user id. Nobody else can talk to them, and nobody
+else can see what they are or do, admins and the owner included: see
+[Private means private](#private-means-private).
 
 **Family sprigs** are the household's: a meal planner, a chores keeper.
 Every adult talks to them, and they keep **family memory**: what they learn

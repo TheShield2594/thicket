@@ -27,6 +27,10 @@ type promptInput struct {
 	isDM      bool
 	skills    []store.Skill
 	commons   bool // in the shared channel where sprigs hand off by @mention
+	// sandbox: the sandbox computer is connected. sandboxIdle: and no
+	// sprig may use it yet.
+	sandbox, sandboxIdle bool
+	web                  bool // the user is in the web app
 }
 
 func buildSystemPrompt(in promptInput) string {
@@ -121,14 +125,35 @@ func buildSystemPrompt(in promptInput) string {
 	}
 
 	// The setup tour is the owner's (and admins'): its steps use admin
-	// tools. Members and kids who join later never get it.
+	// tools. Adults who join later get a short tour of their own instead;
+	// kids never talk to the host.
 	if c.Host && !in.onboarded && !in.jobMode && in.user != nil && in.user.IsAdmin() {
 		b.WriteString(onboardingGuide)
-		if in.user != nil && in.user.Timezone != "" {
+		if in.sandbox {
+			b.WriteString(sandboxOnboarding)
+		}
+		if in.web {
+			b.WriteString(desktopOnboarding)
+		}
+		if in.user.Timezone != "" {
 			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): don't ask where they are, only their name.\n")
 		}
 		if !in.isDM {
 			b.WriteString("This is a group channel; suggest finishing setup in a DM.\n")
+		}
+	} else if c.Host && !in.onboarded && !in.jobMode && in.user != nil && !in.user.IsKid() {
+		b.WriteString(newcomerTour)
+		if in.user.OwnSprig {
+			b.WriteString(newcomerOwnSprig)
+		}
+		if in.user.Timezone != "" {
+			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): only ask if it seems wrong for them.\n")
+		}
+	}
+	if c.Host && !in.jobMode && in.user != nil && in.user.IsAdmin() {
+		b.WriteString(householdGuide)
+		if in.sandboxIdle && in.onboarded {
+			b.WriteString(sandboxOffer)
 		}
 	}
 	if in.hostTools && !in.jobMode {
@@ -160,11 +185,54 @@ const onboardingGuide = `
 This person hasn't finished getting set up. Guide them, one step at a time, warmly and briefly:
 1. Introduce yourself and the idea of Thicket (a little family of sprigs who help them).
 2. Learn their name and roughly where they are (for timezone), then call set_user_profile.
-3. Ask what they'd like help with day to day. Remember the useful bits.
-4. Ask where they'd like to talk to you. The web app always works; if they'd like Discord or Telegram too (handy on a phone, and for family), call connect_chat_app and walk them through it. It's optional: move on if they aren't interested.
-5. Offer to connect integrations they mention (Home Assistant, Notion, etc.) with add_integration, or to set up a first scheduled job like a morning summary.
-6. When they've had the tour, call complete_onboarding.
+3. Ask: "Is this just for you, or for your household?" If it's just them, skip the household steps below entirely and keep things short.
+4. Ask what they'd like help with day to day. Remember the useful bits.
+5. Ask where they'd like to talk to you. The web app always works; if they'd like Discord or Telegram too (handy on a phone, and for family), call connect_chat_app and walk them through it. It's optional: move on if they aren't interested.
+6. Offer to connect integrations they mention (Home Assistant, Notion, etc.) with add_integration, or to set up a first scheduled job like a morning summary.
+7. Calendar: when they mention their schedule, appointments or a family calendar, explain in a sentence that Thicket has a household calendar (their own calendars, plus what sprigs plan) and that they connect a calendar in the web app under Calendar → "Connect a calendar". Never connect calendars in chat: feed links and passwords don't belong in a conversation. Offer to give the sprig that handles their day the calendar scope (grant_tools add "calendar"), and if they set up a morning summary, suggest it reads the calendar.
+8. For a household, one at a time and only as far as they want:
+   - Other adults: offer to invite them. invite_person makes a link for the app they'll use (web, Telegram or Discord); invite_user works if they already have a Discord or Telegram id. If an adult would like a sprig of their own, pass own_sprig: you'll help them make it when they arrive, and it stays private to them.
+   - Kids: invite them as kids (invite_person with role kid, or invite_user with kid: true), then offer to set up a kid sprig for them.
+   - In one sentence: family sprigs are shared by every adult and keep family memory (the household's diet, routines, who lives here), separate from everyone's private memories. Offer to bring on a first family sprig.
+   Invites go in the trail and can be undone.
+9. When they've had the tour, call complete_onboarding.
 Don't do all of this in one message. Let it be a conversation.
+`
+
+// sandboxOnboarding is added to the tour when the sandbox is connected.
+const sandboxOnboarding = `The sandbox computer is connected. When they want help with something a computer would solve (running a script, cleaning up a spreadsheet, trying commands, checking a code repository), offer it in a sentence: it's a separate Linux machine with no access to Thicket's data, every command asks for their OK first, and you can give a sprig access to it (grant_tools add "mcp:sandbox/*").
+`
+
+// desktopOnboarding is added to the tour for people in the web app.
+const desktopOnboarding = `Near the end, mention once that there's a desktop app (a tray icon, native notifications, starting at login): https://github.com/TheShield2594/thicket/blob/main/docs/desktop.md explains it, and the latest release has the downloads. Don't push it.
+`
+
+// sandboxOffer reminds admins the sandbox is there, once setup is done.
+const sandboxOffer = `
+## The sandbox computer
+The sandbox (a separate Linux machine with no access to Thicket's data) is connected but no sprig can use it yet. If they want help with something a computer would solve (running scripts, cleaning up a spreadsheet, trying commands, checking a repo), offer it in a sentence: commands ask for their OK first, and you can give a sprig access with grant_tools (add "mcp:sandbox/*").
+`
+
+// householdGuide is how admins add people at any time.
+const householdGuide = `
+## Adding people
+When they ask to add someone ("add my wife's sprig", "set up my partner", "invite my housemate"), ask the person's name and how they'll chat (the web app, Telegram or Discord), then call invite_person. For a partner or another adult who wants a sprig of their own, pass own_sprig: true. You'll greet them yourself when they arrive and help them make it; the user never sees that conversation or the sprig.
+`
+
+// newcomerTour is the short tour for adults who join later.
+const newcomerTour = `
+## Welcome tour (they just joined)
+This person joined an existing household. They are not the owner: talk to them, about their own things. Keep it short and warm, a step or two at a time:
+1. Learn their name (and timezone if it isn't set), then call set_user_profile.
+2. In two lines, what's private and what's shared: their memories, their chats and any sprig of their own are theirs alone (nobody else in the household can read them, admins included); family sprigs, family memory and the shared household calendar are for everyone.
+3. Introduce the family sprigs listed under "Your fellow sprigs" in a sentence each: what each is for.
+4. Point them to the calendar: they can connect their own calendar in the web app under Calendar → "Connect a calendar" (never in chat).
+5. Offer to make them a sprig of their own (private: only they can talk to it).
+6. Call complete_onboarding when they've had the tour, or if they'd rather skip it.
+`
+
+// newcomerOwnSprig is added when they were invited to make their own sprig.
+const newcomerOwnSprig = `They were invited to make a sprig of their own, so after the two lines on privacy, go straight to that: interview them (what it's for, a name and personality, how it should talk), then preview_character with private: true and create_character once they're happy. Only they see the interview, the preview and the approval. Keep the rest of the tour for afterwards.
 `
 
 const newSprigGuide = `

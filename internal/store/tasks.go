@@ -84,3 +84,27 @@ func (s *Store) InterruptRunningTasks(ctx context.Context, report func(Task) Inb
 	}
 	return out, nil
 }
+
+// UserTasks lists a person's background tasks, newest first.
+func (s *Store) UserTasks(ctx context.Context, userID int64, limit int) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, from_char, character, prompt, status, error, started_at, COALESCE(finished_at, 0)
+		FROM tasks WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var st, fin int64
+		if err := rows.Scan(&t.ID, &t.UserID, &t.From, &t.Character, &t.Prompt, &t.Status, &t.Error, &st, &fin); err != nil {
+			return nil, err
+		}
+		t.StartedAt = time.Unix(st, 0)
+		if fin > 0 {
+			t.FinishedAt = time.Unix(fin, 0)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

@@ -228,7 +228,7 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 		return errors.New("level must be read, draft, ask, act or empty")
 	}
 	if sprig != store.AllSprigs {
-		if _, ok := e.Chars.Get(sprig); !ok {
+		if c, ok := e.Chars.Get(sprig); !ok || c.PrivateFrom(by.ID) {
 			return fmt.Errorf("no sprig %q", sprig)
 		}
 	}

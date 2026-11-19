@@ -197,12 +197,17 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	if err != nil {
 		return nil, err
 	}
-	sys := buildSystemPrompt(promptInput{
+	in := promptInput{
 		skills: skills,
 		char:   t.char, user: t.user, roster: e.Chars.For(t.user), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
-	})
+		web: strings.HasPrefix(t.chatRef, "web:") || (t.chatRef == "" && t.user.Channel == "web"),
+	}
+	if t.char.Host && t.user.IsAdmin() {
+		in.sandbox, in.sandboxIdle = e.sandboxState()
+	}
+	sys := buildSystemPrompt(in)
 	msgs := []llm.Message{{Role: "system", Content: sys}}
 	t.mix = llm.PromptMix{}
 	if summary != "" {

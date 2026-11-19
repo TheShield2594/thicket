@@ -171,13 +171,22 @@ func (d *Dashboard) renderWith(w http.ResponseWriter, r *http.Request, code int,
 
 // state is the roster's live states, polled by the page.
 func (d *Dashboard) state(w http.ResponseWriter, r *http.Request) {
-	if _, err := d.user(r); err != nil {
+	u, err := d.user(r)
+	if err != nil {
 		http.Error(w, "sign in first", http.StatusUnauthorized)
 		return
 	}
 	st := map[string]string{}
 	if d.States != nil {
-		st = d.States(r.Context())
+		for id, s := range d.States(r.Context()) {
+			// Only sprigs the page shows by id: never someone else's
+			// private sprig (it would give its id away).
+			c, ok := d.Chars.Get(id)
+			if !ok || c.PrivateFrom(u.ID) || (!u.IsAdmin() && !c.UsableBy(u)) {
+				continue
+			}
+			st[id] = s
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(st)
@@ -287,6 +296,7 @@ type pageData struct {
 	MemGroup       []memGroup
 	MemCount       int
 	Jobs           []jobView
+	Tasks          []taskView
 	Skills         []store.Skill
 	Spend          *spendView
 	Health         []checkView
@@ -342,9 +352,13 @@ type sprigView struct {
 	ID, Name, Role string
 	Only           string // whose sprig it is, if it isn't shared
 	Host           bool
-	Scopes         []string
-	State          string
-	Avatar         template.HTML
+	// Private: someone else's solo sprig. Only its owner, state and
+	// health are shown.
+	Private bool
+	Health  string
+	Scopes  []string
+	State   string
+	Avatar  template.HTML
 	// Proactive is the viewer's share of the sprig's daily budget of
 	// unprompted messages and what's held for them ("" for kid sprigs).
 	Proactive string
@@ -383,6 +397,13 @@ type jobView struct {
 	Name, Sprig, When string
 	Enabled           bool
 	Runs              []runView
+}
+
+// taskView is a background task one sprig gave another (delegate_task).
+type taskView struct {
+	ID                       int64
+	Sprig, From, Task        string
+	Status, Error, At, Ended string
 }
 
 type runView struct {
@@ -443,8 +464,26 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	p.AvatarCSS = template.CSS(avatar.CSS)
 	for _, c := range d.Chars.All() {
 		names[c.ID] = c.DisplayName()
-		// Members see shared sprigs and their own; admins see every sprig.
+		// Members see shared sprigs and their own; admins see every sprig,
+		// but of someone else's solo sprig only that it exists, whose it
+		// is, how it's doing and (under Costs) what it costs.
 		if !u.IsAdmin() && !c.UsableBy(u) {
+			continue
+		}
+		if c.PrivateFrom(u.ID) {
+			names[c.ID] = d.privateLabel(ctx, c)
+			if !u.IsAdmin() {
+				continue
+			}
+			st := states[c.ID]
+			if st == "" {
+				st = "idle"
+			}
+			v := sprigView{Name: names[c.ID], Private: true, State: st, Health: "working normally"}
+			if n, err := d.DB.CharacterErrorsSince(ctx, c.ID, d.now().Add(-24*time.Hour)); err == nil && n > 0 {
+				v.Health = fmt.Sprintf("%d error(s) in the last day", n)
+			}
+			p.Sprigs = append(p.Sprigs, v)
 			continue
 		}
 		st := states[c.ID]
@@ -534,6 +573,15 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		p.Jobs = append(p.Jobs, v)
 	}
 
+	tasks, err := d.DB.UserTasks(ctx, u.ID, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tasks {
+		p.Tasks = append(p.Tasks, taskView{ID: t.ID, Sprig: name(t.Character), From: name(t.From), Task: t.Prompt,
+			Status: t.Status, Error: t.Error, At: stamp(t.StartedAt), Ended: stamp(t.FinishedAt)})
+	}
+
 	if p.Skills, err = d.DB.Skills(ctx); err != nil {
 		return nil, err
 	}
@@ -574,6 +622,9 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		return nil, err
 	}
 	for _, a := range acts {
+		if d.Chars.PrivateFrom(a.Character, u.ID) {
+			continue // someone else's private sprig: none of its activity
+		}
 		p.Trail = append(p.Trail, activityView{At: stamp(a.At), Level: a.Level, Kind: a.Kind, Sprig: name(a.Character), Summary: a.Summary})
 	}
 	if !u.IsKid() {
@@ -586,6 +637,9 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 			return nil, err
 		}
 		for _, c := range changes {
+			if d.Chars.PrivateFrom(c.Character, u.ID) {
+				continue
+			}
 			p.Changes = append(p.Changes, changeView{ID: c.ID, At: stamp(c.At), Kind: c.Kind, Sprig: name(c.Character), Summary: c.Summary,
 				Detail: c.Detail, Undoable: c.Undoable, Undone: !c.UndoneAt.IsZero()})
 		}
@@ -596,7 +650,7 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	if p.Costs, p.Models, err = d.costs(ctx, name); err != nil {
 		return nil, err
 	}
-	if p.Spend, err = d.spend(ctx); err != nil {
+	if p.Spend, err = d.spend(ctx, u); err != nil {
 		return nil, err
 	}
 	if d.Health != nil {
@@ -606,6 +660,15 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		sort.Slice(p.Health, func(i, j int) bool { return p.Health[i].Name < p.Health[j].Name })
 	}
 	return p, nil
+}
+
+// privateLabel names someone's solo sprig without saying anything about
+// it: "Kim's private sprig".
+func (d *Dashboard) privateLabel(ctx context.Context, c *character.Character) string {
+	if o, err := d.DB.UserByID(ctx, c.BelongsTo); err == nil && o.Name != "" {
+		return o.Name + "'s private sprig"
+	}
+	return fmt.Sprintf("user %d's private sprig", c.BelongsTo)
 }
 
 // costs is this month's spend per sprig, split heartbeat/task, and per model.
@@ -674,7 +737,7 @@ func draftArgs(action string) (string, bool) {
 	return a.Tool + "\n" + prettyJSON(string(a.Args)), true
 }
 
-func (d *Dashboard) spend(ctx context.Context) (*spendView, error) {
+func (d *Dashboard) spend(ctx context.Context, u *store.User) (*spendView, error) {
 	now := d.now().UTC()
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -699,6 +762,9 @@ func (d *Dashboard) spend(ctx context.Context) (*spendView, error) {
 		label := r.Key
 		if c, ok := d.Chars.Get(r.Key); ok {
 			label = c.DisplayName()
+			if c.PrivateFrom(u.ID) {
+				label = d.privateLabel(ctx, c)
+			}
 		} else if label == "" {
 			label = "Background (memory review, summaries)"
 		}
