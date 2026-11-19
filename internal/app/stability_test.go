@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,9 +27,18 @@ import (
 // haState is what get_state returns (default "light is off").
 var haState atomic.Value
 
+// haCalls records the body of every tools/call the fake HA receives.
+var haCalls struct {
+	sync.Mutex
+	bodies []string
+}
+
 func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	haState.Store("light is off")
+	haCalls.Lock()
+	haCalls.bodies = nil
+	haCalls.Unlock()
 	var reads, writes atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -53,6 +63,9 @@ func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 				`{"name":"get_state","description":"read a light","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},`+
 				`{"name":"turn_on","description":"turn a light on","inputSchema":{"type":"object"}}]}}`, *req.ID)
 		case "tools/call":
+			haCalls.Lock()
+			haCalls.bodies = append(haCalls.bodies, string(b))
+			haCalls.Unlock()
 			out := haState.Load().(string)
 			if req.Params.Name == "turn_on" {
 				writes.Add(1)

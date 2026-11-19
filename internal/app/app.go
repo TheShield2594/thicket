@@ -273,7 +273,17 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.MCP.OAuth = a.OAuth
 	a.Engine.MCP = a.MCP
 	a.Engine.OAuth = a.OAuth
-	a.Calendar = &calendar.Service{DB: db, Secrets: sec}
+	a.Calendar = &calendar.Service{DB: db, Secrets: sec, MCP: func(ctx context.Context, server, tool string, args json.RawMessage) (string, error) {
+		// Only a tool the integration lists as read-only is ever called.
+		res, err := a.MCP.CallReadOnly(ctx, server, tool, args)
+		if err != nil {
+			return "", err
+		}
+		if res.IsError {
+			return "", fmt.Errorf("%s → %s failed: %s", server, tool, sec.Redact(strings.Join(strings.Fields(res.Text), " ")))
+		}
+		return res.Text, nil
+	}}
 	a.Engine.Calendar = a.Calendar
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")

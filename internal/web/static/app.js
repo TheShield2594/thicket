@@ -422,6 +422,18 @@ async function showAccount() {
       const when = !d.day || d.day === 'off' ? 'The household has the digest switched off.'
         : `It comes ${d.day[0].toUpperCase() + d.day.slice(1)}s at ${d.time}, your time: what each sprig did, what needs you, what it cost.`;
       digest = [h('h3', {}, 'Weekly digest'), h('label.field-label', {}, h('span', {}, 'Send it'), sel), h('p.muted', {}, when)];
+      if ((S.me.parent_of || []).length || (d.kids_modes && d.kids !== 'weekly')) {
+        const kidLabels = { daily: 'Every day', weekly: 'In the weekly digest', off: 'Off' };
+        const ksel = h('select.field', {
+          'aria-label': 'Report on your kids’ sprigs',
+          onchange: async () => {
+            try { await api('/api/digest', { method: 'PUT', body: { kids: ksel.value } }); d.kids = ksel.value; toast('Saved.'); }
+            catch (e) { toast('Couldn’t save it: ' + e.message); ksel.value = d.kids; }
+          },
+        }, (d.kids_modes || []).map((m) => h('option', { value: m, selected: m === d.kids }, kidLabels[m] || m)));
+        digest.push(h('label.field-label', {}, h('span', {}, 'Report on your kids’ sprigs'), ksel),
+          h('p.muted', {}, 'Time spent, topics in a sentence or two, anything flagged, and what it cost.'));
+      }
     } catch { /* not available: leave it out */ }
   }
   const rows = acct.sessions.map((s) => h('li.session', {},
@@ -1177,7 +1189,7 @@ function calendarSources() {
     try {
       const res = await api('/api/calendars');
       list.replaceChildren(...(res.calendars.length ? res.calendars.map((c) => h('div.cal-src', {},
-        h('div', {}, h('b', {}, c.name), h('small', {}, `${c.kind === 'caldav' ? 'CalDAV' : 'Calendar feed'}${c.shared ? ' · shared with the household' : ''}${c.mine ? '' : ' · someone else’s'}`),
+        h('div', {}, h('b', {}, c.name), h('small', {}, `${{ caldav: 'CalDAV', mcp: 'Through an integration' }[c.kind] || 'Calendar feed'}${c.shared ? ' · shared with the household' : ''}${c.mine ? '' : ' · someone else’s'}`),
           c.last_error && h('small.err', {}, c.last_error)),
         c.mine && h('button.chip', { onclick: async () => {
           if (!confirm(`Disconnect ${c.name}? Thicket forgets its address and password.`)) return;
@@ -1189,23 +1201,35 @@ function calendarSources() {
   };
   load();
   const [nameL, name] = field('Name', { placeholder: 'Work', required: true, maxlength: 60 });
-  const kind = h('select.field', { 'aria-label': 'Kind' }, h('option', { value: 'ics' }, 'Calendar feed (ICS or webcal link)'), h('option', { value: 'caldav' }, 'CalDAV (Nextcloud, Fastmail, iCloud)'));
+  const admin = ['owner', 'admin'].includes(S.me && S.me.user && S.me.user.role);
+  const kind = h('select.field', { 'aria-label': 'Kind' }, h('option', { value: 'ics' }, 'Calendar feed (ICS or webcal link)'), h('option', { value: 'caldav' }, 'CalDAV (Nextcloud, Fastmail, iCloud)'),
+    admin && h('option', { value: 'mcp' }, 'Through an integration (an MCP calendar server)'));
   const [urlL, url] = field('Address', { placeholder: 'https://… or webcal://…', required: true, autocomplete: 'off', spellcheck: 'false' });
   const [userL, user] = field('Username', { autocomplete: 'off' });
   const [pwL, pw] = field('Password (an app password works best)', { type: 'password', autocomplete: 'new-password' });
   const dav = h('div.cal-dav', { hidden: true }, userL, pwL);
-  kind.onchange = () => { dav.hidden = kind.value !== 'caldav'; };
+  const [intL, integration] = field('Integration (as connected, e.g. gcal)', { autocomplete: 'off', spellcheck: 'false' });
+  const [toolL, tool] = field('Its read-only tool that lists events', { placeholder: 'list_events', autocomplete: 'off', spellcheck: 'false' });
+  const preset = h('select.field', { 'aria-label': 'Result shape' }, h('option', { value: 'google' }, 'Google Calendar'), h('option', { value: 'outlook' }, 'Outlook (Microsoft Graph)'),
+    h('option', { value: '' }, 'Other (common field names)'));
+  const viaMCP = h('div.cal-dav', { hidden: true }, intL, toolL, h('label.field-label', {}, 'Result shape', preset));
+  kind.onchange = () => {
+    dav.hidden = kind.value !== 'caldav'; viaMCP.hidden = kind.value !== 'mcp'; urlL.hidden = kind.value === 'mcp';
+    url.required = kind.value !== 'mcp'; integration.required = tool.required = kind.value === 'mcp';
+  };
   const shared = h('input', { type: 'checkbox' });
   const err = h('p.err', { role: 'alert' });
   const btn = h('button.btn', { type: 'submit' }, 'Connect');
   const form = h('form.cal-form', { onsubmit: async (e) => {
     e.preventDefault(); err.textContent = ''; btn.disabled = true; btn.textContent = 'Checking it loads…';
     try {
-      await api('/api/calendars', { method: 'POST', body: { name: name.value.trim(), kind: kind.value, url: url.value.trim(), username: user.value.trim(), password: pw.value, shared: shared.checked } });
-      form.reset(); dav.hidden = true; toast('Connected'); load(); renderMain();
+      const body = { name: name.value.trim(), kind: kind.value, url: url.value.trim(), username: user.value.trim(), password: pw.value, shared: shared.checked };
+      if (kind.value === 'mcp') body.mcp = { integration: integration.value.trim(), tool: tool.value.trim(), preset: preset.value };
+      await api('/api/calendars', { method: 'POST', body });
+      form.reset(); kind.onchange(); toast('Connected'); load(); renderMain();
     } catch (ex) { err.textContent = ex.message; }
     btn.disabled = false; btn.textContent = 'Connect';
-  } }, nameL, h('label.field-label', {}, 'Kind', kind), urlL, dav,
+  } }, nameL, h('label.field-label', {}, 'Kind', kind), urlL, dav, viaMCP,
   h('label.check', {}, shared, 'Share with the household'), err, btn,
   h('p.d-empty', {}, 'Read-only: Thicket never changes your calendars. The address and password are stored encrypted.'));
   const add = h('details.cal-add', {}, h('summary', {}, 'Connect a calendar'), form);
@@ -1396,10 +1420,30 @@ function kidAccess(kid) {
           return h('label.check', {}, h('input', { type: 'checkbox', checked: on, onchange: () => change(on ? { remove_allow: [k] } : { add_allow: [k] }) }),
             h('span', {}, h('b', {}, label), ' ', h('small', {}, hint)));
         })),
+      kidLimits(kid),
       err);
   };
   render();
   return box;
+}
+
+// kidLimits is when, and how much, a kid may chat with their kid sprig.
+function kidLimits(kid) {
+  const l = kid.limits || {};
+  const [hoursL, hours] = field('Chat hours', { placeholder: '07:00-20:00', value: l.hours || '', spellcheck: 'false' });
+  const [nightL, night] = field('Not after, on school nights', { placeholder: '20:00', value: l.school_nights || '', spellcheck: 'false' });
+  const [minL, mins] = field('Minutes a day', { type: 'number', min: 0, max: 1440, value: l.daily_minutes || '' });
+  const [msgL, msgs] = field('Messages a day', { type: 'number', min: 0, max: 1000, value: l.daily_messages || '' });
+  const err = h('p.err', { role: 'alert' });
+  return h('form.kid-limits', { onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = '';
+    const body = { hours: hours.value.trim(), school_nights: night.value.trim(), daily_minutes: +mins.value || 0, daily_messages: +msgs.value || 0 };
+    try {
+      const r = await api(`/api/kid-sprigs/${encodeURIComponent(kid.id)}/limits`, { method: 'PUT', body });
+      kid.limits = r.limits; toast('Saved. It’s in the trail, and you can undo it from the dashboard.');
+    } catch (ex) { err.textContent = ex.message; }
+  } }, h('div.section-title', {}, h('h2', {}, 'Time limits'), h('small', {}, `In ${kid.kids.map((x) => x.name).join(' and ')}’s timezone; empty means no limit`)),
+  hoursL, nightL, minL, msgL, err, h('button.chip.primary', { type: 'submit' }, 'Save limits'));
 }
 
 // --- memory ---

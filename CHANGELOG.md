@@ -4,8 +4,36 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v29)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v31)
 
+- Kid safety (schema v31): time limits per kid sprig, set by its parents
+  in chat (`kid_limits`), the web app or the API: chat hours, an earlier
+  end on school nights, and a daily allowance in minutes or messages. At
+  a limit the sprig says so kindly and stops without calling the model;
+  a message about self-harm is still answered. Changes go in the trail
+  and can be undone. A report for parents, daily or in the weekly
+  digest as each chooses: time spent, topics in a sentence or two,
+  anything flagged, and what it cost. A containment test checks that
+  the personal details in a kid's conversation stay out of adults' and
+  family memory, adults' chats, jobs, the activity log and the
+  arguments of web searches, page fetches and integration calls. Those
+  calls go through a pattern-based guard that refuses ones carrying
+  details the kid shared; a detail phrased in a way it doesn't
+  recognise can get past it. `docs/household.md` links each enforced
+  claim to its test.
+- Calendars through an integration (schema v30): a calendar an MCP
+  server reaches (Google Calendar, Composio, Outlook) can feed the
+  household calendar's events layer, as a source of kind `mcp` naming
+  the integration and its read-only "list events" tool. Presets for
+  Google and Outlook, or a field mapping; only calls the integration
+  lists as read-only are made. Admins connect them; cached, shared or
+  private like the others.
+- Kid sprigs in chat: Juni can set one up with an admin
+  (`create_kid_sprig`): a short interview (which kids, who the parents
+  are, a name and personality), a preview in which the new sprig says
+  hello as it would to the kid, then a parent preview to approve. Nothing
+  is created before approval. Its parents hear what they can do, and the
+  kid gets a first hello.
 - Sprigs speak first: check-in presets per sprig, in the character file
   (`initiative.morning_brief`, `initiative.event_reminders`,
   `initiative.due_reminders`) or in chat (`set_initiative`, and Juni
@@ -223,7 +251,7 @@ stated.
   becomes answerable only once the prompt is delivered; a tap in that
   moment is asked to try again. Answered any other way (typed, from the
   dashboard or the API) or left to expire, the prompt is settled too:
-  Thicket keeps the prompt message's id (schema v29) and edits it to show
+  Thicket keeps the prompt message's id (schema v31) and edits it to show
   the outcome without its buttons, through the new optional
   `channel.ActionSettler` (`SettleActions`). A sweep each minute settles
   prompts that expired. Telegram remembers recent prompts' text for the

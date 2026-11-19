@@ -33,10 +33,12 @@ type Household interface {
 	DecideApproval(ctx context.Context, u *store.User, id int64, approve bool) error
 	KidChats(ctx context.Context, parent *store.User, sprig string, before int64, limit int) ([]store.KidChatMessage, error)
 	KidAccess(ctx context.Context, parent *store.User, sprig string, addTools, removeTools, addAllow, removeAllow []string) (*character.Character, error)
+	SetKidLimits(ctx context.Context, parent *store.User, sprig string, l character.KidLimits) (*character.Character, error)
 	UndoTrail(ctx context.Context, by *store.User, id int64) (string, error)
 	SetToolLevel(ctx context.Context, by *store.User, sprig, tool, level string) error
 	SetRole(ctx context.Context, by *store.User, userID int64, role string) error
 	AddCalendar(ctx context.Context, u *store.User, name, kind, url, username, password string, shared bool) (*store.CalendarSource, error)
+	AddMCPCalendar(ctx context.Context, u *store.User, name string, m calendar.MCPSource, shared bool) (*store.CalendarSource, error)
 	RemoveCalendar(ctx context.Context, u *store.User, id int64) error
 	RemoveSprigEvent(ctx context.Context, u *store.User, id int64) (*store.SprigEvent, int64, error)
 }
@@ -84,6 +86,7 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/kid-sprigs", a.bearer(a.v2CreateKidSprig))
 	mux.HandleFunc("GET /api/v2/kid-sprigs/{id}/chats", a.bearer(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/v2/kid-sprigs/{id}/access", a.bearer(a.v2KidAccess))
+	mux.HandleFunc("PUT /api/v2/kid-sprigs/{id}/limits", a.bearer(a.v2KidLimits))
 	// Memory: facts and relationship memory, yours or a kid sprig's you set up.
 	a.memoryRoutes(mux, "/api/v2", a.bearer)
 	return mux
@@ -257,7 +260,7 @@ func (a *Adapter) parentOf(ctx context.Context, u *store.User) []map[string]any 
 			allow = []string{}
 		}
 		out = append(out, map[string]any{"id": c.ID, "name": c.DisplayName(), "color": c.Color, "avatar": a.avatarURL(c),
-			"kids": kids, "tools": tools, "allow": allow})
+			"kids": kids, "tools": tools, "allow": allow, "limits": c.Limits})
 	}
 	return out
 }
@@ -337,7 +340,11 @@ func (a *Adapter) v2Calendars(w http.ResponseWriter, r *http.Request, u *store.U
 	}
 	out := []map[string]any{}
 	for _, s := range srcs {
-		out = append(out, map[string]any{"id": s.ID, "name": s.Name, "kind": s.Kind, "shared": s.Shared, "mine": s.UserID == u.ID, "last_error": s.LastError})
+		c := map[string]any{"id": s.ID, "name": s.Name, "kind": s.Kind, "shared": s.Shared, "mine": s.UserID == u.ID, "last_error": s.LastError}
+		if m, err := calendar.ParseMCPSource(s.Config); s.Kind == "mcp" && err == nil {
+			c["integration"], c["tool"] = m.Integration, m.Tool
+		}
+		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"calendars": out})
 }
@@ -350,11 +357,19 @@ func (a *Adapter) v2AddCalendar(w http.ResponseWriter, r *http.Request, u *store
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Shared   bool   `json:"shared"`
+		// kind mcp: the integration, its read-only tool and the mapping.
+		MCP calendar.MCPSource `json:"mcp"`
 	}
 	if !decodeBody(w, r, &b) {
 		return
 	}
-	src, err := a.Household.AddCalendar(r.Context(), u, b.Name, b.Kind, b.URL, b.Username, b.Password, b.Shared)
+	var src *store.CalendarSource
+	var err error
+	if b.Kind == "mcp" {
+		src, err = a.Household.AddMCPCalendar(r.Context(), u, b.Name, b.MCP, b.Shared)
+	} else {
+		src, err = a.Household.AddCalendar(r.Context(), u, b.Name, b.Kind, b.URL, b.Username, b.Password, b.Shared)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -599,6 +614,26 @@ func (a *Adapter) v2KidChats(w http.ResponseWriter, r *http.Request, u *store.Us
 		out = append(out, kidMessage{ID: m.ID, Role: m.Role, Sprig: m.Character, KidID: m.KidID, Content: m.Content, At: m.CreatedAt})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"messages": out, "more": len(msgs) == 100})
+}
+
+// v2KidLimits replaces a kid sprig's time limits (its parents only).
+func (a *Adapter) v2KidLimits(w http.ResponseWriter, r *http.Request, u *store.User) {
+	// A pointer, so a JSON null is refused rather than read as "no limits";
+	// {} is how limits are cleared.
+	var l *character.KidLimits
+	if !decodeBody(w, r, &l) {
+		return
+	}
+	if l == nil {
+		writeErr(w, http.StatusBadRequest, "send the limits as an object; {} clears them")
+		return
+	}
+	c, err := a.Household.SetKidLimits(r.Context(), u, r.PathValue("id"), *l)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": c.ID, "limits": c.Limits})
 }
 
 func (a *Adapter) v2KidAccess(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -140,39 +140,108 @@ voice:
 ---
 ```
 
-Admins create them (`POST /api/v2/kid-sprigs`, or write the file). Their
-parents then decide what they may use (`PATCH /api/v2/kid-sprigs/bramble/access`).
+Admins create them by asking Juni, through `POST /api/v2/kid-sprigs`, or
+by writing the file. In chat, Juni asks which kids it's for, who its
+parents are, and a name and personality (`create_kid_sprig`); the new
+sprig says hello in the chat as it would to the kid, and then the admin
+sees a parent preview (who it talks to, who its parents are, that it
+starts with no tools or adult data, its spend cap) and approves it.
+Nothing is created before that. Afterwards its parents are told what
+they can do (read its chats, approve tools one at a time, allow family
+memory or the calendar, and that safety alerts come to them in chat),
+and the kid gets a first hello from it. Their parents then decide what
+it may use (in the web app, or `PATCH /api/v2/kid-sprigs/bramble/access`).
+A kid sprig whose file was written by hand can't be changed by its
+parents afterwards (Thicket never overwrites a hand-edited file), so
+prefer Juni or the API.
 Two ready-made kid sprigs come with Thicket, a homework helper and a
 reading buddy: ask Juni, or `thicket sprig starter reading-buddy --kid
 NAME`. The admin who adds one becomes its parent and sees everything it
 will be first ([Starter sprigs](authoring.md#starter-sprigs)).
 
-## What kid sprigs can't do
+## What is enforced
 
-These are enforced in code, whatever the model or the file says. Tests
-cover each one.
+These are enforced in code, whatever the model or a character file says.
+Each claim names the test that proves it; CI runs them all on every
+change.
 
 - **Chat only, locked to read.** Any tool that changes something is
   refused, whatever permission level is stored, and levels for a kid
   sprig can't be raised. Nothing asks for approval.
+  [`TestKidSprigBoundaries`](../internal/app/household_test.go)
 - **Only tools a parent approved,** one at a time: `web`, or a single
   integration tool such as `mcp:fortnite/player_stats`. Whole
   integrations (`mcp:gmail/*`) are refused, and even an approved tool is
-  only offered if it only reads.
-- **No jobs, routines, triggers, webhooks, background tasks, follow-ups or
-  check-ins.** A job owned by a kid sprig refuses to run.
+  only offered if it only reads. [`TestKidSprigBoundaries`](../internal/app/household_test.go),
+  [`TestKidSprigValidation`](../internal/character/household_test.go)
+- **No jobs, routines, triggers, webhooks, background tasks, follow-ups,
+  check-ins or briefs.** A job owned by a kid sprig refuses to run.
+  [`TestKidSprigBoundaries`](../internal/app/household_test.go), [`TestKidSprigHasNoPresets`](../internal/app/checkins_test.go)
 - **No adult data** (calendars, email, family memory) unless a parent
   allows it in `allow`. With `calendar` allowed they see only shared
   household events, never a parent's own calendar.
+  [`TestFamilyMemoryIsSeparate`](../internal/app/household_test.go), [`TestKidSprigBoundaries`](../internal/app/household_test.go),
+  [`TestMCPCalendarSource`](../internal/app/calendar_test.go)
 - **No talking out loud** unless a parent allows `voice`: then the kid
   sprig answers a voice message with one, like any sprig.
+  [`TestKidSprigSpeaksOnlyWithParentsSayso`](../internal/app/speech_test.go)
 - **Kids talk only to their kid sprigs.** Naming Juni or a family sprig
   doesn't reach it, and adults can't chat with a kid sprig.
-- **Relationship memory stays in the sandbox.** How the kid likes their
-  kid sprig to talk, what they enjoy and what annoyed them belongs to
-  that kid sprig alone: never shared with other sprigs or family memory.
-  The kid and the sprig's parents can see and change it on the memory
-  screen; nobody else can.
+  [`TestKidSprigBoundaries`](../internal/app/household_test.go)
+- **Only its parents change what it may use, or its limits,** and every
+  change goes in the trail and can be undone; a kid can change nothing.
+  [`TestTrailUndo`](../internal/app/household_test.go), [`TestKidTimeLimits`](../internal/app/kidsafety_test.go)
+- **Time limits** (below): at a limit the kid sprig says so kindly and
+  stops, without calling the model; a message about self-harm is
+  answered anyway. [`TestKidTimeLimits`](../internal/app/kidsafety_test.go),
+  [`TestKidLimitsClosed`](../internal/character/household_test.go)
+- **A spend cap only its parents can raise.**
+  [`TestKidSprigMonthlyCap`](../internal/app/costs_test.go), [`TestNewKidSprigStartsCapped`](../internal/app/costs_test.go)
+- **Personal details a kid shares stay in** (the containment test, below,
+  and its limits).
+  [`TestKidContainment`](../internal/app/kidsafety_test.go)
+
+### Personal details stay in
+
+What a kid tells their kid sprig is meant to stay with the kid, and with
+their parents, who can read the whole chat. `TestKidContainment` checks
+it: Max tells Bramble his full name, his address, his school, a
+phone number and an email address, with every way out a parent can open
+switched on (the web, an integration tool, family memory). Bramble then
+tries to search the web for his school, open a map of his street and
+call an integration with his name. The test asserts that none of those
+details appear:
+
+- in any adult's private memory or in family memory, after memory
+  extraction runs on the kid's conversation (a kid's conversation never
+  adds to family memory; what's remembered is the kid's own:
+  [`TestReviewNeverWritesFamilyMemoryFromKids`](../internal/memory/review_test.go),
+  [`TestKidRemembersPrivately`](../internal/app/remember_test.go));
+- in any adult's chat, in any channel, or an adult's conversation
+  summary, except the safety alert that goes to his parents;
+- in a job, an inbox item, the activity log, or the trail (outside the
+  kid's own safety entries, which only his parents see);
+- in the arguments of any outbound call: web search queries, fetched
+  page addresses, integration calls;
+- in the topics of his parents' report.
+
+The outbound calls are guarded in code: before a kid sprig sends a web
+search, a page address or an integration call, its arguments are
+checked for anything that looks personal (an email address, a phone
+number, a street address) and for the details the kid shared in the
+conversation or that the sprig remembers about them (their full name,
+where they live, their school). A call that carries one isn't sent, the
+sprig is told to try without it, and it's noted in the activity log
+(without the details). Each argument is checked on its own and also
+URL-decoded, and pinned messages count as things the kid said. Calls
+without personal details go out as usual.
+
+The check works on patterns. It catches the details it recognises, said
+the ways it knows ("I live in…", "my name is…", "I go to…", a street
+address, a school's name, a phone number or email address); a detail
+phrased some other way can get past it. The test proves the paths above
+for the details it uses, not that nothing could ever leak.
+[`TestPersonalDetails`](../internal/agent/kidprivacy_test.go)
 
 ## Parents
 
@@ -188,7 +257,7 @@ memory apart from facts: edit, lock, undo or delete any of it, or add
 - **Read the whole chat, any time:** in the web app, or `GET /api/v2/kid-sprigs/bramble/chats`.
   Kids' messages are kept: "delete that" and deleting in the chat app
   don't remove them, and message retention doesn't prune kids' chats.
-- **No routine notifications.** Parents aren't told about ordinary chats.
+- **No alerts about ordinary chats.** Parents get a report instead (below), daily or weekly, as each chooses.
 - **Safety alerts.** If a kid's message touches self-harm, a stranger
   asking for personal details (where they live, their school, photos, to
   meet), signs of abuse or grooming, or bullying, each parent gets a
@@ -196,6 +265,73 @@ memory apart from facts: edit, lock, undo or delete any of it, or add
   that contain a warning word; messages about self-harm alert even if
   that check fails. Alerts are at most one an hour per kid and concern, go
   in the trail, and never block the chat.
+
+## Time limits
+
+A kid sprig's parents decide when their kid may chat with it and how
+much, in the kid's timezone:
+
+- **Chat hours** (`hours: 07:00-20:00`): outside them the sprig says
+  it's not chat time and when it'll be back.
+- **School nights** (`school_nights: 20:00`): no chatting from then
+  until morning on Sunday to Thursday evenings. An evening time (17:00
+  to 23:59), or one after midnight (00:00 to 04:59).
+- **A daily allowance:** `daily_minutes` (active minutes: from the first
+  message of a sitting to the last, where a pause of more than five
+  minutes starts a new sitting) or `daily_messages` (the kid's messages
+  it answered), counted from midnight.
+
+At a limit the sprig says so kindly, in a fixed line ("That's all our
+chatting for today! See you tomorrow!"), and no reply model is called.
+The kid's message and that line are kept, so parents see them; they
+don't count towards the allowance. Each stop is also noted in the trail
+(at most once an hour per kid and limit). A kid sprig past its limits
+doesn't pick up a handoff from another kid sprig either.
+
+The safety check runs on every message either way. A message about
+self-harm is always answered. A message with a warning word is screened
+before the limit line goes out: if the safety check flags it, or can't
+be reached, the kid gets a real answer instead. Attachments aren't read
+past a limit, except voice notes, which are still transcribed so the
+safety check hears what was said. If the day's count can't be read, the
+sprig says it can't check chat time right now rather than assuming
+there's time left.
+
+Parents set them by asking Juni ("no Bramble after 8 on school nights,
+and 30 minutes a day": `kid_limits`), on the kid sprig's page in the web
+app, or with `PUT /api/v2/kid-sprigs/bramble/limits`
+(`{"hours": "07:00-20:00", "school_nights": "20:00", "daily_minutes": 30, "daily_messages": 0}`).
+They're kept in the character file:
+
+```yaml
+limits:
+  hours: "07:00-20:00"
+  school_nights: "20:00"
+  daily_minutes: 30
+```
+
+Only its parents can change them; every change goes in the trail and
+can be undone. Kids never reach Juni or anything that changes a sprig.
+
+## Reports for parents
+
+Each parent chooses how they hear about the kid sprigs they look after
+(`kid_limits` with `report`, Settings in the web app, or
+`PUT /api/digest` with `{"kids": "daily"}`):
+
+- **weekly** (the default): in the weekly digest, the kid sprig's
+  section adds time spent and the topics of the week;
+- **daily**: a message from Juni each day at `digest.time`, per kid
+  sprig, for the calendar day before (midnight to midnight, in your
+  timezone): time spent, topics in a sentence or two,
+  anything the safety check flagged, and what it cost. Nothing is sent
+  for a day without chatting or alerts;
+- **off**: no report (safety alerts still come at the time).
+
+Topics are written by the cheap model from the kid's messages, told to
+leave out names, schools, addresses and other personal details, and then
+anything personal the kid shared is taken out in code. The cost is the
+kid sprig's. [`TestKidReports`](../internal/app/kidsafety_test.go)
 
 ## The weekly digest
 

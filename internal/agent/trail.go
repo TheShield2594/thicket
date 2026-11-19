@@ -21,7 +21,7 @@ import (
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
-	Type      string   `json:"type"` // level | grant | allow | event | role | cap (Tool = period, Level = the cap to restore)
+	Type      string   `json:"type"` // level | grant | allow | limits (Args = the limits to restore) | event | role | cap (Tool = period, Level = the cap to restore)
 	Character string   `json:"character,omitempty"`
 	Tool      string   `json:"tool,omitempty"`
 	Level     string   `json:"level,omitempty"` // the level to restore ("" = none set)
@@ -149,6 +149,8 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
 		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
+	case u.Type == "limits" && !parentOf():
+		return "", fmt.Errorf("%w: only its parents can change a kid sprig's time limits", ErrUndoNotAllowed)
 	case u.Type == "cap":
 		// Through SetSprigCap's own rules: only a kid sprig's parents
 		// raise its cap, whoever undoes.
@@ -162,7 +164,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
-	case (u.Type == "grant" || u.Type == "allow") && parentOf():
+	case (u.Type == "grant" || u.Type == "allow" || u.Type == "limits") && parentOf():
 		// a parent undoing a change to their kid's sprig
 	default:
 		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
@@ -177,6 +179,21 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 			return "", err
 		} else if latest != id {
 			return "", fmt.Errorf("that cap was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
+		}
+	}
+	if u.Type == "limits" || u.Type == "allow" || u.Type == "grant" {
+		// The same lock as every other change to a sprig's file (kidMu), so
+		// a stale copy never overwrites a newer change.
+		e.kidMu.Lock()
+		defer e.kidMu.Unlock()
+	}
+	if u.Type == "limits" {
+		// Only the latest change to the limits is undone, however the
+		// values repeat: an older one would overwrite a newer change.
+		if latest, err := e.latestLimitsChange(ctx, u.Character); err != nil {
+			return "", err
+		} else if latest == nil || latest.ID != id {
+			return "", fmt.Errorf("the time limits were changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
 		}
 	}
 	// Claim the undo first, so two at once can't both run it.
@@ -217,7 +234,20 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		done = fmt.Sprintf("%s's tools are back to %s", c.DisplayName(), listOr(cp.Tools))
-	case "allow":
+	case "limits": // under kidMu, checked to be the latest change (UndoTrail)
+		c, ok := e.Chars.Get(u.Character)
+		if !ok {
+			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
+		}
+		var l character.KidLimits
+		if err := json.Unmarshal(u.Args, &l); err != nil {
+			return "", err
+		}
+		if err := e.writeLimits(ctx, c, l); err != nil {
+			return "", err
+		}
+		done = fmt.Sprintf("%s's time limits are back to %s", c.DisplayName(), describeLimits(l))
+	case "allow": // under kidMu (UndoTrail)
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {
 			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
@@ -311,6 +341,22 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 
 // latestCapChange is the newest cap change still in force for one sprig's
 // daily or monthly cap (0 if none).
+// latestLimitsChange is a kid sprig's latest time-limit change not undone,
+// or nil.
+func (e *Engine) latestLimitsChange(ctx context.Context, sprig string) (*store.TrailEntry, error) {
+	entries, err := e.DB.TrailOfKind(ctx, store.TrailGrant, sprig, 500)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		var u trailUndo
+		if json.Unmarshal(entries[i].Undo, &u) == nil && u.Type == "limits" {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func (e *Engine) latestCapChange(ctx context.Context, sprig, period string) (int64, error) {
 	entries, err := e.DB.TrailOfKind(ctx, store.TrailCap, sprig, 100)
 	if err != nil {

@@ -60,6 +60,10 @@ type turn struct {
 	// spokenTo: the message this answers was a voice message (it was
 	// transcribed), so a sprig that speaks when spoken to answers aloud.
 	spokenTo bool
+	// said is the person's whole message, voice notes transcribed (query
+	// is only what they typed): what a kid sprig's limits are checked
+	// against when a turn is handed over.
+	said string
 	// replied: respond posted a real reply (not a failure notice, a
 	// pause or a cost question).
 	replied bool
@@ -408,6 +412,9 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if err := e.paused(ctx, t.char.ID); err != nil {
 		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+name+": "+err.Error(), "")
 		return "Error: " + err.Error() + ", so " + tool.Label() + " was NOT run. Stop and tell the user."
+	}
+	if msg := e.kidOutbound(ctx, t, tool, args); msg != "" {
+		return msg // personal details a kid shared stay in Thicket
 	}
 	if msg, ok := e.gate(ctx, t, tool, args); !ok {
 		return msg

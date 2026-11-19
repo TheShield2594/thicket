@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -182,6 +183,8 @@ type Character struct {
 	// family_memory, calendar, and voice (it may answer out loud). Nothing
 	// by default.
 	Allow []string `yaml:"allow,omitempty"`
+	// Limits are a kid sprig's time limits, set by its parents.
+	Limits KidLimits `yaml:"limits,omitempty"`
 
 	Body string `yaml:"-"` // Markdown after the frontmatter
 	Path string `yaml:"-"`
@@ -382,8 +385,8 @@ func (c *Character) validateHousehold() []string {
 		p = append(p, "a family sprig is everyone's: leave belongs_to off")
 	}
 	if !c.IsKid() {
-		if len(c.Kids) > 0 || len(c.Parents) > 0 || len(c.Allow) > 0 {
-			p = append(p, "kids, parents and allow are only for kid sprigs (household: kid)")
+		if len(c.Kids) > 0 || len(c.Parents) > 0 || len(c.Allow) > 0 || c.Limits.Any() {
+			p = append(p, "kids, parents, allow and limits are only for kid sprigs (household: kid)")
 		}
 		return p
 	}
@@ -422,7 +425,84 @@ func (c *Character) validateHousehold() []string {
 	if c.Initiative.CheckIns || c.Initiative.FollowUps || c.Initiative.MorningBrief != "" || c.Initiative.EventReminders != 0 || c.Initiative.DueReminders {
 		p = append(p, "a kid sprig doesn't check in, follow up or send briefs and reminders: set initiative off")
 	}
+	p = append(p, c.Limits.Problems()...)
 	return p
+}
+
+// KidLimits are when, and how much, a kid may chat with a kid sprig, in
+// the kid's timezone. The zero value is no limit.
+type KidLimits struct {
+	// Hours is when they may chat each day, like "07:00-20:00".
+	Hours string `yaml:"hours,omitempty" json:"hours"`
+	// SchoolNights ends chatting earlier on school nights (Sunday to
+	// Thursday evenings), like "20:00": from then until morning.
+	SchoolNights string `yaml:"school_nights,omitempty" json:"school_nights"`
+	// DailyMinutes and DailyMessages are a daily allowance (0 = none).
+	DailyMinutes  int `yaml:"daily_minutes,omitempty" json:"daily_minutes"`
+	DailyMessages int `yaml:"daily_messages,omitempty" json:"daily_messages"`
+}
+
+// Any reports whether any limit is set.
+func (l KidLimits) Any() bool { return l != KidLimits{} }
+
+// Problems lists what's wrong with the limits.
+func (l KidLimits) Problems() []string {
+	var p []string
+	if l.Hours != "" {
+		if s, e, err := ParseQuietHours(l.Hours); err != nil || s == e {
+			p = append(p, fmt.Sprintf("limits.hours %q must look like 07:00-20:00", l.Hours))
+		}
+	}
+	if l.SchoolNights != "" {
+		// An evening time, or one after midnight before morning: a school
+		// night never reaches into the school day.
+		if at, err := ParseClock(l.SchoolNights); err != nil || at >= schoolNightsEnd && at < 17*60 {
+			p = append(p, fmt.Sprintf("limits.school_nights %q must be an evening time like 20:00 (17:00 to 04:59)", l.SchoolNights))
+		}
+	}
+	if l.DailyMinutes < 0 || l.DailyMinutes > 1440 {
+		p = append(p, "limits.daily_minutes must be between 0 (no allowance) and 1440")
+	}
+	if l.DailyMessages < 0 || l.DailyMessages > 1000 {
+		p = append(p, "limits.daily_messages must be between 0 (no allowance) and 1000")
+	}
+	return p
+}
+
+// schoolNightsEnd is when school nights' late hours end: the next morning.
+const schoolNightsEnd = 5 * 60
+
+// Closed reports whether, at local time t, the limits' hours rule chatting
+// out, and why ("hours" or "school_night"; "" when open).
+func (l KidLimits) Closed(t time.Time) string {
+	minute := t.Hour()*60 + t.Minute()
+	if l.SchoolNights != "" {
+		if at, err := ParseClock(l.SchoolNights); err == nil {
+			// The evening this hour belongs to: after midnight, the day before.
+			night, late := t.Weekday(), false
+			if minute < schoolNightsEnd {
+				night = (night + 6) % 7
+				late = at >= schoolNightsEnd || minute >= at
+			} else {
+				late = at >= schoolNightsEnd && minute >= at
+			}
+			if late && night != time.Friday && night != time.Saturday {
+				return "school_night"
+			}
+		}
+	}
+	if l.Hours != "" {
+		if s, e, err := ParseQuietHours(l.Hours); err == nil && s != e {
+			open := minute >= s && minute < e
+			if s > e {
+				open = minute >= s || minute < e
+			}
+			if !open {
+				return "hours"
+			}
+		}
+	}
+	return ""
 }
 
 // ParseQuietHours parses "22:00-08:00" into minutes after midnight.

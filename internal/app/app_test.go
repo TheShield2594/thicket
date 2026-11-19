@@ -147,6 +147,8 @@ type fakeModel struct {
 	say, failMsg string
 	// safetyCalls counts kid-safety classifier calls.
 	safetyCalls int
+	// memoryReply, if set, is what memory review proposes.
+	memoryReply string
 }
 
 func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
@@ -211,6 +213,8 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		m.mu.Unlock()
 		msg := strings.ToLower(req.Messages[1].Content)
 		switch {
+		case strings.Contains(msg, "garbled"):
+			return text("I think this one is fine, probably?"), nil // not JSON
 		case strings.Contains(msg, "fail screen"):
 			return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
 		case strings.Contains(msg, "where i live"):
@@ -335,6 +339,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	switch {
 	case strings.Contains(sys, "You check whether a chat reply"):
 		return text(`{"in_character": true}`), nil
+	case strings.Contains(sys, "You maintain long-term memory") && m.memoryReply != "":
+		return text(m.memoryReply), nil
+	case strings.HasPrefix(sys, "You tell a parent"):
+		return text("Mostly dinosaurs, and a spelling test at Maple Grove Elementary."), nil
 	case strings.Contains(sys, "You maintain long-term memory"):
 		return text(`{"ops":[{"op":"add","scope":"shared","kind":"person","content":"Has a sister called Maya."}]}`), nil
 	case strings.HasPrefix(sys, "You search the web for an AI companion"):
@@ -358,6 +366,8 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
 		return text("Pip here! I'll sort your calendar."), nil
+	case strings.HasPrefix(sys, "You are Clover") && strings.Contains(last.Content, "saying hello for the very first time"):
+		return text("Hi! I'm Clover, and I love doodling. What should we draw?"), nil
 	}
 	if say != "" && strings.HasPrefix(sys, "You are Juni") {
 		return text(say), nil
@@ -381,6 +391,23 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	u := strings.ToLower(last.Content)
 	switch {
+	case strings.HasPrefix(u, "limit bramble to "):
+		// "limit bramble to N messages a day"
+		var n int
+		fmt.Sscanf(strings.TrimPrefix(u, "limit bramble to "), "%d", &n)
+		return toolCall("kid_limits", map[string]any{"sprig": "bramble", "daily_messages": n, "school_nights": "20:00"}), nil
+	case strings.Contains(u, "show me my weekly digest"):
+		return toolCall("weekly_digest", map[string]any{"action": "show"}), nil
+	case strings.Contains(u, "look up my school"):
+		return toolCall("web_search", map[string]any{"query": "Maple Grove Elementary 42 Elm Street events"}), nil
+	case strings.Contains(u, "look up dinosaurs"):
+		return toolCall("web_search", map[string]any{"query": "fun dinosaur facts"}), nil
+	case strings.HasPrefix(u, "open the map at "):
+		return toolCall("fetch_page", map[string]any{"url": strings.TrimPrefix(lastUserText(req.Messages), "open the map at ") + "/map?q=42+Elm+Street"}), nil
+	case strings.HasPrefix(u, "open the page at "):
+		return toolCall("fetch_page", map[string]any{"url": strings.TrimPrefix(lastUserText(req.Messages), "open the page at ") + "/dinosaurs"}), nil
+	case strings.Contains(u, "check the light at my house"):
+		return toolCall("mcp_ha__get_state", map[string]any{"entity": "light.porch", "note": "for Max Turner"}), nil
 	case strings.HasPrefix(u, "invite my partner "):
 		// "invite my partner Robin on web": invite_person with own_sprig.
 		name, app, _ := strings.Cut(strings.TrimPrefix(lastUserText(req.Messages), "invite my partner "), " on ")
@@ -400,6 +427,18 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("add_integration", map[string]any{"name": "notes", "transport": "http", "target": strings.TrimPrefix(lastUserText(req.Messages), "connect notes at "), "auth": "oauth"}), nil
 	case strings.Contains(u, "just signed in to notes"):
 		return text("You're in! Who should get the notes tools?"), nil
+	case strings.HasPrefix(u, "make a kid sprig clover for "):
+		// "make a kid sprig clover for KID[ with parents P1,P2]"
+		rest := strings.TrimPrefix(lastUserText(req.Messages), "make a kid sprig clover for ")
+		kid, parents, _ := strings.Cut(rest, " with parents ")
+		args := map[string]any{"action": "preview", "id": "clover", "name": "Clover", "role": "A gentle drawing buddy.",
+			"traits": []string{"curious", "kind"}, "kids": []string{kid}, "description": "Clover loves doodles."}
+		if parents != "" {
+			args["parents"] = strings.Split(parents, ",")
+		}
+		return toolCall("create_kid_sprig", args), nil
+	case strings.Contains(u, "create the kid sprig clover"):
+		return toolCall("create_kid_sprig", map[string]any{"action": "create", "id": "clover"}), nil
 	case strings.Contains(u, "create wren"):
 		return toolCall("create_character", map[string]any{"id": "wren"}), nil
 	case strings.HasPrefix(u, "profile: "):

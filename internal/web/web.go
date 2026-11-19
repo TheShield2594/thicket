@@ -363,6 +363,7 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/calendar/outputs/{id}", a.auth(a.v2RemoveOutput))
 	mux.HandleFunc("GET /api/kid-sprigs/{id}/chats", a.auth(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/kid-sprigs/{id}/access", a.auth(a.v2KidAccess))
+	mux.HandleFunc("PUT /api/kid-sprigs/{id}/limits", a.auth(a.v2KidLimits))
 	a.memoryRoutes(mux, "/api", a.auth)
 	return securityHeaders(mux)
 }

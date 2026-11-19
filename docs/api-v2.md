@@ -106,6 +106,7 @@ through family sprigs. The web app uses the same endpoints under `/api/`.
 | `POST /api/v2/kid-sprigs` | admins: `{"id": "bramble", "name": "Bramble", "role": "A friendly companion for Max.", "kids": [7], "parents": [1, 2]}` |
 | `GET /api/v2/kid-sprigs/{id}/chats?before=ID` | parents: the whole chat, newest first: `{"id", "role": "user" (the kid) or "assistant", "sprig", "kid_id", "content", "at"}` |
 | `PATCH /api/v2/kid-sprigs/{id}/access` | parents: `{"add_tools": ["mcp:fortnite/player_stats"], "add_allow": ["calendar"], "remove_tools": [], "remove_allow": []}` |
+| `PUT /api/v2/kid-sprigs/{id}/limits` | parents: time limits, replacing what's there: `{"hours": "07:00-20:00", "school_nights": "20:00", "daily_minutes": 30, "daily_messages": 0}` (empty or 0 = no limit). See [Time limits](household.md#time-limits) |
 
 Errors are `{"error": "…"}` with a 4xx status. `/api/v1` (scripts and CI)
 is unchanged; see [Local API](api.md).
