@@ -1,4 +1,4 @@
-# Thicket: one service, one volume. Paste this into Portainer as a stack,
+# Thicket, plus a sandbox computer for sprigs. Paste this into Portainer as a stack,
 # or run `docker compose up -d`. Nothing is required: without DISCORD_TOKEN or
 # TELEGRAM_TOKEN Thicket runs as a web app only (the sign-in link is in the
 # logs). Juni asks for everything else in chat.
@@ -60,11 +60,16 @@ services:
       THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
       THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}
       TZ: ${TZ:-UTC}
+      # Sprigs' computer (the sandbox service below). No sprig can use it until you
+      # ask Juni to give one access; commands ask for your approval. Set to "" to turn it off.
+      THICKET_SANDBOX_URL: ${THICKET_SANDBOX_URL-http://sandbox:7070}
+      THICKET_SANDBOX_TOKEN_FILE: /sandbox-auth/token
     # Lets the container reach a model server on this machine as host.docker.internal.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - thicket-data:/data
+      - sandbox-auth:/sandbox-auth
     # The web app, /dashboard, /health, /avatars, /hooks and /api/v1. Open
     # http://localhost:8080 on this machine, or put it behind your reverse proxy (with
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
@@ -73,8 +78,34 @@ services:
     # secrets:
     #   - thicket_secret_key
 
+  # Sprigs' own Linux computer: Debian with git, curl, python3 and friends,
+  # and a /workspace that keeps their files. It can't see Thicket's data or
+  # keys, and it isn't published on any port. It has internet access; remove
+  # it from the default network (or delete this service) if you'd rather not.
+  sandbox:
+    image: ghcr.io/theshield2594/thicket-sandbox:latest
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    container_name: thicket-sandbox
+    restart: unless-stopped
+    volumes:
+      - sandbox-workspace:/workspace
+      - sandbox-home:/home/sprig
+      - sandbox-auth:/sandbox-auth:ro
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   thicket-data:
+  sandbox-workspace:
+  sandbox-home:
+  sandbox-auth:
 
 # secrets:
 #   thicket_secret_key:

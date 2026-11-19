@@ -28,6 +28,7 @@ var Known = []Key{
 	{"cheap_model", "small model for memory review and personality checks", "string"},
 	{"budget.daily_usd", "daily spend cap in USD (0 = no cap)", "float"},
 	{"budget.monthly_usd", "monthly spend cap in USD (0 = no cap)", "float"},
+	{"auto_route", "when a message names no sprig, the cheap model picks who answers by role instead of the last sprig always keeping it (true/false; one small model call per such message)", "bool"},
 	{"consistency_check", "run the personality check on replies (true/false)", "bool"},
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
 	{"history_tokens", "how much of the conversation each reply includes, in tokens (0 = automatic: 12000 on OpenRouter, 3000 on a local model); older parts are summarised", "int"},
@@ -35,6 +36,7 @@ var Known = []Key{
 	{"web_search", "how sprigs with the web scope search: auto, openrouter (OpenRouter's web search, about $0.02 a search), searxng (your own SearXNG at search_url), or off", "choice"},
 	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
 	{"document_chars", "how much of a PDF's text is kept for follow-up questions, in characters (0 = none, at most 100000); it's re-sent with every later reply in the conversation", "int"},
+	{"transcribe_model", "model that transcribes voice messages; it must accept audio (OpenRouter model id)", "string"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
 }
 
@@ -76,8 +78,10 @@ func (s *Settings) defaults() map[string]string {
 		"budget.daily_usd":   strconv.FormatFloat(s.cfg.DailyBudgetUSD, 'f', -1, 64),
 		"budget.monthly_usd": strconv.FormatFloat(s.cfg.MonthlyBudgetUSD, 'f', -1, 64),
 		"consistency_check":  "true",
+		"auto_route":         "false",
 		"checkin_days":       "3",
 		"pdf_engine":         "auto",
+		"transcribe_model":   config.DefaultFallbackModel,
 		"web_search":         "auto",
 		"search_url":         s.cfg.SearchURL,
 		"history_tokens":     "0",

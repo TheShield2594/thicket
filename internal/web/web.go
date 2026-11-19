@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
@@ -74,6 +75,12 @@ type Adapter struct {
 	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)
 	// OIDC is the single sign-on provider, if one is configured.
 	OIDC *OIDCLogin
+	// For API v2: the engine's household operations, the calendar, kid
+	// sprig creation, and the address invites link to.
+	Household    Household
+	Calendar     *calendar.Service
+	MakeKidSprig KidSprigMaker
+	BaseURL      string
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration
@@ -301,6 +308,13 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
 	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
+	// The calendar and kid chats screens (same handlers as API v2).
+	mux.HandleFunc("GET /api/calendar", a.auth(a.v2Calendar))
+	mux.HandleFunc("GET /api/calendars", a.auth(a.v2Calendars))
+	mux.HandleFunc("POST /api/calendars", a.auth(a.v2AddCalendar))
+	mux.HandleFunc("DELETE /api/calendars/{id}", a.auth(a.v2RemoveCalendar))
+	mux.HandleFunc("GET /api/kid-sprigs/{id}/chats", a.auth(a.v2KidChats))
+	mux.HandleFunc("PATCH /api/kid-sprigs/{id}/access", a.auth(a.v2KidAccess))
 	return securityHeaders(mux)
 }
 
@@ -484,7 +498,7 @@ func abilities(c *character.Character) []string {
 func (a *Adapter) sprigViews(ctx context.Context, u *store.User) []sprigView {
 	counts, _ := a.DB.CountMemories(ctx, u.ID)
 	var out []sprigView
-	for _, c := range a.Chars.For(u.ID) { // shared sprigs and their own
+	for _, c := range a.Chars.For(u) { // shared sprigs and their own
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), FullName: c.Name, Role: c.Role, Color: c.Color, Avatar: a.avatarURL(c),
 			Host: c.Host, Traits: c.Personality.Traits, Abilities: abilities(c), Memories: counts[c.ID],
 			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours}
@@ -520,6 +534,8 @@ func (a *Adapter) me(w http.ResponseWriter, r *http.Request, u *store.User) {
 		"latest":          latest,
 		"shared_memories": counts[""],
 		"status":          st,
+		"parent_of":       a.parentOf(ctx, u),
+		"calendar":        a.Calendar != nil && !u.IsKid(),
 	})
 }
 
@@ -535,7 +551,7 @@ type routineView struct {
 func (a *Adapter) sprig(w http.ResponseWriter, r *http.Request, u *store.User) {
 	ctx := r.Context()
 	c, ok := a.Chars.Get(r.PathValue("id"))
-	if !ok || !c.UsableBy(u.ID) {
+	if !ok || !c.UsableBy(u) {
 		writeErr(w, http.StatusNotFound, "no such sprig")
 		return
 	}
@@ -568,7 +584,7 @@ func (a *Adapter) chatFor(u *store.User, chatID string) (string, bool) {
 		return "", true
 	}
 	c, exists := a.Chars.Get(sprig)
-	return sprig, exists && c.UsableBy(u.ID)
+	return sprig, exists && c.UsableBy(u)
 }
 
 func (a *Adapter) messages(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -596,15 +612,12 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		writeErr(w, http.StatusNotFound, "no such chat")
 		return
 	}
-	var body struct {
-		Text string `json:"text"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad request")
+	text, atts, err := readPost(w, r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text := strings.TrimSpace(body.Text)
-	if text == "" || len(text) > maxTextLen {
+	if (text == "" && len(atts) == 0) || len(text) > maxTextLen {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("messages must be 1 to %d characters", maxTextLen))
 		return
 	}
@@ -615,7 +628,7 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		writeErr(w, http.StatusServiceUnavailable, "Thicket is still starting up")
 		return
 	}
-	m, err := a.DB.AddWebMessage(r.Context(), u.ID, store.WebMessage{ChatID: chatID, Role: "user", Content: text})
+	m, err := a.DB.AddWebMessage(r.Context(), u.ID, store.WebMessage{ChatID: chatID, Role: "user", Content: withFileNames(text, atts)})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
@@ -626,7 +639,7 @@ func (a *Adapter) post(w http.ResponseWriter, r *http.Request, u *store.User) {
 		name = "you"
 	}
 	in := channel.Incoming{Channel: ChannelName, ChatID: chatID, MessageID: strconv.FormatInt(m.ID, 10),
-		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig}
+		UserID: strconv.FormatInt(u.ID, 10), UserName: name, Text: text, IsDM: true, UserRef: u.ID, Character: sprig, Attachments: atts}
 	go h(runCtx, in) // the turn outlives this request
 	writeJSON(w, http.StatusOK, map[string]any{"message": m})
 }
@@ -638,6 +651,10 @@ func (a *Adapter) deleteMessage(w http.ResponseWriter, r *http.Request, u *store
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
 		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	if u.IsKid() {
+		writeErr(w, http.StatusForbidden, "messages in kids' chats are kept for their parents")
 		return
 	}
 	done, err := a.DB.DeleteWebMessage(r.Context(), chatID, id)

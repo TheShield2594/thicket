@@ -25,11 +25,20 @@ type Message struct {
 	// They are never stored, only sent with the turn they arrived in.
 	Images []Image `json:"-"`
 	Files  []File  `json:"-"`
+	// Audio goes with a user message too, for transcription calls.
+	Audio []Audio `json:"-"`
 }
 
 // Image is a picture for a vision model, as an https or data: URL.
 type Image struct {
 	URL string
+}
+
+// Audio is a recording as raw base64, with its format ("ogg", "mp3",
+// "wav", "m4a", "webm" and so on; which ones work depends on the model).
+type Audio struct {
+	Data   string
+	Format string
 }
 
 // File is a document (a PDF) as a data: URL. OpenRouter reads it natively
@@ -40,10 +49,16 @@ type File struct {
 }
 
 type contentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *imageURL `json:"image_url,omitempty"`
-	File     *filePart `json:"file,omitempty"`
+	Type     string     `json:"type"`
+	Text     string     `json:"text,omitempty"`
+	ImageURL *imageURL  `json:"image_url,omitempty"`
+	File     *filePart  `json:"file,omitempty"`
+	Audio    *audioPart `json:"input_audio,omitempty"`
+}
+
+type audioPart struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
 }
 
 type imageURL struct {
@@ -58,7 +73,7 @@ type filePart struct {
 // MarshalJSON sends plain string content unless the message has media.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type plain Message
-	if len(m.Images) == 0 && len(m.Files) == 0 {
+	if len(m.Images) == 0 && len(m.Files) == 0 && len(m.Audio) == 0 {
 		return json.Marshal(plain(m))
 	}
 	parts := []contentPart{}
@@ -70,6 +85,9 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	}
 	for _, f := range m.Files {
 		parts = append(parts, contentPart{Type: "file", File: &filePart{Filename: f.Name, FileData: f.URL}})
+	}
+	for _, a := range m.Audio {
+		parts = append(parts, contentPart{Type: "input_audio", Audio: &audioPart{Data: a.Data, Format: a.Format}})
 	}
 	return json.Marshal(struct {
 		plain

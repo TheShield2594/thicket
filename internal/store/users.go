@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -21,7 +22,41 @@ type User struct {
 	Email string
 }
 
-func (u *User) IsAdmin() bool { return u.Role == "owner" || u.Role == "admin" }
+// Household roles. Owners and admins are household admins; members are
+// adults; kids talk only to the kid sprigs set up for them.
+const (
+	RoleOwner  = "owner"
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+	RoleKid    = "kid"
+)
+
+func (u *User) IsAdmin() bool { return u.Role == RoleOwner || u.Role == RoleAdmin }
+
+// IsKid reports whether the user is one of the household's kids.
+func (u *User) IsKid() bool { return u != nil && u.Role == RoleKid }
+
+// PersonID and Child let characters decide who may use them.
+func (u *User) PersonID() int64 { return u.ID }
+func (u *User) Child() bool     { return u.IsKid() }
+
+// ValidRole reports whether role is one a user can have.
+func ValidRole(role string) bool {
+	switch role {
+	case RoleOwner, RoleAdmin, RoleMember, RoleKid:
+		return true
+	}
+	return false
+}
+
+// dbRole maps a role to the stored role and kid flag (the role column
+// predates kids, who are stored as members with kid = 1).
+func dbRole(role string) (string, int) {
+	if role == RoleKid {
+		return RoleMember, 1
+	}
+	return role, 0
+}
 
 // Location returns the user's timezone, falling back to UTC.
 func (u *User) Location() *time.Location {
@@ -33,19 +68,23 @@ func (u *User) Location() *time.Location {
 	return time.UTC
 }
 
-const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at, email"
+const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at, email, kid"
 
 func scanUser(r interface{ Scan(...any) error }) (*User, error) {
 	var u User
 	var onb, seen sql.NullInt64
 	var created int64
-	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created, &u.Email); err != nil {
+	var kid int
+	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created, &u.Email, &kid); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	u.OnboardedAt, u.LastSeenAt, u.CreatedAt = timeOf(onb), timeOf(seen), time.Unix(created, 0)
+	if kid == 1 {
+		u.Role = RoleKid
+	}
 	return &u, nil
 }
 
@@ -65,8 +104,9 @@ func (s *Store) CreateUser(ctx context.Context, channel, ext, name, role string)
 	}
 	defer tx.Rollback()
 	now := s.unix()
-	res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, created_at) VALUES (?, ?, ?, ?, ?)",
-		channel, ext, name, role, now)
+	dbr, kid := dbRole(role)
+	res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		channel, ext, name, dbr, kid, now)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +242,11 @@ func (s *Store) UpdateUserProfile(ctx context.Context, id int64, name, tz string
 }
 
 func (s *Store) SetUserRole(ctx context.Context, id int64, role string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE users SET role = ? WHERE id = ?", role, id)
+	if !ValidRole(role) {
+		return fmt.Errorf("unknown role %q", role)
+	}
+	dbr, kid := dbRole(role)
+	_, err := s.db.ExecContext(ctx, "UPDATE users SET role = ?, kid = ? WHERE id = ?", dbr, kid, id)
 	return err
 }
 
@@ -213,5 +257,28 @@ func (s *Store) MarkOnboarded(ctx context.Context, id int64) error {
 
 func (s *Store) TouchUser(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE users SET last_seen_at = ? WHERE id = ?", s.unix(), id)
+	return err
+}
+
+// ErrUserInUse means a user has already used Thicket, so removing them
+// would lose their memories and history.
+var ErrUserInUse = errors.New("they've already used Thicket, so removing them isn't a simple undo")
+
+// DeleteFreshUser removes a user who never used Thicket: no messages,
+// memories or jobs. It undoes an invite.
+func (s *Store) DeleteFreshUser(ctx context.Context, id int64) error {
+	var msgs, mems, jobs int
+	var role string
+	if err := s.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations WHERE user_id = ?), (SELECT COUNT(*) FROM memories WHERE user_id = ?),
+		(SELECT COUNT(*) FROM jobs WHERE user_id = ?), (SELECT role FROM users WHERE id = ?)`, id, id, id, id).Scan(&msgs, &mems, &jobs, &role); err != nil {
+		return err
+	}
+	if role == RoleOwner {
+		return errors.New("the owner can't be removed")
+	}
+	if msgs+mems+jobs > 0 {
+		return ErrUserInUse
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
 	return err
 }

@@ -82,7 +82,10 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				continue
 			}
 		default:
-			if !t.char.HasScope(tool.Scope) {
+			// A kid sprig gets the calendar only when a parent allowed it
+			// (it can't hold the scope itself).
+			kidCalendar := tool.Name == "calendar" && t.char.IsKid() && t.char.Allows(character.AllowCalendar)
+			if !t.char.HasScope(tool.Scope) && !kidCalendar {
 				continue
 			}
 		}
@@ -125,6 +128,13 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 			}
 		}
 	}
+	if t.char.IsKid() {
+		for name, tool := range out {
+			if !kidMayUse(t.char, tool) {
+				delete(out, name)
+			}
+		}
+	}
 	return out
 }
 
@@ -137,12 +147,12 @@ func decode[T any](args json.RawMessage) (T, error) {
 }
 
 func (e *Engine) builtinTools() []*Tool {
-	return []*Tool{
+	return append([]*Tool{
 		// --- memory (every sprig has its own memory space) ---
 		{
 			Name:        "remember",
-			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks). Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
-			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
+			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks); 'family' = family memory about the whole household (family sprigs only: the household's diet, who lives here, routines), kept apart from anyone's private memories. Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
+			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine","family"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
 			Run:         e.toolRemember,
 		},
 		{
@@ -346,7 +356,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/*. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,
@@ -356,7 +366,7 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has). Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,
@@ -388,13 +398,16 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRequestSecret,
 		},
 		{
-			Name:        "add_integration",
-			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. After connecting, grant sprigs access with grant_tools.",
-			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}}},"required":["name","transport","target"]}`,
-			Scope:       "admin",
-			AdminOnly:   true,
-			ChatOnly:    true,
-			Run:         e.toolAddIntegration,
+			Name: "add_integration",
+			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
+				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
+				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
+			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
+				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
+			Scope:     "admin",
+			AdminOnly: true,
+			ChatOnly:  true,
+			Run:       e.toolAddIntegration,
 		},
 		{
 			Name:        "list_integrations",
@@ -424,8 +437,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_user",
-			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. To use Thicket from a second app themselves, people use link_account instead.",
-			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"}},"required":["user"]}`,
+			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. kid=true makes them a kid: they only talk to kid sprigs set up for them (an admin creates those; parents choose what they may use). To use Thicket from a second app themselves, people use link_account instead.",
+			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"},"kid":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
@@ -455,7 +468,7 @@ func (e *Engine) builtinTools() []*Tool {
 			AdminOnly:   true,
 			Run:         e.toolMemoryReviews,
 		},
-	}
+	}, e.calendarTools()...)
 }
 
 // --- memory tools ---
@@ -488,12 +501,16 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 	if a.Scope == "mine" {
 		char = t.char.ID
 	}
-	existing, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	family := a.Scope == "family"
+	if family && !e.writesFamilyMemory(t) {
+		return "", errors.New("only family sprigs talking with an adult keep family memory; use shared or mine")
+	}
+	existing, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
 	for _, m := range existing {
-		if m.Character == char && memory.Similarity(m.Content, content) >= 0.75 {
+		if m.Character == char && m.Household == family && memory.Similarity(m.Content, content) >= 0.75 {
 			if m.Locked && !a.UserAsked {
 				return fmt.Sprintf("Already remembered as #%d (set by the user).", m.ID), nil
 			}
@@ -507,7 +524,7 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 			return fmt.Sprintf("Updated memory #%d.", m.ID), nil
 		}
 	}
-	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked}
+	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked, Household: family}
 	if a.UserAsked {
 		m.Source = "user"
 	}
@@ -522,7 +539,7 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 }
 
 func (e *Engine) toolListMemories(ctx context.Context, t *turn, _ json.RawMessage) (string, error) {
-	mems, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	mems, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
@@ -533,7 +550,10 @@ func (e *Engine) toolListMemories(ctx context.Context, t *turn, _ json.RawMessag
 	var b strings.Builder
 	for _, m := range mems {
 		scope := "shared"
-		if m.Character != "" {
+		switch {
+		case m.Household:
+			scope = "family"
+		case m.Character != "":
 			scope = "just us"
 		}
 		extra := ""
@@ -555,13 +575,14 @@ func (e *Engine) toolForget(ctx context.Context, t *turn, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
-	visible, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	visible, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
 	ok := map[int64]bool{}
 	for _, m := range visible {
-		ok[m.ID] = true
+		// Family memory is forgotten only through a family sprig, by an adult.
+		ok[m.ID] = !m.Household || e.writesFamilyMemory(t)
 	}
 	var changes []store.MemoryChange
 	var missing []string
@@ -669,7 +690,7 @@ func (e *Engine) toolScheduleJob(ctx context.Context, t *turn, args json.RawMess
 	owner := t.char
 	if a.Owner != "" && a.Owner != t.char.ID {
 		c, ok := e.Chars.Get(a.Owner)
-		if !ok || !c.UsableBy(t.user.ID) {
+		if !ok || !c.UsableBy(t.user) {
 			return "", fmt.Errorf("there's no sprig with id %q", a.Owner)
 		}
 		owner = c
@@ -982,6 +1003,7 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	if err != nil {
 		return "", err
 	}
+	e.trailGrant(ctx, t.user, c, c.Tools, cp.Tools)
 	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "tool scopes changed", strings.Join(cp.Tools, ", "))
 	return fmt.Sprintf("%s now has: %s.", c.DisplayName(), strings.Join(cp.Tools, ", ")), nil
 }
@@ -1080,12 +1102,21 @@ func (e *Engine) toolRequestSecret(ctx context.Context, t *turn, args json.RawMe
 }
 
 func (e *Engine) toolAddIntegration(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-	a, err := decode[store.MCPServer](args)
+	in, err := decode[struct {
+		store.MCPServer
+		Auth         string `json:"auth"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}](args)
 	if err != nil {
 		return "", err
 	}
+	a := in.MCPServer
 	if !secrets.ValidName(a.Name) || strings.Contains(a.Name, "__") {
 		return "", errors.New("integration names are lowercase letters, digits and single underscores")
+	}
+	if in.Auth == "oauth" {
+		return e.addOAuthIntegration(ctx, t, a, in.ClientID, in.ClientSecret)
 	}
 	for k, v := range a.Headers {
 		if secrets.LooksLikeSecret(v) {
@@ -1163,6 +1194,9 @@ func (e *Engine) toolRemoveIntegration(ctx context.Context, t *turn, args json.R
 	if err := e.DB.DeleteMCPServer(ctx, a.Name); err != nil {
 		return "", err
 	}
+	if e.OAuth != nil {
+		_ = e.OAuth.Forget(ctx, a.Name)
+	}
 	e.logActivity(ctx, "info", "tool", t.char.ID, t.user.ID, "integration "+a.Name+" removed", "")
 	return "Removed " + a.Name + ". Character files still list its scope; that's harmless.", nil
 }
@@ -1172,6 +1206,7 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 		User  string `json:"user"`
 		App   string `json:"app"`
 		Admin bool   `json:"admin"`
+		Kid   bool   `json:"kid"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -1198,19 +1233,29 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 			return "", errors.New("pass a Discord user id or @mention")
 		}
 	}
-	role := "member"
-	if a.Admin {
-		role = "admin"
+	role := store.RoleMember
+	switch {
+	case a.Admin && a.Kid:
+		return "", errors.New("a kid can't be an admin")
+	case a.Admin:
+		role = store.RoleAdmin
+	case a.Kid:
+		role = store.RoleKid
 	}
 	if u, err := e.DB.UserByExternal(ctx, app, id); err == nil {
-		if u.Role != "owner" {
-			_ = e.DB.SetUserRole(ctx, u.ID, role)
+		if u.Role == store.RoleOwner {
+			return "They're the owner; their role doesn't change.", nil
+		}
+		if err := e.SetRole(ctx, t.user, u.ID, role); err != nil {
+			return "", err
 		}
 		return "They already have access; role is now " + role + ".", nil
 	}
-	if _, err := e.DB.CreateUser(ctx, app, id, "", role); err != nil {
+	u, err := e.DB.CreateUser(ctx, app, id, "", role)
+	if err != nil {
 		return "", err
 	}
+	e.addTrail(ctx, t.user.ID, "", store.TrailRole, fmt.Sprintf("invited %s user %s as %s", app, id, role), "", &trailUndo{Type: "remove_user", UserID: u.ID})
 	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited "+app+" user "+id+" as "+role, "")
 	return "Invited. When they DM me I'll welcome them; their memories stay separate from yours.", nil
 }

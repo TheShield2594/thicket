@@ -63,16 +63,64 @@ Home Assistant ships an MCP Server integration.
 Device control tools change things in your house, so they need your
 approval by default (see below).
 
-## Notion, Gmail and other OAuth services
+## Services you sign in to (OAuth)
 
-v1 does not do OAuth sign-in flows. Hosted MCP servers that *only* accept
-OAuth (such as Notion's hosted server) can't be connected directly yet.
-Options:
+Many hosted MCP servers (Notion, Linear, Sentry, Atlassian and others)
+don't take a token: you sign in to them. Ask Juni:
 
-- Use a server that accepts a token: for example run Notion's open-source
-  MCP server in its own container with an integration token, and connect
-  over HTTP.
-- Put an MCP gateway in front that handles the OAuth for you.
+> Connect Notion at https://mcp.notion.com/mcp
+
+She adds it with sign-in, and Thicket posts you a link (Thicket writes
+it, not the model). Open it, sign in and allow access, and your browser
+comes back to Thicket's `/oauth/callback`. The integration connects and
+Juni asks which sprigs should use it.
+
+How it works, following the MCP authorization spec:
+
+- Thicket asks the server where to sign in (its protected-resource
+  metadata, then the authorization server's metadata) and registers
+  itself as an app there automatically.
+- The link uses PKCE and a one-time state, and works once, for 15
+  minutes.
+- Tokens are stored encrypted like any secret (as `oauth_<name>`), never
+  in the integration's settings, and never shown to the model or written
+  to logs. They're refreshed before they expire, and again if the server
+  refuses one. If the server stops accepting the sign-in, the integration
+  shows "not signed in": ask Juni to connect it again for a new link.
+- Removing the integration deletes its tokens.
+
+**The callback address.** After signing in, your browser is sent to
+`THICKET_PUBLIC_URL/oauth/callback`. Without `THICKET_PUBLIC_URL` that's
+`http://localhost:8080`, which only works in a browser on the machine
+running Thicket. Set `THICKET_PUBLIC_URL` to sign in from anywhere. Only
+your browser needs to reach it, not the service.
+
+**Servers that don't register apps automatically.** Create an OAuth app
+in the service's developer settings with the redirect URL above, then
+give Juni its client id, and its secret when she asks for it (it goes
+into the encrypted store like any other).
+
+## Composio, for quick connectors (optional)
+
+[Composio](https://composio.dev) hosts connectors for hundreds of apps and
+serves them over MCP. It's an adapter like any other integration, not
+part of Thicket: nothing in Thicket depends on it, and you can leave it
+out.
+
+1. In Composio, create an MCP server with the apps you want and copy its
+   MCP URL and API key.
+2. Tell Juni: "Connect Composio at <the URL>." Send the key when she asks
+   for it (`request_secret`), and she adds it as an `http` integration
+   with the key in the header Composio's docs give.
+3. Grant sprigs its tools one by one, as with any integration.
+
+**Privacy.** With Composio, your sign-ins to those apps are held by
+Composio and every call goes through their servers. For privacy-sensitive
+services (Gmail, calendars, notes), prefer a direct MCP server you run
+yourself or sign in to directly ([OAuth](#services-you-sign-in-to-oauth)),
+or, for calendars, Thicket's own read-only [calendar](calendar.md)
+(CalDAV and ICS). Approvals and permission levels apply to Composio's
+tools like any other.
 
 ## Approvals and permission levels
 

@@ -249,3 +249,26 @@ func (s *Store) JobRuns(ctx context.Context, jobID int64, limit int) ([]JobRun, 
 	}
 	return out, rows.Err()
 }
+
+// JobRunsBetween returns a user's job runs that started in [from, to).
+func (s *Store) JobRunsBetween(ctx context.Context, userID int64, from, to time.Time) ([]JobRun, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.job_id, r.started_at, r.finished_at, r.status, r.output, r.error, r.cost_usd
+		FROM job_runs r JOIN jobs j ON j.id = r.job_id WHERE j.user_id = ? AND r.started_at >= ? AND r.started_at < ? ORDER BY r.started_at LIMIT 2000`,
+		userID, from.Unix(), to.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JobRun
+	for rows.Next() {
+		var r JobRun
+		var start int64
+		var fin sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.JobID, &start, &fin, &r.Status, &r.Output, &r.Error, &r.CostUSD); err != nil {
+			return nil, err
+		}
+		r.StartedAt, r.FinishedAt = time.Unix(start, 0), timeOf(fin)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

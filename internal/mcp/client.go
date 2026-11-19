@@ -128,7 +128,15 @@ func DialStdio(ctx context.Context, command string, args []string, env map[strin
 
 // DialHTTP connects to a Streamable HTTP MCP endpoint.
 func DialHTTP(ctx context.Context, url string, headers map[string]string) (*Client, error) {
-	h := &httpT{url: url, headers: headers, http: &http.Client{Timeout: 90 * time.Second}}
+	return dialHTTP(ctx, url, headers, nil)
+}
+
+// TokenFunc returns the bearer token for a request; force asks for a new
+// one because the server refused the last.
+type TokenFunc func(ctx context.Context, force bool) (string, error)
+
+func dialHTTP(ctx context.Context, url string, headers map[string]string, token TokenFunc) (*Client, error) {
+	h := &httpT{url: url, headers: headers, token: token, http: &http.Client{Timeout: 90 * time.Second}}
 	c := &Client{t: h}
 	if err := c.initialize(ctx); err != nil {
 		return nil, err
@@ -360,6 +368,7 @@ func (s *stdio) close() error {
 type httpT struct {
 	url     string
 	headers map[string]string
+	token   TokenFunc // OAuth: the Authorization token per request
 	http    *http.Client
 	mu      sync.Mutex
 	session string
@@ -370,6 +379,24 @@ func (h *httpT) post(ctx context.Context, req any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	resp, err := h.postOnce(ctx, b, false)
+	if err == nil && resp.StatusCode == http.StatusUnauthorized && h.token != nil {
+		// The access token was revoked or expired early: refresh, retry once.
+		resp.Body.Close()
+		resp, err = h.postOnce(ctx, b, true)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		return nil, fmt.Errorf("MCP HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return resp, nil
+}
+
+func (h *httpT) postOnce(ctx context.Context, b []byte, refresh bool) (*http.Response, error) {
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
@@ -379,6 +406,13 @@ func (h *httpT) post(ctx context.Context, req any) (*http.Response, error) {
 	hr.Header.Set("MCP-Protocol-Version", protocolVersion)
 	for k, v := range h.headers {
 		hr.Header.Set(k, v)
+	}
+	if h.token != nil {
+		tok, err := h.token(ctx, refresh)
+		if err != nil {
+			return nil, err
+		}
+		hr.Header.Set("Authorization", "Bearer "+tok)
 	}
 	h.mu.Lock()
 	if h.session != "" {
@@ -393,11 +427,6 @@ func (h *httpT) post(ctx context.Context, req any) (*http.Response, error) {
 		h.mu.Lock()
 		h.session = sid
 		h.mu.Unlock()
-	}
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		resp.Body.Close()
-		return nil, fmt.Errorf("MCP HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return resp, nil
 }

@@ -1,0 +1,67 @@
+{
+  "name": "thicket-desktop",
+  "productName": "Thicket",
+  "version": "0.1.0",
+  "description": "Thicket in its own window, with a tray icon and native notifications.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "Thicket",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check setup/setup.js && node --check setup/offline.js && node --check lib/config.js && node --test test/*.test.js",
+    "dist": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "app.thicket.desktop",
+    "productName": "Thicket",
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "setup/**",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Thicket records voice messages when you tap the microphone."
+      }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "maintainer": "Thicket",
+      "synopsis": "Your self-hosted family of AI companions"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheShield2594/thicket.git"
+  },
+  "homepage": "https://github.com/TheShield2594/thicket"
+}

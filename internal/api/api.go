@@ -173,6 +173,9 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 		Text         string `json:"text"`
 		Sprig        string `json:"sprig"`
 		Conversation string `json:"conversation"`
+		// NoApprovals stops this message from answering an approval
+		// prompt (the MCP server always sets it).
+		NoApprovals bool `json:"no_approvals"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxMessage*4)).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "body must be JSON: {\"text\": \"…\"}")
@@ -193,7 +196,7 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	}
 	if req.Sprig != "" {
 		ch, ok := a.Chars.FindByName(req.Sprig) // id, name or nickname
-		if !ok || !ch.UsableBy(c.user.ID) {
+		if !ok || !ch.UsableBy(c.user) {
 			fail(w, http.StatusNotFound, fmt.Sprintf("no sprig %q", req.Sprig))
 			return
 		}
@@ -232,6 +235,7 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	err := a.Engine.Handle(ctx, channel.Incoming{
 		Channel: "api", ChatID: chatID, MessageID: "api-" + strconv.FormatInt(a.seq.Add(1), 10),
 		UserID: strconv.FormatInt(c.user.ID, 10), UserName: c.user.Name, Text: text, IsDM: true, UserRef: c.user.ID,
+		NoApprovals: req.NoApprovals,
 	})
 	a.mu.Lock()
 	out := append([]Reply{}, replies...)
@@ -273,7 +277,7 @@ func (a *API) getSprigs(w http.ResponseWriter, _ *http.Request, c caller) {
 		Host bool   `json:"host,omitempty"`
 	}
 	var out []sprig
-	for _, ch := range a.Chars.For(c.user.ID) {
+	for _, ch := range a.Chars.For(c.user) {
 		out = append(out, sprig{ch.ID, ch.DisplayName(), ch.Role, ch.Host})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sprigs": out})

@@ -160,7 +160,7 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 }
 
 func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]llm.Message, error) {
-	mems, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	mems, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	sys := buildSystemPrompt(promptInput{
 		skills: skills,
-		char:   t.char, user: t.user, roster: e.Chars.For(t.user.ID), memories: selected, now: e.now(),
+		char:   t.char, user: t.user, roster: e.Chars.For(t.user), memories: selected, now: e.now(),
 		jobMode: t.jobMode(), onboarded: !t.user.OnboardedAt.IsZero(),
 		hostTools: t.char.HasScope(character.ScopeCharacters), isDM: t.isDM, commons: e.isCommons(t.chatRef),
 	})

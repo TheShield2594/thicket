@@ -25,6 +25,8 @@ const S = {
   lastRead: load('thicket.read', {}),
   online: true,
   session: 0,          // bumped on sign-out; stale responses are dropped
+  view: null,          // 'calendar' or 'kid:<sprig id>' instead of chats
+  cal: { start: null, layers: load('thicket.cal.layers', { events: true, jobs: true, outputs: true }), hide: load('thicket.cal.hide', {}) },
 };
 
 // ---------- small helpers ----------
@@ -79,6 +81,12 @@ const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2 2M15 8l2 2"/>',
   pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  clip: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
 };
 function icon(name, cls) {
@@ -92,7 +100,9 @@ function icon(name, cls) {
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || 'GET', credentials: 'same-origin', headers: { 'X-Thicket': '1' } };
-  if (opts.body !== undefined) {
+  if (opts.body instanceof FormData) {
+    init.body = opts.body; // the browser sets the multipart boundary
+  } else if (opts.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(opts.body);
   }
@@ -511,7 +521,8 @@ function notify(chat, m) {
   const s = S.sprigs.get(m.character);
   try {
     const n = new Notification(s?.name || 'Thicket', { body: plain(m.content).slice(0, 180), tag: chat, icon: '/app/icon-192.png' });
-    n.onclick = () => { window.focus(); openChat(chat); n.close(); };
+    // In the desktop app, thicketDesktop brings a hidden window back.
+    n.onclick = () => { window.thicketDesktop?.show(); window.focus(); openChat(chat); n.close(); };
   } catch { /* some platforms only allow notifications from the service worker */ }
 }
 
@@ -563,16 +574,20 @@ async function loadRoutines(id) {
 }
 
 let tempId = -1;
-async function send(chat, text) {
+// fileLine is how a sent file shows in the chat (the server stores the same).
+const fileLine = (f) => (f.type.startsWith('audio/') ? '🎤 ' : '📎 ') + f.name;
+
+async function send(chat, text, files = []) {
   text = text.trim();
-  if (!text) return;
+  if (!text && !files.length) return;
   const c = S.chats.get(chat);
-  const m = { id: tempId--, chat, role: 'user', content: text, at: new Date().toISOString(), pending: true };
+  const content = [text, ...files.map(fileLine)].filter(Boolean).join('\n');
+  const m = { id: tempId--, chat, role: 'user', content, text, files, at: new Date().toISOString(), pending: true };
   c.messages.push(m);
   renderFeed(chat, m.id, true);
   const session = S.session;
   try {
-    const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages`, { method: 'POST', body: { text } });
+    const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages`, { method: 'POST', body: files.length ? formOf(text, files) : { text } });
     if (session !== S.session) return; // signed out meanwhile
     const i = c.messages.indexOf(m);
     const dup = c.messages.some((x) => x.id === res.message.id);
@@ -586,9 +601,17 @@ async function send(chat, text) {
   renderFeed(chat);
 }
 
+function formOf(text, files) {
+  const fd = new FormData();
+  fd.append('text', text);
+  for (const f of files) fd.append('file', f, f.name);
+  return fd;
+}
+
 // ---------- layout actions ----------
 
 async function openChat(chat, opts = {}) {
+  S.view = null;
   const at = S.panes.indexOf(chat);
   if (at >= 0) {
     S.focus = at;
@@ -623,6 +646,7 @@ function closePane(chat) {
 }
 
 function goHome() {
+  S.view = null;
   S.panes = [];
   S.focus = 0;
   persistLayout();
@@ -689,7 +713,7 @@ function renderShell() {
     $main = h('main.main');
     $app.replaceChildren(h('div.shell', {}, $sidebar, $main));
   }
-  $app.firstChild.classList.toggle('in-chat', S.panes.length > 0);
+  $app.firstChild.classList.toggle('in-chat', S.panes.length > 0 || !!S.view);
   renderSidebar();
   renderMain();
 }
@@ -718,8 +742,18 @@ function sprigRow(chat) {
   !active && h('button.split', { title: 'Open side by side (or Shift-click)', 'aria-label': `Open ${name} side by side`, onclick: (e) => { e.stopPropagation(); openChat(chat, { split: true }); } }, icon('split')));
 }
 
+// desktopBadge shows the unread count on the dock or launcher icon when
+// running in the desktop app.
+let lastBadge = -1;
+function desktopBadge() {
+  if (!window.thicketDesktop || !S.me) return;
+  const n = [...S.latest.keys()].filter(unread).length;
+  if (n !== lastBadge) { lastBadge = n; window.thicketDesktop.setBadge(n); }
+}
+
 function renderSidebar() {
   if (!$sidebar || !S.me) return;
+  desktopBadge();
   const theme = document.documentElement.dataset.theme || 'auto';
   const q = S.filter.toLowerCase();
   const matches = (id) => {
@@ -763,6 +797,7 @@ function renderSidebar() {
       return h('button', { role: 'listitem', title: s.role, onclick: () => openChat(chatOf(id)) }, orb(s, 46), h('span', {}, s.name));
     })),
     h('div.sb-scroll', {},
+      !q && householdRows(),
       matches(ROOM) && [h('div.sb-label', {}, 'Rooms'), sprigRow(chatOf(ROOM))],
       ids.length > 0 && [h('div.sb-label', {}, h('span', {}, 'Sprigs'), h('span', {}, String(S.order.length))), ids.map((id) => sprigRow(chatOf(id)))],
       q && !ids.length && !matches(ROOM) && h('div.d-empty', { style: { padding: '12px' } }, 'Nothing matches “' + S.filter + '”.')),
@@ -771,7 +806,7 @@ function renderSidebar() {
       meter,
       h('div.me', {},
         h('span.me-avatar', { 'aria-hidden': 'true' }, initials(u.name || 'You')),
-        h('div.who', {}, h('b', {}, u.name || 'You'), h('small', {}, u.role === 'owner' ? 'Owner' : u.role === 'admin' ? 'Admin' : 'Member')),
+        h('div.who', {}, h('b', {}, u.name || 'You'), h('small', {}, { owner: 'Owner', admin: 'Admin', kid: 'Kid' }[u.role] || 'Member')),
         h('button.icon-btn', { title: 'Notifications', 'aria-label': 'Toggle notifications', 'aria-pressed': load('thicket.notify', false) ? 'true' : 'false', onclick: toggleNotify }, icon('bell')),
         h('button.icon-btn', { title: 'Account: password and sessions', 'aria-label': 'Account', onclick: showAccount }, icon('key')),
         h('button.icon-btn', { title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, icon('out')))));
@@ -781,7 +816,9 @@ function renderSidebar() {
 function renderMain() {
   if (!$main) return;
   const kids = [];
-  if (S.panes.length === 0) {
+  if (S.view) {
+    kids.push(renderView());
+  } else if (S.panes.length === 0) {
     kids.push(renderHome());
   } else {
     const wrap = h('div.panes' + (S.panes.length > 1 ? '.multi' : ''));
@@ -827,6 +864,252 @@ function renderHome() {
       h('div.section-title', {}, h('h2', {}, 'Your sprigs'), h('small', {}, 'Shift-click to open side by side')),
       h('div.cards', {}, cards))),
     box);
+}
+
+// ---------- household: calendar and kid chats ----------
+
+function householdRows() {
+  const rows = [];
+  if (S.me.calendar) rows.push(viewRow('calendar', 'Calendar', 'Your calendars, sprig jobs and what sprigs added', icon('calendar')));
+  for (const k of S.me.parent_of || []) {
+    rows.push(viewRow('kid:' + k.id, `${k.name}’s chats`, 'With ' + k.kids.map((x) => x.name).join(', '), orb(k, 42)));
+  }
+  return rows.length ? [h('div.sb-label', {}, 'Household'), rows] : null;
+}
+
+function viewRow(view, name, sub, mark) {
+  const active = S.view === view;
+  return h('div.row' + (active ? '.active' : ''), {
+    role: 'button', tabindex: 0, 'aria-current': active ? 'true' : null,
+    onclick: () => openView(view),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openView(view); } },
+  }, h('span.view-mark', { 'aria-hidden': 'true' }, mark), h('div.meta', {}, h('div.top', {}, h('span.name', {}, name)), h('div.preview', {}, sub)));
+}
+
+function openView(view) {
+  S.view = view;
+  S.panes = [];
+  S.focus = 0;
+  renderShell();
+}
+
+function renderView() {
+  if (S.view === 'calendar') return renderCalendar();
+  const kid = (S.me.parent_of || []).find((k) => 'kid:' + k.id === S.view);
+  if (kid) return renderKidChats(kid);
+  return h('section.view', {}, h('div.view-scroll', {}, h('p.d-empty', {}, 'Nothing here.')));
+}
+
+function viewHead(title, sub, mark, ...actions) {
+  return h('header.pane-head.view-head', {},
+    h('button.icon-btn.back', { 'aria-label': 'Back', onclick: goHome }, icon('back')),
+    mark, h('div.title', {}, h('b', {}, title), h('small', {}, sub)),
+    actions.length > 0 && h('div.actions', {}, actions));
+}
+
+// --- calendar ---
+
+const LAYERS = [['events', 'Events'], ['jobs', 'Sprig jobs'], ['outputs', 'Sprig outputs']];
+
+function weekStart(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // Monday
+  return x;
+}
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function renderCalendar() {
+  if (!S.cal.start) S.cal.start = weekStart(new Date());
+  const start = S.cal.start;
+  const end = new Date(start); end.setDate(end.getDate() + 7);
+  const last = new Date(end); last.setDate(last.getDate() - 1);
+  const range = `${start.toLocaleDateString([], { day: 'numeric', month: 'short' })} – ${last.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  const move = (days) => { const d = new Date(S.cal.start); d.setDate(d.getDate() + days); S.cal.start = d; renderMain(); };
+  const body = h('div.cal-body', {}, h('p.d-empty', {}, 'Loading…'));
+  const filters = h('div.cal-filters');
+  const el = h('section.view', { 'aria-label': 'Calendar' },
+    viewHead('Calendar', range, h('span.view-mark', { 'aria-hidden': 'true' }, icon('calendar')),
+      h('button.chip', { onclick: () => move(-7), 'aria-label': 'Previous week' }, '‹'),
+      h('button.chip', { onclick: () => { S.cal.start = weekStart(new Date()); renderMain(); } }, 'This week'),
+      h('button.chip', { onclick: () => move(7), 'aria-label': 'Next week' }, '›')),
+    h('div.view-scroll', {}, h('div.view-inner', {}, filters, body, calendarSources())));
+  loadCalendar(start, end, filters, body);
+  return el;
+}
+
+async function loadCalendar(start, end, filters, body) {
+  const session = S.session;
+  const layers = LAYERS.map(([k]) => k).filter((k) => S.cal.layers[k] !== false);
+  const hide = Object.keys(S.cal.hide).filter((k) => S.cal.hide[k]);
+  let res;
+  try {
+    res = await api(`/api/calendar?from=${isoDay(start)}&to=${isoDay(end)}&layers=${layers.join(',')}&hide=${encodeURIComponent(hide.join(','))}`);
+  } catch (e) {
+    if (session === S.session) body.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the calendar: ' + e.message));
+    return;
+  }
+  if (session !== S.session || !body.isConnected) return;
+  // Layer toggles, then one toggle per sprig.
+  const sprigIds = new Set([...Object.keys(res.sprigs || {}), ...Object.keys(S.cal.hide)]);
+  const sprigInfo = (id) => res.sprigs?.[id] || S.sprigs.get(id) || { name: id };
+  filters.replaceChildren(
+    h('div.chips.left', { role: 'group', 'aria-label': 'Layers' }, LAYERS.map(([k, label]) => toggleChip(label, S.cal.layers[k] !== false, () => {
+      S.cal.layers = { ...S.cal.layers, [k]: S.cal.layers[k] === false }; save('thicket.cal.layers', S.cal.layers); renderMain();
+    }))),
+    sprigIds.size > 0 && h('div.chips.left', { role: 'group', 'aria-label': 'Sprigs' }, [...sprigIds].map((id) => {
+      const s = sprigInfo(id);
+      return toggleChip(s.name, !S.cal.hide[id], () => {
+        S.cal.hide = { ...S.cal.hide, [id]: !S.cal.hide[id] }; if (!S.cal.hide[id]) delete S.cal.hide[id];
+        save('thicket.cal.hide', S.cal.hide); renderMain();
+      }, orb({ ...s, color: s.color || 'var(--accent)' }, 18));
+    })));
+  const days = [];
+  for (let i = 0; i < 7; i++) { const d = new Date(start); d.setDate(d.getDate() + i); days.push(d); }
+  const today = isoDay(new Date());
+  const byDay = new Map(days.map((d) => [isoDay(d), []]));
+  for (const it of res.items) {
+    const k = it.all_day ? it.start.slice(0, 10) : isoDay(new Date(it.start));
+    byDay.get(k)?.push(it);
+  }
+  body.replaceChildren(...[
+    (res.errors || []).length > 0 && h('div.cal-warn', { role: 'status' }, 'Couldn’t load: ' + res.errors.join('; ')),
+    h('div.agenda', {}, days.map((d) => {
+      const items = byDay.get(isoDay(d));
+      return h('section.ag-day' + (isoDay(d) === today ? '.today' : ''), { 'aria-label': d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }) },
+        h('h3', {}, h('span', {}, d.toLocaleDateString([], { weekday: 'short' })), h('b', {}, String(d.getDate()))),
+        h('div.ag-items', {}, items.length ? items.map((it) => calItem(it, sprigInfo)) : h('p.d-empty', {}, 'Nothing')));
+    }))].filter(Boolean));
+}
+
+function toggleChip(label, on, onclick, mark) {
+  return h('button.chip.toggle', { 'aria-pressed': on ? 'true' : 'false', onclick }, mark, label);
+}
+
+function calItem(it, sprigInfo) {
+  const hasEnd = it.end && it.layer !== 'jobs' && new Date(it.end) > new Date(it.start);
+  const when = it.all_day ? 'All day' : clock(it.start) + (hasEnd ? '–' + clock(it.end) : '');
+  const s = it.sprig ? sprigInfo(it.sprig) : null;
+  const meta = [];
+  if (it.layer === 'events') meta.push(h('span', {}, it.calendar + (it.shared ? ' · shared' : '')), it.location && h('span', {}, it.location));
+  if (it.layer === 'jobs') meta.push(h('span', {}, s?.name || it.sprig), h('span.badge.' + it.status, {}, it.status));
+  if (it.layer === 'outputs') {
+    meta.push(h('span', {}, 'Added by ' + (s?.name || it.sprig) + (it.shared ? ' · household' : '')));
+    if (it.source_url) meta.push(h('a', { href: it.source_url, target: '_blank', rel: 'noopener noreferrer' }, icon('link'), it.source_label || 'Source'));
+    else if (it.source_label) meta.push(h('span', {}, 'From ' + it.source_label));
+  }
+  return h('div.ag-item.' + it.layer, { style: { '--c': s?.color || 'var(--accent)' } },
+    h('span.ag-time', {}, when),
+    s ? orb({ ...s, color: s.color || 'var(--accent)' }, 26) : h('span.ag-dot', { 'aria-hidden': 'true' }),
+    h('div.ag-body', {}, h('b', {}, it.title || '(no title)'), h('div.ag-meta', {}, meta), it.details && h('p', {}, it.details)));
+}
+
+function calendarSources() {
+  const list = h('div.cal-list', {}, h('p.d-empty', {}, 'Loading…'));
+  const load = async () => {
+    try {
+      const res = await api('/api/calendars');
+      list.replaceChildren(...(res.calendars.length ? res.calendars.map((c) => h('div.cal-src', {},
+        h('div', {}, h('b', {}, c.name), h('small', {}, `${c.kind === 'caldav' ? 'CalDAV' : 'Calendar feed'}${c.shared ? ' · shared with the household' : ''}${c.mine ? '' : ' · someone else’s'}`),
+          c.last_error && h('small.err', {}, c.last_error)),
+        c.mine && h('button.chip', { onclick: async () => {
+          if (!confirm(`Disconnect ${c.name}? Thicket forgets its address and password.`)) return;
+          try { await api('/api/calendars/' + c.id, { method: 'DELETE' }); toast('Disconnected'); load(); renderMain(); } catch (e) { toast(e.message); }
+        } }, 'Disconnect'))) : [h('p.d-empty', {}, 'No calendars connected yet.')]));
+    } catch (e) { list.replaceChildren(h('p.d-empty', {}, 'Couldn’t load your calendars: ' + e.message)); }
+  };
+  load();
+  const [nameL, name] = field('Name', { placeholder: 'Work', required: true, maxlength: 60 });
+  const kind = h('select.field', { 'aria-label': 'Kind' }, h('option', { value: 'ics' }, 'Calendar feed (ICS or webcal link)'), h('option', { value: 'caldav' }, 'CalDAV (Nextcloud, Fastmail, iCloud)'));
+  const [urlL, url] = field('Address', { placeholder: 'https://… or webcal://…', required: true, autocomplete: 'off', spellcheck: 'false' });
+  const [userL, user] = field('Username', { autocomplete: 'off' });
+  const [pwL, pw] = field('Password (an app password works best)', { type: 'password', autocomplete: 'new-password' });
+  const dav = h('div.cal-dav', { hidden: true }, userL, pwL);
+  kind.onchange = () => { dav.hidden = kind.value !== 'caldav'; };
+  const shared = h('input', { type: 'checkbox' });
+  const err = h('p.err', { role: 'alert' });
+  const btn = h('button.btn', { type: 'submit' }, 'Connect');
+  const form = h('form.cal-form', { onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = ''; btn.disabled = true; btn.textContent = 'Checking it loads…';
+    try {
+      await api('/api/calendars', { method: 'POST', body: { name: name.value.trim(), kind: kind.value, url: url.value.trim(), username: user.value.trim(), password: pw.value, shared: shared.checked } });
+      form.reset(); dav.hidden = true; toast('Connected'); load(); renderMain();
+    } catch (ex) { err.textContent = ex.message; }
+    btn.disabled = false; btn.textContent = 'Connect';
+  } }, nameL, h('label.field-label', {}, 'Kind', kind), urlL, dav,
+  h('label.check', {}, shared, 'Share with the household'), err, btn,
+  h('p.d-empty', {}, 'Read-only: Thicket never changes your calendars. The address and password are stored encrypted.'));
+  return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connected calendars')), list,
+    h('details.cal-add', {}, h('summary', {}, 'Connect a calendar'), form));
+}
+
+// --- kid chats ---
+
+function renderKidChats(kid) {
+  const names = kid.kids.map((k) => k.name).join(', ');
+  const feed = h('div.kid-feed', {}, h('p.d-empty', {}, 'Loading…'));
+  const el = h('section.view', { 'aria-label': `${kid.name}’s chats` },
+    viewHead(`${kid.name}’s chats`, `With ${names} · read only`, orb(kid, 38)),
+    h('div.view-scroll', {}, h('div.view-inner', {},
+      h('div.kid-note', {}, icon('shield'), h('p', {}, `You set up ${kid.name}, so you can read every chat. You won’t get routine notifications, only a safety alert if something worrying comes up. ${names} can’t delete these messages.`)),
+      kidAccess(kid), h('div.section-title', {}, h('h2', {}, 'Chats')), feed)));
+  loadKidChats(kid, feed, 0, []);
+  return el;
+}
+
+async function loadKidChats(kid, feed, before, shown) {
+  const session = S.session;
+  let res;
+  try { res = await api(`/api/kid-sprigs/${encodeURIComponent(kid.id)}/chats${before ? '?before=' + before : ''}`); }
+  catch (e) { if (session === S.session) feed.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the chats: ' + e.message)); return; }
+  if (session !== S.session || !feed.isConnected) return;
+  const all = [...res.messages.slice().reverse(), ...shown]; // oldest first
+  const kidName = (id) => kid.kids.find((k) => k.id === id)?.name || 'Kid';
+  const nodes = [];
+  let day = '';
+  for (const m of all) {
+    const d = dayLabel(new Date(m.at));
+    if (d !== day) { day = d; nodes.push(h('div.day', {}, h('span', {}, d))); }
+    const mine = m.role === 'user';
+    nodes.push(h('div.kid-msg' + (mine ? '.kid' : '.sprig'), {},
+      h('div.kid-who', {}, mine ? kidName(m.kid_id) : (S.sprigs.get(m.sprig)?.name || (m.sprig === kid.id ? kid.name : m.sprig)), h('span', {}, clock(m.at))),
+      h('div.kid-text', { html: mine ? null : md(m.content) }, mine ? m.content : null)));
+  }
+  feed.replaceChildren(...[
+    res.more && h('button.chip.load-older', { onclick: () => loadKidChats(kid, feed, Math.min(...all.map((m) => m.id)), all) }, 'Load older'),
+    ...(nodes.length ? nodes : [h('p.d-empty', {}, `No chats with ${kid.name} yet.`)])].filter(Boolean));
+}
+
+function kidAccess(kid) {
+  const box = h('section.kid-access');
+  const render = () => {
+    const tools = kid.tools || [];
+    const allow = kid.allow || [];
+    const toolInput = h('input.field', { placeholder: 'web, or mcp:<integration>/<tool>', 'aria-label': 'Tool to approve', spellcheck: 'false' });
+    const err = h('p.err', { role: 'alert' });
+    const change = async (body) => {
+      err.textContent = '';
+      try {
+        const r = await api(`/api/kid-sprigs/${encodeURIComponent(kid.id)}/access`, { method: 'PATCH', body });
+        kid.tools = r.tools || []; kid.allow = r.allow || [];
+        render(); toast('Saved. It’s in the trail, and you can undo it from the dashboard.');
+      } catch (e) { err.textContent = e.message; }
+    };
+    box.replaceChildren(
+      h('div.section-title', {}, h('h2', {}, `What ${kid.name} may use`), h('small', {}, 'Chat only; it never changes anything')),
+      h('div.tags', {}, tools.length ? tools.map((t) => h('span.chip.file', {}, t,
+        h('button', { type: 'button', 'aria-label': 'Remove ' + t, onclick: () => change({ remove_tools: [t] }) }, icon('x')))) : h('span.d-empty', {}, 'No tools: just chat.')),
+      h('form.kid-add', { onsubmit: (e) => { e.preventDefault(); if (toolInput.value.trim()) change({ add_tools: [toolInput.value.trim()] }); } },
+        toolInput, h('button.chip.primary', { type: 'submit' }, 'Approve tool')),
+      h('div.kid-allow', {},
+        [['family_memory', 'Family memory', 'what family sprigs know about the household'], ['calendar', 'Calendar', 'shared household events only']].map(([k, label, hint]) => {
+          const on = allow.includes(k);
+          return h('label.check', {}, h('input', { type: 'checkbox', checked: on, onchange: () => change(on ? { remove_allow: [k] } : { add_allow: [k] }) }),
+            h('span', {}, h('b', {}, label), ' ', h('small', {}, hint)));
+        })),
+      err);
+  };
+  render();
+  return box;
 }
 
 // ---------- panes ----------
@@ -953,7 +1236,7 @@ function messageEl(m, cont, animate) {
     h('button.msg-act', { title: 'Delete: remove it here and from what sprigs remember of this conversation', 'aria-label': 'Delete message', onclick: () => deleteMessage(m) }, icon('trash')));
   const pinMark = m.pinned && h('span.pin-mark', { title: 'Pinned for this conversation' }, icon('pin'));
   if (m.role === 'user') {
-    const retry = m.failed && h('button', { class: 'stamp', style: { opacity: 1, color: 'var(--err)' }, onclick: () => { const c = S.chats.get(m.chat); c.messages = c.messages.filter((x) => x !== m); send(m.chat, m.content); } }, `Not sent (${m.failed}). Tap to retry`);
+    const retry = m.failed && h('button', { class: 'stamp', style: { opacity: 1, color: 'var(--err)' }, onclick: () => { const c = S.chats.get(m.chat); c.messages = c.messages.filter((x) => x !== m); send(m.chat, m.text ?? m.content, m.files || []); } }, `Not sent (${m.failed}). Tap to retry`);
     return h('div.msg.user' + (cont ? '.cont' : '') + (m.pending ? '.pending' : '') + (m.failed ? '.failed' : '') + (m.pinned ? '.pinned' : ''), {},
       h('div.stack', {}, h('div.bubble', { html: md(m.content) }), retry || h('span.stamp', {}, actions, pinMark, m.pending ? 'Sending…' : clock(m.at))));
   }
@@ -1008,18 +1291,34 @@ function composer(chat, opts = {}) {
     enterkeyhint: 'send',
   });
   ta.value = S.drafts.get(chat) || '';
+  let files = [];
   const btn = h('button.send', { type: 'submit', 'aria-label': 'Send', disabled: !ta.value.trim() }, icon('send'));
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; btn.disabled = !ta.value.trim(); };
+  const tray = h('div.tray');
+  const showFiles = () => {
+    tray.replaceChildren(...files.map((f) => h('span.chip.file', {}, fileLine(f),
+      h('button', { type: 'button', 'aria-label': 'Remove ' + f.name, onclick: () => { files = files.filter((x) => x !== f); showFiles(); grow(); } }, icon('x')))));
+  };
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; btn.disabled = !ta.value.trim() && !files.length; };
   ta.addEventListener('input', () => { S.drafts.set(chat, ta.value); grow(); });
   const submit = async () => {
     const text = ta.value;
-    if (!text.trim()) return;
-    ta.value = ''; S.drafts.delete(chat); grow();
+    const sending = files;
+    if (!text.trim() && !sending.length) return;
+    ta.value = ''; S.drafts.delete(chat); files = []; showFiles(); grow();
     if (opts.home) {
       await openChat(chat);
     }
-    send(chat, text);
+    send(chat, text, sending);
   };
+  const addFiles = (list) => {
+    const room = MAX_FILES - files.length;
+    const add = [...list].slice(0, Math.max(room, 0));
+    if (list.length > add.length) toast(`Up to ${MAX_FILES} files per message`);
+    files = files.concat(add); showFiles(); grow(); ta.focus();
+  };
+  const picker = h('input', { type: 'file', multiple: true, hidden: true, accept: 'image/*,audio/*,.pdf,.txt,.md,.csv,.json,.log', onchange: () => { addFiles(picker.files); picker.value = ''; } });
+  const attach = h('button.tool', { type: 'button', 'aria-label': 'Attach files', title: 'Attach files', onclick: () => picker.click() }, icon('clip'));
+  const mic = canRecord() && recorder(() => ta, (f) => { files = files.concat(f); submit(); });
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !MOBILE.matches) { e.preventDefault(); submit(); }
   });
@@ -1042,8 +1341,63 @@ function composer(chat, opts = {}) {
     h('div.composer-inner', {},
       h('div.approval-slot'),
       pick,
-      h('div.box', {}, ta, btn),
+      tray,
+      h('div.box', { ondragover: (e) => e.preventDefault(), ondrop: (e) => { e.preventDefault(); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); } },
+        picker, attach, ta, mic, btn),
       h('div.hint', {}, 'Enter to send · Shift+Enter for a new line')));
+}
+
+const MAX_FILES = 8;
+const MAX_RECORDING_MS = 5 * 60 * 1000;
+
+function canRecord() {
+  return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+}
+
+// recorder is the voice message button: tap to record, tap again to send.
+// The recording goes up as a file and the server has it transcribed.
+function recorder(textarea, done) {
+  let rec = null, chunks = [], timer = 0, started = 0;
+  const btn = h('button.tool', { type: 'button', 'aria-label': 'Record a voice message', title: 'Record a voice message' }, icon('mic'));
+  const reset = () => {
+    clearInterval(timer);
+    btn.classList.remove('recording');
+    btn.replaceChildren(icon('mic'));
+    btn.setAttribute('aria-label', 'Record a voice message');
+    const ta = textarea(); ta.placeholder = ta.dataset.placeholder || ta.placeholder;
+  };
+  btn.addEventListener('click', async () => {
+    if (rec) { rec.stop(); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return toast('Microphone not available. Check the browser’s permission for this site.'); }
+    const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
+    try { rec = new MediaRecorder(stream, type ? { mimeType: type } : {}); }
+    catch { stream.getTracks().forEach((t) => t.stop()); return toast('This browser can’t record audio.'); }
+    chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const mime = (rec.mimeType || type || 'audio/webm').split(';')[0];
+      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+      const long = Date.now() - started > 700;
+      rec = null; reset();
+      if (long && chunks.length) done(new File(chunks, `voice message.${ext}`, { type: mime }));
+    };
+    rec.start();
+    started = Date.now();
+    btn.classList.add('recording');
+    btn.replaceChildren(icon('stop'));
+    btn.setAttribute('aria-label', 'Stop and send the voice message');
+    const ta = textarea(); ta.dataset.placeholder = ta.placeholder;
+    const tick = () => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      ta.placeholder = `Recording… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}. Tap stop to send`;
+      if (Date.now() - started > MAX_RECORDING_MS) rec?.stop();
+    };
+    tick(); timer = setInterval(tick, 500);
+  });
+  return btn;
 }
 
 // ---------- details ----------

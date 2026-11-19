@@ -32,6 +32,9 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	if !ok {
 		return scheduler.Result{Err: fmt.Errorf("the sprig %q that owns this job no longer exists", j.Character)}
 	}
+	if char.IsKid() || user.IsKid() {
+		return scheduler.Result{Err: fmt.Errorf("%s is a kid sprig (or this is a kid's job): kid sprigs don't run routines", char.DisplayName())}
+	}
 	t := &turn{user: user, char: char, job: &j, query: j.Name + " " + j.Prompt}
 	ctx, flight, done := e.track(ctx, &e.jobsRunning, j.ID, user.ID, j.Name)
 	defer done()
@@ -218,6 +221,10 @@ func (e *Engine) FollowUps(ctx context.Context) {
 			expire("it was more than 3 days overdue")
 			continue
 		}
+		if user.IsKid() {
+			expire("kids don't get follow-ups")
+			continue
+		}
 		char, ok := e.Chars.Get(m.Character)
 		if !ok || !char.Initiative.FollowUps {
 			char, ok = e.Chars.Host()
@@ -262,8 +269,8 @@ func (e *Engine) CheckIns(ctx context.Context) {
 			continue
 		}
 		var char *character.Character
-		for _, c := range e.Chars.For(u.ID) {
-			if c.Initiative.CheckIns && !e.quiet(c, &u) {
+		for _, c := range e.Chars.For(&u) {
+			if c.Initiative.CheckIns && !c.IsKid() && !e.quiet(c, &u) {
 				char = c
 				break
 			}

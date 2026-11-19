@@ -33,6 +33,11 @@ func (e *Engine) handleApprovalReply(ctx context.Context, in channel.Incoming, u
 	if err != nil {
 		return false, err
 	}
+	if in.NoApprovals {
+		host, _ := e.Chars.Host()
+		return true, e.send(ctx, in.ChatRef(), host, "Approvals can't be answered from here: an agent connected to Thicket sent this, and only you can approve. "+
+			"Approve or deny it on the dashboard (the \"needs you\" list) or in your chat app.")
+	}
 	ok, err := e.decide(ctx, user, a, approve, in.Text, in.IsDM)
 	if !ok {
 		return false, err

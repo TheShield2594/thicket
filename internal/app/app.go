@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
+	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
@@ -59,6 +61,8 @@ type App struct {
 	Chars     *character.Registry
 	Guard     *budget.Guard
 	MCP       *mcp.Registry
+	OAuth     *mcp.OAuth
+	Calendar  *calendar.Service
 	Engine    *agent.Engine
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
@@ -189,12 +193,27 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.Budget = a.Guard
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
+	a.OAuth = &mcp.OAuth{Secrets: sec, RedirectURL: cfg.WebBaseURL() + "/oauth/callback"}
+	a.MCP.OAuth = a.OAuth
 	a.Engine.MCP = a.MCP
+	a.Engine.OAuth = a.OAuth
+	a.Calendar = &calendar.Service{DB: db, Secrets: sec}
+	a.Engine.Calendar = a.Calendar
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
 	a.Web.Pin = a.Engine.PinWebMessage
 	a.Web.OIDC = a.oidcLogin(ctx)
+	a.Web.Household = a.Engine
+	a.Web.Calendar = a.Calendar
+	a.Web.BaseURL = cfg.WebBaseURL()
+	a.Web.MakeKidSprig = func(ctx context.Context, by *store.User, body json.RawMessage) (*character.Character, error) {
+		var spec agent.KidSprigSpec
+		if err := json.Unmarshal(body, &spec); err != nil {
+			return nil, fmt.Errorf("bad kid sprig: %v", err)
+		}
+		return a.Engine.CreateKidSprig(ctx, by, spec)
+	}
 	a.channels = append(a.channels, a.Web)
 	for _, ch := range a.channels {
 		a.Engine.AddChannel(ch)
@@ -212,7 +231,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
-		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft,
+		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft, Undo: a.Engine.UndoTrail,
 		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
@@ -226,7 +245,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
 			Hooks: a.Webhook, MaxHookBody: agent.MaxWebhookPayload,
 			API: a.API.Handler(), Dashboard: a.Dashboard.Handler(), App: a.Web.Handler(),
-			Avatar: a.Avatar,
+			Avatar: a.Avatar, OAuthCallback: http.HandlerFunc(a.oauthCallback), V2: a.Web.V2Handler(),
 		})
 	}
 	return a, nil
@@ -439,9 +458,13 @@ func (a *App) Run(parent context.Context) error {
 			}
 		})
 	}
+	a.ensureSandbox(ctx)
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {
+			if name == sandboxName && a.retrySandbox(ctx) == nil {
+				continue // it was still starting
+			}
 			a.startErr(fmt.Sprintf("The %s integration didn't connect: %s", name, shortErr(err)))
 		}
 	})

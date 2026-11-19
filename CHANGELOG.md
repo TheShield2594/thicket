@@ -4,8 +4,98 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
+## Unreleased: households, calendar and the app API (schema v15)
 
+- Households. Roles are owner, admin, member and kid (kids are stored as
+  members with `users.kid`). Sprigs have a tier, `household: solo |
+  family | kid`: solo sprigs are one person's, family sprigs every
+  adult's, kid sprigs talk only to the `kids` listed and are set up by
+  `parents`. Kid sprigs are enforced in code: only approved tools that
+  read, levels forced to read, no jobs, routines, follow-ups or
+  check-ins, and no adult data unless a parent allows `family_memory` or
+  `calendar`. Parents read the whole chat (kids can't delete it and
+  retention keeps it), get no routine notifications, and get a safety
+  alert if a chat touches self-harm, strangers asking for personal
+  details, grooming or bullying.
+- Family memory: `remember` scope `family` keeps what family sprigs learn
+  about the household (`memories.household`), apart from private memory.
+- The trail: every permission change (levels, grants, kid access, roles,
+  invites) and every sprig calendar entry, with undo. New `trail` table,
+  never pruned; a Changes list with Undo buttons on the dashboard.
+- Calendar: adults connect calendars read-only (ICS feeds, CalDAV), with
+  addresses and passwords in the encrypted store. The view merges
+  connected calendars, sprig jobs (scheduled, ran, failed) and sprig
+  outputs (each linking to its source), with filters per layer and per
+  sprig. New `calendar` scope with `calendar`, `add_to_calendar` and
+  `remove_from_calendar`. New tables `calendar_sources`, `sprig_events`.
+- Web app screens: **Calendar** (a week at a time, toggles per layer and
+  per sprig, connect and disconnect calendars) and, for parents, each kid
+  sprig's chats (read-only) with what it may use.
+- API v2 (`/api/v2`) for apps: token sign-in with a password or one-time
+  link, chats (the web app's threads and event stream), the calendar,
+  approvals, the trail, levels, and the household (invites, roles, kid
+  sprigs, kid chats for parents, kid access). See docs/api-v2.md.
+- Composio documented as an optional MCP adapter for quick connectors;
+  direct MCP servers, OAuth and CalDAV remain for privacy-sensitive
+  services.
+
+## Earlier unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
+
+- Desktop app (`desktop/`). An Electron app for macOS, Windows and Linux
+  that opens your Thicket server in its own window, with a tray icon
+  (closing keeps it running), native notifications that bring the window
+  back to the chat, an unread badge, start at login, and microphone access
+  for voice messages. Only the server's pages load in it; other links go
+  to the browser (the identity provider is allowed during single sign-on).
+  The web app calls `window.thicketDesktop` when it's there. The new
+  **desktop** workflow checks it and builds unsigned installers, attached
+  to a release on `desktop-v*` tags.
+- A computer for sprigs. The new `thicket-sandbox` container (Debian
+  with git, curl, python3 and friends, a persistent `/workspace`, no
+  access to Thicket's data, not published on a port) runs an MCP server
+  with `run_command`, `read_file`, `write_file` and `list_files`. With
+  `THICKET_SANDBOX_URL` set (compose sets it), Thicket shares a random
+  token through the `sandbox-auth` volume and connects it as the
+  `sandbox` integration. Nobody can use it until granted
+  `mcp:sandbox/*`; commands and writes ask for approval by default.
+  Commands time out (60 s, up to 10 min), output is capped, and leftover
+  processes are killed. CI builds and publishes
+  `ghcr.io/theshield2594/thicket-sandbox`.
+- OAuth sign-in for integrations. Hosted MCP servers that need you to sign
+  in (Notion, Linear, Sentry, Atlassian and others) can be connected:
+  `add_integration` takes `auth: "oauth"`, Thicket finds the server's
+  authorization server from its metadata, registers itself, and posts a
+  PKCE sign-in link (written by Thicket, never the model). The browser
+  returns to the new `GET /oauth/callback`, the tokens go into the
+  encrypted store as `oauth_<name>`, and they're refreshed on expiry and
+  after a 401. Servers without automatic registration take a client id
+  and secret. Removing the integration deletes the tokens.
+- MCP server. `thicket mcp` serves the Model Context Protocol on stdio,
+  so Claude Desktop, Claude Code, Cursor and other agents can talk to
+  sprigs (`ask_sprig`, `list_sprigs`, `list_jobs`, `run_job`, `stop`)
+  through the local API with an API token. An agent can never answer an
+  approval prompt: the API's new `no_approvals` field, which the MCP
+  server always sets, makes Thicket refuse and point the person to the
+  dashboard or their chat app.
+- Files and voice messages in the web app. A paperclip button (or drag
+  and drop) attaches up to 8 files, 30 MB in all; a microphone button
+  records a voice message and sends it when tapped again (up to 5
+  minutes). `POST /api/chats/{chat}/messages` also takes a multipart form
+  (`text` plus `file` parts). Files are held in memory for the reply and
+  never stored; the chat shows a line per file.
+- Routing. With the new `auto_route` setting on, a message that names no
+  sprig goes to the one whose role fits it, picked by the cheap model from
+  the sprigs' roles and the last few messages (`route` purpose). The
+  current sprig keeps the conversation when the model is unsure, fails or
+  names a sprig the person can't use; naming a sprig or writing in its own
+  web thread skips routing. Off by default.
+- Voice messages. A voice note sent in Discord or Telegram (or any audio
+  file: ogg, mp3, wav, m4a, webm, flac, aac) is transcribed and the words
+  go into the message, so the sprig answers what was said. Up to 2 per
+  message, 10 MB each. New `transcribe_model` setting (default
+  `google/gemini-3.8-flash`, which hears audio); transcription is billed
+  under the `transcribe` purpose. Needs OpenRouter: with a local model
+  server the sprig is told the message wasn't transcribed.
 - Pin and delete messages. Reply "pin this" (or say "pin that") to keep a
   message in every reply's context for the rest of the conversation, even
   after compaction; "what's pinned?", "unpin this", "unpin all". Reply

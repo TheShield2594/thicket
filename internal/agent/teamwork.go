@@ -42,7 +42,7 @@ func (e *Engine) findSprig(t *turn, name string) (*character.Character, error) {
 	if !ok {
 		c, ok = e.Chars.FindByName(name)
 	}
-	if !ok || (t != nil && t.user != nil && !c.UsableBy(t.user.ID)) {
+	if !ok || (t != nil && t.user != nil && !c.UsableBy(t.user)) {
 		return nil, fmt.Errorf("there's no sprig called %q", name)
 	}
 	return c, nil

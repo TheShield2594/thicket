@@ -43,6 +43,17 @@ jobs:
         run: docker build --build-arg VERSION=${{ github.sha }} -t thicket:ci .
       - name: image smoke test
         run: docker run --rm thicket:ci version
+      - name: build sandbox image
+        run: docker build -f sandbox/Dockerfile -t thicket-sandbox:ci .
+      - name: sandbox smoke test
+        run: |
+          docker run -d --name sb -e SANDBOX_TOKEN_FILE=/tmp/token thicket-sandbox:ci
+          docker exec sb sh -c 'echo tok > /tmp/token'
+          for i in $(seq 1 20); do docker exec sb curl -fs http://127.0.0.1:7070/health && break; sleep 1; done
+          docker exec sb curl -fs -H 'Authorization: Bearer tok' -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"python3 -c \"print(6*7)\""}}}' \
+            http://127.0.0.1:7070/mcp | grep -q 42
+          docker rm -f sb
 
   # Publish the image docker-compose.yml points at, only on pushes to main
   # (never from pull requests) and only after tests pass. Uses the repo's
@@ -64,3 +75,6 @@ jobs:
           docker build --build-arg VERSION=${{ github.sha }} -t "$IMAGE:latest" -t "$IMAGE:${{ github.sha }}" .
           docker push "$IMAGE:latest"
           docker push "$IMAGE:${{ github.sha }}"
+          docker build -f sandbox/Dockerfile -t "$IMAGE-sandbox:latest" -t "$IMAGE-sandbox:${{ github.sha }}" .
+          docker push "$IMAGE-sandbox:latest"
+          docker push "$IMAGE-sandbox:${{ github.sha }}"

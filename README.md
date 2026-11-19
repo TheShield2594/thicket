@@ -1,13 +1,23 @@
 # Thicket
 
-A small, self-hosted family of AI companions. Its characters are called
-**sprigs**. They live in your Discord or Telegram, remember you, take a
-little initiative, and stay true to who they are.
+A small, self-hosted, open-source family of AI companions, for one person
+or a whole household: an open-source alternative to Grok Bot that keeps
+your data on your own server. Its characters are called **sprigs**. They
+live in your Discord or Telegram, remember you, take a little initiative,
+and stay true to who they are.
+
+Each person has private sprigs of their own, the household shares family
+sprigs, and kids get kid sprigs that are locked down in code
+([Households](docs/household.md)). The core stays small: integrations are
+adapters you connect.
 
 Talk to them in Discord, in the built-in web app, or both. The web app
-installs on your phone and desktop and shows every sprig at once.
+installs on your phone and desktop and shows every sprig at once, and
+there's a [desktop app](docs/desktop.md) for macOS, Windows and Linux with
+a tray icon and native notifications.
 
-Thicket is one Go binary and one SQLite file. No vector database, no
+Thicket is one Go binary and one SQLite file, plus an optional sandbox
+container that sprigs use as their computer. No vector database, no
 bundled browser, no plugin marketplace. You set it up by talking to Juni,
 the first sprig.
 
@@ -82,7 +92,9 @@ too. See [Running Thicket](docs/operations.md) for `doctor`, `costs`, the
 Thicket serves a web app on the same port as `/health` (8080). Each sprig
 has its own thread, there's an **Everyone** room where you address sprigs
 by name, and you can open up to three chats side by side (Shift-click a
-sprig, or use the split button on its row). The details panel shows what a
+sprig, or use the split button on its row). Attach files with the paperclip (or
+drop them on the message box), or tap the microphone to record a voice
+message: tap again to send it, and the sprig answers what you said. The details panel shows what a
 sprig remembers, its routines and how each last run went. It installs as
 an app on phones and desktops (Add to Home Screen / Install), works in
 light and dark, and can notify you when a sprig writes while it's in the
@@ -138,6 +150,12 @@ cookies (`Secure` over HTTPS).
 
 - In DMs, just talk. The sprig you spoke to last keeps the conversation.
 - Address someone by name to switch: `Pip, what's on tomorrow?`
+- Or let Thicket pick: ask Juni to turn on `auto_route` and a message
+  that names nobody goes to the sprig whose role fits it ("what's on
+  tomorrow?" reaches Pip). The sprig already talking keeps the
+  conversation unless the message is plainly for someone else, and any
+  doubt or failure leaves it where it was. It costs one small model call
+  per un-named message.
 - Sprigs work together: one can ask another a question mid-reply ("let me
   check with Pip"), hand you over, or give one a longer task to do in the
   background while you keep chatting; that sprig messages you when it's
@@ -155,7 +173,10 @@ cookies (`Secure` over HTTPS).
   ([details](docs/characters.md#bringing-on-a-new-sprig)).
 - Every sprig has a drawn, animated avatar that shows what it's doing
   (idle, thinking, working, sleeping, stuck).
-- Send pictures, PDFs and text files. Sprigs look at images (the chat
+- Send voice messages (in Discord, Telegram or the web app): they're transcribed (by the `transcribe_model`
+  setting, a model that hears audio) and the sprig answers what you said.
+  Needs OpenRouter.
+- Send pictures, PDFs and text files (from the web app too). Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each) and text files such as notes, CSVs or
   logs. Images are seen for that reply only. A PDF's text (its first
@@ -167,6 +188,15 @@ cookies (`Secure` over HTTPS).
   OCR ($2 per 1,000 pages). Ask Juni to set `pdf_engine` to
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
   `native`; the default is `auto`.
+- Share the house: family sprigs everyone uses, with family memory kept
+  apart from each person's own; solo sprigs only you see; kid sprigs that
+  only chat, only use tools a parent approved, and alert parents if
+  something worrying comes up. Every permission change is in the trail
+  and can be undone. See [Households](docs/household.md).
+- One calendar for the household: connect your calendars (ICS or CalDAV,
+  read-only), and see your sprigs' jobs and what they put on the calendar,
+  with toggles per layer and per sprig, in the web app or an app. See
+  [Calendar](docs/calendar.md).
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
 - Routines can fire on events, not just the clock: "When I get an email
   from Maya, summarise it" watches an integration for new items
@@ -178,6 +208,10 @@ cookies (`Secure` over HTTPS).
   your sprigs with live avatars, the "needs you" inbox (approve or deny
   there), the trail of what they did, and costs. See
   [Dashboard](docs/dashboard.md).
+- Give a sprig a computer: the bundled sandbox container is a small
+  Linux machine where sprigs run commands and keep files ("clone this
+  repo and run its tests"). It can't see Thicket's data, and commands ask
+  for your OK unless you say otherwise. See [The sandbox](docs/sandbox.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -187,6 +221,14 @@ cookies (`Secure` over HTTPS).
 - Script it: `thicket ask --sprig pip "what's on tomorrow?"` prints the
   reply, and `thicket run-job 4` runs a job now. Both use a local HTTP API
   with tokens from `thicket api-token create`. See [Local API](docs/api.md).
+- Let your other AI tools in: `thicket mcp` is an MCP server, so Claude
+  Desktop, Claude Code or Cursor can ask your sprigs things and run jobs.
+  They can't approve risky actions: that stays with you. See
+  [Thicket as an MCP server](docs/mcp-server.md).
+- Connect services you sign in to: "Connect Notion at
+  https://mcp.notion.com/mcp" gets you a sign-in link, and the tokens are
+  stored encrypted and refreshed for you. See
+  [Integrations](docs/mcp.md#services-you-sign-in-to-oauth).
 - Risky actions (sending email, controlling devices) show the exact action
   and wait for you to reply **approve** or **deny**. Each sprig's access to
   each tool can be set to `read`, `draft` (write it up, don't do it), `ask`
@@ -230,6 +272,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
 | `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
+| `THICKET_SANDBOX_URL` | `http://sandbox:7070` in compose | the sandbox container ([details](docs/sandbox.md)); empty turns it off |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
 | `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
@@ -243,7 +286,9 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
 | `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
-| `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs and for avatar images |
+| `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
+| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
+| `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
 | `document_chars` *chat only* | `20000` | how much of a PDF's text is kept for follow-up questions (0 = none); it's re-sent with every later reply |
@@ -283,15 +328,21 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 ## Docs
 
 - [Character file reference](docs/characters.md)
+- [Households: solo, family and kid sprigs](docs/household.md)
+- [Calendar](docs/calendar.md)
 - [Integrations (MCP) setup](docs/mcp.md)
+- [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
+- [API v2 for apps](docs/api-v2.md)
+- [Thicket as an MCP server](docs/mcp-server.md)
 - [Skills](docs/skills.md)
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
 - [Dashboard](docs/dashboard.md)
+- [Desktop app](docs/desktop.md)
 - [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)

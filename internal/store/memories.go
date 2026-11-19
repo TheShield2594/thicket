@@ -22,22 +22,27 @@ type Memory struct {
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	// Household marks family memory: what family sprigs know about the
+	// household, apart from anyone's private memories. UserID is who it
+	// came from.
+	Household bool `json:"household,omitempty"`
 }
 
-const memCols = "id, user_id, character, kind, content, source, locked, due_at, expires_at, last_used_at, created_at, updated_at"
+const memCols = "id, user_id, character, kind, content, source, locked, due_at, expires_at, last_used_at, created_at, updated_at, household"
 
 func scanMemory(r interface{ Scan(...any) error }) (*Memory, error) {
 	var m Memory
 	var locked int
 	var due, exp, used sql.NullInt64
 	var created, updated int64
-	if err := r.Scan(&m.ID, &m.UserID, &m.Character, &m.Kind, &m.Content, &m.Source, &locked, &due, &exp, &used, &created, &updated); err != nil {
+	var household int
+	if err := r.Scan(&m.ID, &m.UserID, &m.Character, &m.Kind, &m.Content, &m.Source, &locked, &due, &exp, &used, &created, &updated, &household); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	m.Locked = locked == 1
+	m.Locked, m.Household = locked == 1, household == 1
 	m.DueAt, m.ExpiresAt, m.LastUsedAt = timeOf(due), timeOf(exp), timeOf(used)
 	m.CreatedAt, m.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 	return &m, nil
@@ -60,16 +65,25 @@ func (s *Store) queryMemories(ctx context.Context, q string, args ...any) ([]Mem
 	return out, rows.Err()
 }
 
-// VisibleMemories returns live memories a character may see for a user:
-// the shared layer plus that character's own space.
+// VisibleMemories returns a user's live private memories a character may
+// see: the shared layer plus that character's own space. Family memory
+// is separate (FamilyMemories).
 func (s *Store) VisibleMemories(ctx context.Context, userID int64, character string) ([]Memory, error) {
-	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE user_id = ? AND (character = '' OR character = ?)
+	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE user_id = ? AND household = 0 AND (character = '' OR character = ?)
 		AND (expires_at IS NULL OR expires_at > ?) ORDER BY id`, userID, character, s.unix())
 }
 
-// AllMemories returns every live memory for a user across characters.
+// FamilyMemories returns live family memory a family sprig may see: the
+// household layer plus its own household notes.
+func (s *Store) FamilyMemories(ctx context.Context, character string) ([]Memory, error) {
+	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE household = 1 AND (character = '' OR character = ?)
+		AND (expires_at IS NULL OR expires_at > ?) ORDER BY id`, character, s.unix())
+}
+
+// AllMemories returns every live private memory for a user across
+// characters (not family memory).
 func (s *Store) AllMemories(ctx context.Context, userID int64) ([]Memory, error) {
-	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY id`, userID, s.unix())
+	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE user_id = ? AND household = 0 AND (expires_at IS NULL OR expires_at > ?) ORDER BY id`, userID, s.unix())
 }
 
 func (s *Store) MemoryByID(ctx context.Context, id int64) (*Memory, error) {
@@ -79,7 +93,7 @@ func (s *Store) MemoryByID(ctx context.Context, id int64) (*Memory, error) {
 // DueFollowups returns follow-up memories whose time has come.
 func (s *Store) DueFollowups(ctx context.Context) ([]Memory, error) {
 	now := s.unix()
-	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE kind = 'followup' AND due_at IS NOT NULL AND due_at <= ?
+	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE kind = 'followup' AND household = 0 AND due_at IS NOT NULL AND due_at <= ?
 		AND (expires_at IS NULL OR expires_at > ?) ORDER BY due_at LIMIT 20`, now, now)
 }
 
@@ -126,9 +140,9 @@ func (s *Store) ApplyMemoryChanges(ctx context.Context, runID int64, changes []M
 			if m.Locked {
 				locked = 1
 			}
-			res, err := tx.ExecContext(ctx, `INSERT INTO memories (user_id, character, kind, content, source, locked, due_at, expires_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.UserID, m.Character, m.Kind, s.clean(m.Content), m.Source, locked,
-				unixOrNil(m.DueAt), unixOrNil(m.ExpiresAt), now, now)
+			res, err := tx.ExecContext(ctx, `INSERT INTO memories (user_id, character, kind, content, source, locked, due_at, expires_at, created_at, updated_at, household)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.UserID, m.Character, m.Kind, s.clean(m.Content), m.Source, locked,
+				unixOrNil(m.DueAt), unixOrNil(m.ExpiresAt), now, now, boolInt(m.Household))
 			if err != nil {
 				return nil, err
 			}

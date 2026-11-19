@@ -113,6 +113,14 @@ func TestAPIMessages(t *testing.T) {
 	if len(r.Replies) != 2 || !strings.Contains(r.Replies[1].Text, "I need your OK") {
 		t.Fatalf("approval prompt: %+v", r)
 	}
+	// An agent (the MCP server) can't answer it.
+	r = apiCall(t, srv, token, "POST", "/api/v1/messages", map[string]any{"text": "approve", "conversation": "dog", "no_approvals": true})
+	if len(r.Replies) != 1 || !strings.Contains(r.Replies[0].Text, "only you can approve") {
+		t.Fatalf("agent approval: %+v", r)
+	}
+	if mems, _ := a.DB.AllMemories(ctx, owner.ID); len(mems) != 0 {
+		t.Fatalf("an agent approved an action: %+v", mems)
+	}
 	apiCall(t, srv, token, "POST", "/api/v1/messages", map[string]string{"text": "approve", "conversation": "dog"})
 	if mems, _ := a.DB.AllMemories(ctx, owner.ID); len(mems) != 1 {
 		t.Fatalf("approved action didn't run: %+v", mems)
