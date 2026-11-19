@@ -43,8 +43,16 @@ sprig of their own. If the invite asked for one ("add my partner's
 sprig", or `own_sprig` in the API), she goes straight to that interview.
 You never see the interview, the preview, the approval or the sprig.
 
-Kids invited this way are greeted by their kid sprig if one is set up for
-them; Juni never talks to kids.
+The same short tour happens on the first message of anyone who joins an
+existing household some other way (an id you gave Juni, a chat app
+account added later), admins included: only the owner, and admins set up
+alongside them, get the full setup tour. The family sprigs she introduces
+are listed by Thicket, never anyone's private sprigs. It happens once:
+when they've had it (or skip it), it's done.
+
+Kids are greeted by their kid sprig instead: a short, kid-sized hello on
+arrival if they came through an invite, else on their first message, and
+only once. Nothing about grown-up features, and Juni never talks to kids.
 
 ## Private means private
 

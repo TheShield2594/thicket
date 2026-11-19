@@ -130,10 +130,12 @@ func buildSystemPrompt(in promptInput) string {
 		b.WriteString(skillOfferGuide)
 	}
 
-	// The setup tour is the owner's (and admins'): its steps use admin
-	// tools. Adults who join later get a short tour of their own instead;
-	// kids never talk to the host.
-	if c.Host && !in.onboarded && !in.jobMode && in.user != nil && in.user.IsAdmin() {
+	// The setup tour is the owner's (and an admin's set up alongside them):
+	// its steps use admin tools and set the household up. Adults who join
+	// an existing household later, admins included, get a short tour of
+	// what's already there instead; kids never talk to the host, and their
+	// kid sprig says hello instead.
+	if c.Host && !in.onboarded && !in.jobMode && in.user != nil && setsUp(in.user) {
 		b.WriteString(onboardingGuide)
 		if in.sandbox {
 			b.WriteString(sandboxOnboarding)
@@ -149,8 +151,12 @@ func buildSystemPrompt(in promptInput) string {
 		}
 	} else if c.Host && !in.onboarded && !in.jobMode && in.user != nil && !in.user.IsKid() {
 		b.WriteString(newcomerTour)
+		b.WriteString(familySprigList(in.roster))
 		if in.user.OwnSprig {
 			b.WriteString(newcomerOwnSprig)
+		}
+		if in.user.IsAdmin() {
+			b.WriteString("They're an admin: once the tour is done, mention in a sentence that they can invite people, bring on sprigs and change settings by asking you.\n")
 		}
 		if !in.isDM {
 			b.WriteString("This is a group channel: say hello, then suggest continuing in a DM. Never interview them for a sprig of their own here.\n")
@@ -158,6 +164,9 @@ func buildSystemPrompt(in promptInput) string {
 		if in.user.Timezone != "" {
 			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): only ask if it seems wrong for them.\n")
 		}
+	}
+	if c.IsKid() && !in.onboarded && !in.jobMode && in.user != nil && in.user.IsKid() {
+		b.WriteString(kidHello)
 	}
 	if c.Host && !in.jobMode && in.user != nil && in.user.IsAdmin() {
 		b.WriteString(householdGuide)
@@ -269,11 +278,41 @@ const newcomerTour = `
 This person joined an existing household. They are not the owner: talk to them, about their own things. Keep it short and warm, a step or two at a time:
 1. Learn their name (and timezone if it isn't set), then call set_user_profile.
 2. In two lines, what's private and what's shared: their memories, their chats and any sprig of their own are theirs alone (nobody else in the household can read them, admins included); family sprigs, family memory and the shared household calendar are for everyone.
-3. Introduce the family sprigs listed under "Your fellow sprigs" in a sentence each: what each is for.
+3. Introduce the family sprigs (listed below) in a sentence each: what each is for. Only those: never mention anyone's private sprigs.
 4. Point them to the calendar: they can connect their own calendar in the web app under Calendar → "Connect a calendar" (never in chat).
 5. Offer to make them a sprig of their own (private: only they can talk to it).
 6. Call complete_onboarding when they've had the tour, or if they'd rather skip it.
 `
+
+// kidHello is a kid sprig's first conversation with a kid: once, then
+// never again (the kid's onboarded_at).
+const kidHello = `
+## Saying hello (the first time you talk)
+This is the first time you're talking with them. Start with a short, friendly hello: your name, one thing you like doing, and a question about what they'd like to do or talk about. Keep it kid-sized and cheerful. Nothing about grown-up features, settings, other sprigs or Juni.
+`
+
+// setsUp reports whether a person gets the household setup tour rather
+// than the newcomer's: the owner, or an admin who didn't come through an
+// invite (set up alongside the owner).
+func setsUp(u *store.User) bool {
+	return u.Role == store.RoleOwner || u.IsAdmin() && u.InvitedBy == 0
+}
+
+// familySprigList names the household's family sprigs for the newcomer
+// tour, from the roster (so never anyone's private sprig).
+func familySprigList(roster []*character.Character) string {
+	var b strings.Builder
+	for _, c := range roster {
+		if c.Host || c.Tier() != character.TierFamily {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", c.DisplayName(), c.Role)
+	}
+	if b.Len() == 0 {
+		return "There are no family sprigs yet besides you: skip step 3, and say they can ask you to bring one on.\n"
+	}
+	return "The family sprigs:\n" + b.String()
+}
 
 // newcomerOwnSprig is added when they were invited to make their own sprig.
 const newcomerOwnSprig = `They were invited to make a sprig of their own, so after the two lines on privacy, go straight to that: interview them (what it's for, a name and personality, how it should talk), then preview_character with private: true and create_character once they're happy. Only they see the interview, the preview and the approval. Keep the rest of the tour for afterwards.

@@ -360,7 +360,23 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
 	}
-	return e.respond(ctx, t, "")
+	if err := e.respond(ctx, t, ""); err != nil {
+		return err
+	}
+	if user.IsKid() && user.OnboardedAt.IsZero() {
+		e.greeted(ctx, user) // their kid sprig said its first hello
+	}
+	return nil
+}
+
+// greeted records that a kid's sprig has said its first hello, so it
+// happens once (the kid's onboarded_at, as for adults' tours).
+func (e *Engine) greeted(ctx context.Context, u *store.User) {
+	if err := e.DB.MarkOnboarded(context.WithoutCancel(ctx), u.ID); err != nil {
+		e.Log.Warn("mark a kid greeted", "user", u.ID, "err", err)
+		return
+	}
+	u.OnboardedAt = e.now()
 }
 
 // replySprig is the sprig that answers this message, before any

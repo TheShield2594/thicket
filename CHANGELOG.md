@@ -6,6 +6,11 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
 
+- People who join later get the short tour of what's already there, not
+  the owner's setup: admins who came through an invite included. Juni
+  names the family sprigs from a list Thicket gives her (never anyone's
+  private sprigs). Kids get a kid-sized hello from their kid sprig on
+  arrival or on their first message, tracked so it happens once.
 - Show your work (schema v27): every act-level action, through an
   integration or a built-in tool like scheduling a job, goes in the trail
   with one plain sentence written by Thicket ("I added milk to
