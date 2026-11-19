@@ -97,6 +97,10 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, "SELECT "+userCols+" FROM users WHERE id = ?", id))
 }
 
+// householdTimezone is what a new person's timezone starts as: the
+// "timezone" setting (from `thicket init` or chat), or none.
+const householdTimezone = "COALESCE((SELECT value FROM settings WHERE key = 'timezone'), '')"
+
 func (s *Store) CreateUser(ctx context.Context, channel, ext, name, role string) (*User, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -105,7 +109,7 @@ func (s *Store) CreateUser(ctx context.Context, channel, ext, name, role string)
 	defer tx.Rollback()
 	now := s.unix()
 	dbr, kid := dbRole(role)
-	res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+	res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at, timezone) VALUES (?, ?, ?, ?, ?, ?, "+householdTimezone+")",
 		channel, ext, name, dbr, kid, now)
 	if err != nil {
 		return nil, err

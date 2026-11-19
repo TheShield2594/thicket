@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/robfig/cron/v3"
 
@@ -40,6 +41,7 @@ var Known = []Key{
 	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
 	{"document_chars", "how much of a PDF's text is kept for follow-up questions, in characters (0 = none, at most 100000); it's re-sent with every later reply in the conversation", "int"},
 	{"transcribe_model", "model that transcribes voice messages; it must accept audio (OpenRouter model id)", "string"},
+	{"timezone", "the household's timezone, which new people start with (IANA name such as Europe/London; each person can have their own)", "timezone"},
 	{"backup_dir", "folder that scheduled full backups are written to, e.g. /backups (empty = off; in Docker it must be a mounted folder)", "path"},
 	{"backup_schedule", "when scheduled backups run, as a cron line in the server's timezone (default 0 3 * * * = 03:00 every day)", "cron"},
 	{"backup_keep", "how many scheduled backups to keep (the oldest are removed)", "int"},
@@ -99,6 +101,7 @@ func (s *Settings) defaults() map[string]string {
 		"history_tokens":     "0",
 		"document_chars":     "20000",
 		"model_url":          s.cfg.ModelURL,
+		"timezone":           "",
 		"backup_dir":         "",
 		"backup_schedule":    "0 3 * * *",
 		"backup_keep":        "7",
@@ -187,6 +190,10 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 			return fmt.Errorf("%s needs an http(s) address like http://192.168.1.20:11434/v1", name)
 		}
 		value = strings.TrimRight(value, "/")
+	case "timezone":
+		if _, err := time.LoadLocation(value); err != nil || value == "Local" {
+			return fmt.Errorf("%s needs an IANA timezone name such as Europe/London or America/Chicago", name)
+		}
 	case "path":
 		if !filepath.IsAbs(value) || len(value) > 500 || strings.ContainsAny(value, "\n\t\x00") {
 			return fmt.Errorf("%s needs a full folder path such as /backups", name)

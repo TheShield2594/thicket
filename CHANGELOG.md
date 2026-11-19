@@ -21,6 +21,15 @@ stated.
   inbox, and Health shows the last backup and its size.
 - `thicket settings [list | set NAME VALUE]` changes settings without
   the server.
+- `thicket init`: first-run setup at a terminal. It asks for the model
+  (an OpenRouter key, or your own server and which of its models), the
+  Discord and Telegram tokens, timezone, spend caps and the owner's chat
+  account, checks each against the real service, and stores keys and
+  tokens encrypted. `--from-env` checks and stores what the environment
+  has without asking; `--no-verify` is for a machine that's offline.
+  Running it again shows what's set (secrets only as "stored") and
+  changes what you type. New setting `timezone`: the household's
+  timezone, which new people start with, so Juni doesn't ask.
 
 ## Unreleased: households, calendar and the app API (schema v16)
 

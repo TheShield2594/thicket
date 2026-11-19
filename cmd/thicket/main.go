@@ -36,6 +36,10 @@ const usage = `thicket: a small, self-hosted family of AI companions.
 
 Usage:
   thicket [serve]                     run Thicket (default)
+  thicket init [--from-env] [--no-verify]
+                                      first-run setup: asks for the model, chat tokens, timezone,
+                                      spend caps and owner, checks each, and stores keys encrypted
+                                      (run it again to change something; --from-env doesn't ask)
   thicket check                       first-run check: say exactly what's missing
   thicket healthcheck                 exit 0 if the running server is healthy (for Docker)
   thicket backup [-o FILE] [--include-key]
@@ -109,6 +113,8 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve()
+	case "init", "setup":
+		err = initCmd(args, os.Stdin, os.Stdout)
 	case "check":
 		err = check()
 	case "healthcheck":

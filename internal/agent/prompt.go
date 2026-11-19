@@ -122,6 +122,9 @@ func buildSystemPrompt(in promptInput) string {
 
 	if c.Host && !in.onboarded && !in.jobMode {
 		b.WriteString(onboardingGuide)
+		if in.user != nil && in.user.Timezone != "" {
+			b.WriteString("Their timezone is already set (" + in.user.Timezone + "): don't ask where they are, only their name.\n")
+		}
 		if !in.isDM {
 			b.WriteString("This is a group channel; suggest finishing setup in a DM.\n")
 		}
