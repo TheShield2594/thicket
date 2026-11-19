@@ -19,18 +19,25 @@ jobs, run a job, and stop a reply.
 | `stop` | Stops the reply in progress in a conversation. |
 
 The agent acts as the person its API token belongs to and sees the same
-sprigs and memories. It **can't answer approval prompts**: when a sprig
-asks for an OK before something risky, the agent is told only you can
-give it, and you approve or deny on the dashboard (the "needs you" list)
-or in your chat app. Settings, secrets, characters and deleting things
-aren't offered at all.
+sprigs and memories. With an `mcp` token (below), the server holds it to
+less than that person, whatever the agent sends:
+
+- It **can't answer approval prompts**: when a sprig asks for an OK
+  before something risky, the agent is told only you can give it, and you
+  approve or deny on the dashboard (the "needs you" list) or in your chat
+  app.
+- What it asks a sprig to **change** (an integration's action, a
+  setting, a permission, a memory at act level) isn't done: it waits in
+  your inbox for you to do or drop, since an agent that read something
+  hostile could ask for anything in your name.
+- It can't pause or resume sprigs, undo things, or use `/api/v2`.
 
 The agent's conversations are kept apart from your chat apps, like any
 API conversation. Spend counts toward your caps as usual.
 
 ## Setting it up
 
-1. Make a token: `docker compose exec thicket thicket api-token create claude-desktop`.
+1. Make an agent token: `docker compose exec thicket thicket api-token create claude-desktop --kind mcp`.
    Use `--user discord:ID` for a token that acts as someone other than the
    owner.
 2. Tell your agent to run `thicket mcp` with that token. It runs inside
@@ -65,3 +72,6 @@ binary there and point it at the server with `THICKET_API_URL` (see
 connection you trust).
 
 Revoke the token (`thicket api-token revoke ID`) to cut the agent off.
+An agent token made before token kinds existed is a `cli` token, which
+can do everything its person can: `thicket mcp` warns about it. Make a new
+one with `--kind mcp` and revoke the old one.

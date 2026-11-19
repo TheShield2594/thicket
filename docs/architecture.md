@@ -353,7 +353,9 @@ it.
 Each turn records, in code, which outside sources entered it
 (`turn.taintedBy`): an `Untrusted` tool that ran, any wrapped content in
 the messages built for the model, an `ask_sprig` answer, and, from the
-start, webhook and event-fired jobs. A question to another sprig, a
+start, webhook and event-fired jobs, and messages an agent sends with
+an `mcp` API token (its changes are held without asking whether the
+person asked: its words aren't theirs). A question to another sprig, a
 delegated task and a handoff (including commons @mentions) carry the
 taint of the turn they came from, plus the sprig that sent them.
 

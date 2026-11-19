@@ -107,6 +107,12 @@ func (a *Adapter) bearer(next authed) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "unknown or revoked token")
 			return
 		}
+		// An agent's token (thicket mcp) only reaches what /api/v1 lets
+		// it: here it could answer approvals or run the household.
+		if t.Kind == store.TokenMCP {
+			writeErr(w, http.StatusForbidden, "this is an agent (mcp) token: it works only with thicket mcp and /api/v1")
+			return
+		}
 		u, err := a.DB.UserByID(r.Context(), t.UserID)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "the token's user no longer exists")
@@ -197,7 +203,7 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "couldn't make a token")
 		return
 	}
-	id, err := a.DB.CreateAPIToken(ctx, uid, store.AppTokenPrefix+truncateName(device), hash)
+	id, err := a.DB.CreateTokenOfKind(ctx, uid, store.AppTokenPrefix+truncateName(device), store.TokenApp, hash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return

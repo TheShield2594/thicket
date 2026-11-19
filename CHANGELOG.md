@@ -4,7 +4,15 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v31)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v32)
+
+- API token kinds (schema v32): `cli`, `mcp` and `app`, enforced by the
+  server. An agent's token (`thicket api-token create NAME --kind mcp`)
+  can't answer approvals, pause, resume, undo or use `/api/v2`, and what
+  it asks a sprig to change is held in its person's inbox. App sign-in
+  tokens work only with `/api/v2`. Existing tokens become `cli` (or
+  `app`); `thicket mcp` warns when given a `cli` token, so make agents a
+  new `--kind mcp` one.
 
 - Security review (#26, see `docs/security.md`). Admin and permission
   tools (settings, integrations, grants, levels, invites, skills) are

@@ -105,6 +105,9 @@ func (e *Engine) holdTainted(ctx context.Context, t *turn, tool *Tool, args json
 	if tool.Shows && onlyArgs(args, tool.ShowWith) {
 		return false // this call only shows the current state
 	}
+	if slices.Contains(t.taintedBy, agentSource) {
+		return true // an agent's words aren't the person's: nothing to check them against
+	}
 	key := tool.Name + "\x00" + string(args)
 	if v, ok := t.askedCache[key]; ok {
 		return !v
@@ -227,6 +230,11 @@ func (e *Engine) holdAction(ctx context.Context, t *turn, tool *Tool, args json.
 	return "HELD: this was NOT done. Outside content (" + sources + ") entered this conversation, and the user didn't ask for this action themselves, " +
 		"so it was saved to their inbox for them to check. Tell them briefly what you wanted to do and why, and that it's waiting in their inbox. Don't say it's done."
 }
+
+// agentSource taints a turn started by an agent connected to Thicket
+// (thicket mcp): what it asks to change is held for the person, since a
+// prompt-injected agent could ask for anything in the person's name.
+const agentSource = "an agent connected to Thicket (MCP)"
 
 // onlyArgs reports whether a call's arguments are an object with no
 // keys but these ("", "null" and "{}" have none).

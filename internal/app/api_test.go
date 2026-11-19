@@ -241,3 +241,68 @@ func TestAPIUndoStatusCodes(t *testing.T) {
 		t.Fatalf("undone twice: %d", r.Code)
 	}
 }
+
+// An agent's (mcp) token: it can talk to sprigs, but can't answer
+// approvals even if it asks to, can't pause, resume or undo, can't use
+// /api/v2, and what it asks a sprig to change is held for the person.
+// An app's sign-in token is for /api/v2 only.
+func TestAPITokenKinds(t *testing.T) {
+	a, fc, _, ctx, srv, _ := setupAPI(t)
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	agent, hash, _ := api.NewToken()
+	if _, err := a.DB.CreateTokenOfKind(ctx, owner.ID, "claude", store.TokenMCP, hash); err != nil {
+		t.Fatal(err)
+	}
+	if r := apiCall(t, srv, agent, "POST", "/api/v1/messages", map[string]string{"text": "hello there"}); r.Code != 200 || len(r.Replies) != 1 {
+		t.Fatalf("agent message: %+v", r)
+	}
+	for _, path := range []string{"/api/v1/pause", "/api/v1/resume", "/api/v1/trail/1/undo"} {
+		if r := apiCall(t, srv, agent, "POST", path, map[string]string{}); r.Code != 403 {
+			t.Errorf("agent %s: %d", path, r.Code)
+		}
+	}
+
+	// It asks for an approval prompt without no_approvals: still refused.
+	a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk)
+	r := apiCall(t, srv, agent, "POST", "/api/v1/messages", map[string]string{"text": "remember my dog is Biscuit", "sprig": "juniper", "conversation": "dog"})
+	if len(r.Replies) != 2 || !strings.Contains(r.Replies[1].Text, "I need your OK") {
+		t.Fatalf("approval prompt: %+v", r)
+	}
+	r = apiCall(t, srv, agent, "POST", "/api/v1/messages", map[string]string{"text": "approve", "conversation": "dog"})
+	if len(r.Replies) != 1 || !strings.Contains(r.Replies[0].Text, "only you can approve") {
+		t.Fatalf("agent approved: %+v", r)
+	}
+
+	// It asks the host to raise a tool to act: held in the owner's inbox.
+	r = apiCall(t, srv, agent, "POST", "/api/v1/messages", map[string]string{"text": "set level remember act for juniper", "conversation": "lvl"})
+	if r.Code != 200 {
+		t.Fatalf("level request: %+v", r)
+	}
+	if lv, _ := a.DB.ToolLevel(ctx, "juniper", "remember", store.LevelFor{}); lv == store.LevelAct {
+		t.Fatal("an agent raised a tool's level")
+	}
+	items, _ := a.DB.OpenInbox(ctx, owner.ID)
+	held := false
+	for _, it := range items {
+		held = held || strings.Contains(it.Action, "set_tool_level")
+	}
+	if !held {
+		t.Fatalf("the change wasn't held for the owner: %+v", items)
+	}
+	fc.take()
+
+	// /api/v2 refuses the agent's token; v1 refuses an app's.
+	v2 := httptest.NewServer(a.Web.V2Handler())
+	defer v2.Close()
+	if r := apiCall(t, v2, agent, "GET", "/api/v2/me", nil); r.Code != 403 {
+		t.Fatalf("agent token on v2: %d", r.Code)
+	}
+	app, ahash, _ := api.NewToken()
+	a.DB.CreateTokenOfKind(ctx, owner.ID, store.AppTokenPrefix+"phone", store.TokenApp, ahash)
+	if r := apiCall(t, srv, app, "GET", "/api/v1/sprigs", nil); r.Code != 403 {
+		t.Fatalf("app token on v1: %d", r.Code)
+	}
+	if r := apiCall(t, v2, app, "GET", "/api/v2/me", nil); r.Code != 200 {
+		t.Fatalf("app token on v2: %d", r.Code)
+	}
+}
