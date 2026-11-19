@@ -568,6 +568,9 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .ag-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--muted); }
 .ag-meta a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
 .ag-meta a svg { width: 14px; height: 14px; }
+.ag-remove { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; font-size: inherit; }
+.ag-remove:hover { color: var(--text); }
+.ag-remove:disabled { opacity: 0.5; }
 .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
 .badge.ran { background: color-mix(in oklab, var(--ok) 18%, transparent); color: var(--text); }
 .badge.failed { background: color-mix(in oklab, var(--err) 20%, transparent); color: var(--text); }

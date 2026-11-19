@@ -1099,6 +1099,13 @@ function calItem(it, sprigInfo) {
     meta.push(h('span', {}, 'Added by ' + (s?.name || it.sprig) + (it.shared ? ' · household' : '')));
     if (it.source_url) meta.push(h('a', { href: it.source_url, target: '_blank', rel: 'noopener noreferrer' }, icon('link'), it.source_label || 'Source'));
     else if (it.source_label) meta.push(h('span', {}, 'From ' + it.source_label));
+    if (it.removable) meta.push(h('button.ag-remove', { type: 'button', 'aria-label': `Remove ${it.title} from the calendar`, onclick: async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      try {
+        await api('/api/calendar/outputs/' + it.event_id, { method: 'DELETE' });
+        toast('Removed. It’s in the trail: put it back from the dashboard’s Changes.'); renderMain();
+      } catch (ex) { btn.disabled = false; toast('Couldn’t remove it: ' + ex.message); }
+    } }, 'Remove'));
   }
   return h('div.ag-item.' + it.layer, { style: { '--c': s?.color || 'var(--accent)' } },
     h('span.ag-time', {}, when),

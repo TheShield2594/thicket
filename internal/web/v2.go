@@ -38,6 +38,7 @@ type Household interface {
 	SetRole(ctx context.Context, by *store.User, userID int64, role string) error
 	AddCalendar(ctx context.Context, u *store.User, name, kind, url, username, password string, shared bool) (*store.CalendarSource, error)
 	RemoveCalendar(ctx context.Context, u *store.User, id int64) error
+	RemoveSprigEvent(ctx context.Context, u *store.User, id int64) (*store.SprigEvent, int64, error)
 }
 
 // KidSprigMaker creates kid sprigs (the engine's CreateKidSprig, adapted).
@@ -64,6 +65,7 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/calendars", a.bearer(a.v2Calendars))
 	mux.HandleFunc("POST /api/v2/calendars", a.bearer(a.v2AddCalendar))
 	mux.HandleFunc("DELETE /api/v2/calendars/{id}", a.bearer(a.v2RemoveCalendar))
+	mux.HandleFunc("DELETE /api/v2/calendar/outputs/{id}", a.bearer(a.v2RemoveOutput))
 	// Approvals and the trail.
 	mux.HandleFunc("GET /api/v2/approvals", a.bearer(a.v2Approvals))
 	mux.HandleFunc("POST /api/v2/approvals/{id}", a.bearer(a.v2Decide))
@@ -360,6 +362,25 @@ func (a *Adapter) v2RemoveCalendar(w http.ResponseWriter, r *http.Request, u *st
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// v2RemoveOutput takes a sprig output off the calendar. It goes in the
+// trail: undo it there (POST /api/v2/trail/{trail_id}/undo) to put it back.
+func (a *Adapter) v2RemoveOutput(w http.ResponseWriter, r *http.Request, u *store.User) {
+	if u.IsKid() {
+		writeErr(w, http.StatusForbidden, "kids can't change the calendar")
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	ev, trailID, err := a.Household.RemoveSprigEvent(r.Context(), u, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "no such sprig output you can remove")
+	case err != nil:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "title": ev.Title, "trail_id": trailID})
+	}
 }
 
 // --- approvals, trail, levels ---

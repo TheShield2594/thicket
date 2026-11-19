@@ -343,6 +343,7 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("GET /api/calendars", a.auth(a.v2Calendars))
 	mux.HandleFunc("POST /api/calendars", a.auth(a.v2AddCalendar))
 	mux.HandleFunc("DELETE /api/calendars/{id}", a.auth(a.v2RemoveCalendar))
+	mux.HandleFunc("DELETE /api/calendar/outputs/{id}", a.auth(a.v2RemoveOutput))
 	mux.HandleFunc("GET /api/kid-sprigs/{id}/chats", a.auth(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/kid-sprigs/{id}/access", a.auth(a.v2KidAccess))
 	return securityHeaders(mux)
