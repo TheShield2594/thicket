@@ -4,8 +4,19 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v25)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v26)
 
+- Per-sprig monthly caps and estimates before costly actions (schema
+  v26). `budget.character.<id>.monthly_usd` sits beside the daily one,
+  and both show on the dashboard's Costs section and in `thicket costs`.
+  Juni asks what a new sprig may spend a month while setting it up. Kid
+  sprigs start with a low monthly cap (`budget.kid_monthly_usd`, $1) that
+  only their parents can raise; at the cap the kid hears a plain message
+  and the parents get a note. Before a long PDF with OCR, a background
+  task, a run of searches or a long conversation on a big model, Thicket
+  estimates the cost: above `budget.ask_above_usd` ($0.25) it asks first
+  with the figure, and it refuses anything that would cross a cap, saying
+  by how much. Estimates are kept next to what things really cost.
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
   `likes` and `dislikes` (what annoyed you) sit with the existing

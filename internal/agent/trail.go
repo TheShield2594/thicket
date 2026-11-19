@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/character"
@@ -19,7 +20,7 @@ import (
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
-	Type      string   `json:"type"` // level | grant | allow | event | role
+	Type      string   `json:"type"` // level | grant | allow | event | role | cap (Tool = period, Level = the cap to restore)
 	Character string   `json:"character,omitempty"`
 	Tool      string   `json:"tool,omitempty"`
 	Level     string   `json:"level,omitempty"` // the level to restore ("" = none set)
@@ -122,6 +123,12 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
 		return "", fmt.Errorf("no sprig %q", u.Character)
+	case u.Type == "cap":
+		// Through SetSprigCap's own rules: only a kid sprig's parents
+		// raise its cap, whoever undoes.
+		if e.Chars.PrivateFrom(u.Character, by.ID) {
+			return "", fmt.Errorf("no sprig %q", u.Character)
+		}
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
@@ -206,6 +213,13 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		done = fmt.Sprintf("the invite for user %d is withdrawn", u.UserID)
 	case "exec", "path":
 		return e.undoAccess(ctx, by, u)
+	case "cap":
+		usd, _ := strconv.ParseFloat(u.Level, 64)
+		s, err := e.SetSprigCap(ctx, by, u.Character, u.Tool, usd)
+		if err != nil {
+			return "", err
+		}
+		done = strings.TrimSuffix(s, ".")
 	case "role":
 		if err := e.DB.SetUserRole(ctx, u.UserID, u.Role); err != nil {
 			return "", err

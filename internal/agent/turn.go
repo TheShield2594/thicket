@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -33,6 +34,8 @@ type turn struct {
 	// the model with it, this turn only.
 	images []llm.Image
 	pdfs   []llm.File
+	// pdfPages counts each PDF's pages, for the cost estimate.
+	pdfPages []int
 	// packages are sprig packages sent with the newest message.
 	packages map[string][]byte
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
@@ -57,6 +60,17 @@ type turn struct {
 	// spokenTo: the message this answers was a voice message (it was
 	// transcribed), so a sprig that speaks when spoken to answers aloud.
 	spokenTo bool
+
+	// Costs (costs.go): costOK once the person agreed to this turn's
+	// estimate; estimateID is the recorded estimate this turn's spend is
+	// measured against; toolUSD adds up the tool estimates so far;
+	// toolEstimate is the estimate for the tool call running now;
+	// promptChars is the size of the turn's prompt.
+	costOK       bool
+	estimateID   int64
+	toolUSD      float64
+	toolEstimate int64
+	promptChars  int
 
 	// Taint (taint.go): the outside sources that entered this turn, and
 	// the person's own words for it.
@@ -87,6 +101,12 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 	defer e.mark(t.char.ID, false)()
 	msgs, err := e.buildMessages(ctx, t, event)
 	if err != nil {
+		return "", err
+	}
+	t.promptChars = llm.PromptChars(msgs)
+	ctx, measured := e.meterTurn(ctx, t)
+	defer measured()
+	if err := e.checkTurnCost(ctx, t, msgs, t.char.Model); err != nil {
 		return "", err
 	}
 	tools := e.toolsFor(ctx, t)
@@ -379,8 +399,19 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if msg := e.rateLimited(ctx, t, tool, true); msg != "" {
 		return msg
 	}
+	t.toolEstimate = 0
+	if msg, ok := e.costGate(ctx, t, tool, args); !ok {
+		return msg
+	}
 	done := e.mark(t.char.ID, true)
-	out, err := tool.Run(ctx, t, args)
+	runCtx, finish := ctx, func() {}
+	if id := t.toolEstimate; id != 0 && tool.Name != "delegate_task" { // a background task is measured where it runs
+		var m *budget.Meter
+		runCtx, m = budget.WithMeter(ctx)
+		finish = func() { _ = e.DB.FinishEstimate(context.WithoutCancel(ctx), id, m.USD()) }
+	}
+	out, err := tool.Run(runCtx, t, args)
+	finish()
 	done()
 	level, summary := "info", "called "+name
 	if err != nil {
@@ -446,6 +477,12 @@ func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a 
 }
 
 func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
+	return e.requestApprovalNote(ctx, t, tool, args, "")
+}
+
+// requestApprovalNote is requestApproval with a line under the details
+// (what it will cost, or that it can't be undone).
+func (e *Engine) requestApprovalNote(ctx context.Context, t *turn, tool *Tool, args json.RawMessage, note string) string {
 	chatRef := t.chatRef
 	if chatRef == "" {
 		// Jobs have no chat: ask in DMs.
@@ -456,7 +493,10 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 		chatRef = ref
 	}
 	pretty := prettyArgs(args)
-	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\nReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500))
+	if note != "" {
+		note += "\n"
+	}
+	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\n%sReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500), note)
 	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
 	if t.chatRef != "" {
 		// Posted after the reply; registered by respond once delivered.

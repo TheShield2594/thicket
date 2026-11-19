@@ -97,6 +97,34 @@ warning; at 100%:
 Raise the cap in chat or wait for the period to reset; heartbeats resume
 on their next scheduled time.
 
+#### Per-sprig caps
+
+Each sprig can have caps of its own, on top of the household's:
+`budget.character.<id>.daily_usd` and `budget.character.<id>.monthly_usd`
+(ask Juni: "set Pip's monthly cap to $3", or use the `set_sprig_cap` tool).
+Juni asks what a new sprig may spend a month while setting it up, and the
+approval shows the figure. They're listed under **Costs → Sprigs' own caps**
+on the dashboard and in `thicket costs`.
+
+Kid sprigs start at `budget.kid_monthly_usd` a month (default $1). Anyone
+who looks after a kid sprig can lower its cap, but only its parents can
+raise or remove it. When a kid sprig hits its cap the kid hears a plain
+"I've used up my allowance" and its parents get one note saying how to
+raise it. Every cap change goes in the trail and can be undone.
+
+#### Estimates before costly actions
+
+Before something costly (a long PDF read with OCR, a background task, a run
+of web searches, a long conversation on a big model) Thicket estimates the
+cost from token counts and known prices: what each model has cost per
+token over the last month (or about $3 per million tokens before there's
+history), $2 per 1,000 pages for `mistral-ocr`, and about $0.02 per
+OpenRouter web search. Above `budget.ask_above_usd` (default $0.25) the
+sprig says the figure and asks first ("go ahead" or "no"); if it would
+cross any cap that applies, it refuses and says by how much. Estimates are
+recorded with what the action really cost, and `thicket costs` and the
+dashboard show how close they came.
+
 ## The "needs you" inbox
 
 Nothing that fails is dropped silently. These land in the inbox:

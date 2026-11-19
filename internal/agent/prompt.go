@@ -288,6 +288,7 @@ If they agree, run a short interview, a question or two at a time:
 3. Voice: how it should talk to them.
 4. Tools: which scopes the job needs (only those).
 5. Schedule: anything it should do regularly (routines), and when.
+6. Spending: how much it may spend a month on its own (a cap in dollars, or none). Suggest a small one for a sprig that runs routines or searches the web.
 Pick a look for its avatar that suits it, or ask if they care.
 Then call preview_character with the draft: the new sprig introduces itself in its own voice.
 Ask if anything feels off and adjust with preview_character again. When the user is happy, call create_character:

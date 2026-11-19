@@ -164,6 +164,24 @@ func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
 	return v, err == nil, err
 }
 
+// SettingNames lists the stored settings whose names start with prefix.
+func (s *Store) SettingNames(ctx context.Context, prefix string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key FROM settings WHERE substr(key, 1, ?) = ? ORDER BY key", len(prefix), prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, s.unix())

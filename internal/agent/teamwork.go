@@ -173,6 +173,7 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 	origin := &turn{}
 	origin.inherit(t)
 	origin.addTaint("sprig " + from.ID)
+	estimate := t.toolEstimate // measured against what the task really costs
 	e.tasks.Add(1)
 	go func() {
 		defer e.tasks.Done()
@@ -181,7 +182,7 @@ func (e *Engine) toolDelegateTask(ctx context.Context, t *turn, args json.RawMes
 			e.taskUse[t.user.ID]--
 			e.taskMu.Unlock()
 		}()
-		e.runTask(context.WithoutCancel(ctx), taskID, t.user, from, target, task, name, origin)
+		e.runTask(context.WithoutCancel(ctx), taskID, t.user, from, target, task, name, origin, estimate)
 	}()
 	e.logActivity(ctx, "info", "sprig", from.ID, t.user.ID, fmt.Sprintf("%s gave %s a background task", from.DisplayName(), target.DisplayName()), task)
 	who := target.DisplayName() + " is"
@@ -199,7 +200,7 @@ func (e *Engine) SetLifetime(ctx context.Context) {
 }
 
 // runTask does delegated work like a one-off job and delivers the result.
-func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, from, target *character.Character, task, name string, origin *turn) {
+func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, from, target *character.Character, task, name string, origin *turn, estimateID int64) {
 	e.lifeMu.Lock()
 	life := e.lifetime
 	e.lifeMu.Unlock()
@@ -218,6 +219,7 @@ func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, fr
 	if origin != nil {
 		t.inherit(origin)
 	}
+	t.estimateID = estimateID
 	out, err := e.runTurn(llm.WithMeta(ctx, llm.Meta{UserID: user.ID, Character: target.ID, Purpose: "task"}), t, "")
 	bg := context.WithoutCancel(ctx)
 	ref := fmt.Sprintf("task:%d", taskID)

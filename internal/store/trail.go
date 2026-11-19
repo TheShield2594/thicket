@@ -25,6 +25,7 @@ const (
 	TrailAccess  = "access"  // a sprig's exec opt-in or granted paths changed
 	TrailRefused = "refused" // someone tried to change a sprig that isn't theirs to change
 	TrailPause   = "pause"   // everything, or one sprig, was paused or resumed
+	TrailCap     = "cap"     // a sprig's own spend cap changed
 )
 
 type TrailEntry struct {

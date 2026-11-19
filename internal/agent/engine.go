@@ -112,9 +112,11 @@ type Engine struct {
 	// rememberAsks: user id -> rememberAsk ("just for you, or for the
 	// family?" waiting for an answer)
 	rememberAsks sync.Map
-	linkMu       sync.Mutex
-	links        map[string]linkCode    // code -> pending link
-	linkFails    map[string][]time.Time // channel:user -> failed attempts
+	// costAsks: chatRef -> *costAsk (a costly turn waiting for "go ahead")
+	costAsks  sync.Map
+	linkMu    sync.Mutex
+	links     map[string]linkCode    // code -> pending link
+	linkFails map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
@@ -299,7 +301,10 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if handled, err := e.handleSecrets(ctx, in, user, host); handled || err != nil {
 		return err
 	}
-	// 2. Answers to a pending approval.
+	// 2. "Go ahead" after a cost question, then answers to a pending approval.
+	if handled, err := e.answerCostAsk(ctx, in, user); handled || err != nil {
+		return err
+	}
 	if handled, err := e.handleApprovalReply(ctx, in, user); handled || err != nil {
 		return err
 	}
@@ -349,8 +354,8 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, packages: media.packages, userMsgID: msgID,
-		spokenTo: media.spoken}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages,
+		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken}
 	if user.IsKid() {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
@@ -384,6 +389,18 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	reply, err := e.runTurn(ctx, t, event)
 	if errors.Is(err, ErrPaused) {
 		err, reply = nil, pausedReply(err)
+	}
+	var hold *costHold
+	if errors.As(err, &hold) {
+		// Said in code, and nothing else happens (no PDF is read, nothing
+		// summarised) until the person agrees.
+		ids, err := e.sendIDs(ctx, t.chatRef, t.char, hold.msg)
+		if err == nil && t.conv != nil {
+			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, hold.msg); err == nil {
+				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
+			}
+		}
+		return err
 	}
 	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
 		// Stopped: no reply, no approval prompts, no handoff.
@@ -476,9 +493,12 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 func (e *Engine) failureReply(ctx context.Context, t *turn, err error) string {
 	e.Log.Error("turn failed", "character", t.char.ID, "err", err)
 	e.logActivity(ctx, "error", "model", t.char.ID, t.user.ID, "reply failed", err.Error())
+	var be *llm.BudgetError
 	switch {
-	case llm.IsBudget(err):
-		return "I've hit the spending cap, so I'm going quiet to save your wallet. You can raise it by telling me a new daily or monthly cap."
+	case errors.As(err, &be) && t.user.IsKid():
+		return e.kidCapReply(ctx, t, be)
+	case errors.As(err, &be):
+		return budgetReply(t, be)
 	case errors.Is(err, llm.ErrNoKey):
 		return "I can't reach my brain right now: there's no model API key set up. DM me your OpenRouter key and I'll be back."
 	case llm.Fatal(err):

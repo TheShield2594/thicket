@@ -101,6 +101,7 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 		return nil, err
 	}
 	e.addTrail(ctx, by.ID, c.ID, store.TrailGrant, fmt.Sprintf("kid sprig %s created for %v, parents %v", c.DisplayName(), c.Kids, c.Parents), "", nil)
+	e.startKidCap(ctx, by, c) // a low cap that only its parents can raise
 	e.logActivity(ctx, "info", "character", c.ID, by.ID, "kid sprig created", "")
 	got, _ := e.Chars.Get(c.ID)
 	return got, nil

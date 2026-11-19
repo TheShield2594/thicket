@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +18,7 @@ import (
 	"github.com/theshield2594/thicket/internal/memory"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/secrets"
+	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -404,11 +406,20 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
-			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd, consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
+			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd and .monthly_usd (one sprig's own caps; set_sprig_cap does the same), budget.ask_above_usd (above this estimate a sprig asks before something costly), budget.kid_monthly_usd (a new kid sprig's monthly cap), consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			Run:         e.toolSettings,
+		},
+		{
+			Name: "set_sprig_cap",
+			Description: "Show or change one sprig's own spend caps, in dollars: daily_usd and monthly_usd (0 = no cap of its own; the household caps still apply). " +
+				"A kid sprig's cap can only be raised by its parents; anyone who looks after a sprig can lower it. Omit both to show its caps and spend. Every change goes in the trail and can be undone.",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name"},"daily_usd":{"type":"number","minimum":0},"monthly_usd":{"type":"number","minimum":0}},"required":["sprig"]}`,
+			Scope:    "host",
+			ChatOnly: true,
+			Run:      e.toolSetSprigCap,
 		},
 		{
 			Name:        "spend_report",
@@ -954,6 +965,7 @@ const draftSchema = `{"type":"object","properties":{
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
 "check_ins":{"type":"boolean"},
+"monthly_cap_usd":{"type":"number","minimum":0,"description":"the most it may spend a month on its own, in dollars, as agreed in the interview (0 or left out = no cap of its own)"},
 "routines":{"type":"array","description":"what they do on a schedule, from the interview","items":{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string","description":"cron, 5 fields, in the user's timezone, e.g. 0 8 * * 1-5"},"task":{"type":"string"}},"required":["name","schedule","task"]}},
 "look":{"type":"object","description":"their drawn avatar; anything left out is picked for them","properties":{"body":{"type":"string","enum":["round","tall","pear","bean"]},"hat":{"type":"string","enum":["sprout","curl","clover","fern","none"]},"hat_color":{"type":"string"},"accessory":{"type":"string","enum":["none","watering-can","glasses","scarf","book","lantern"]},"expression":{"type":"string","enum":["happy","calm","curious","sleepy","determined"]}}}
 },"required":["id","name","role","traits","voice_style"]}`
@@ -978,6 +990,7 @@ type draftArgs struct {
 	Routines      []routineArg      `json:"routines"`
 	Look          avatar.Params     `json:"look"`
 	Private       bool              `json:"private"`
+	MonthlyCapUSD float64           `json:"monthly_cap_usd"`
 }
 
 type routineArg struct {
@@ -1065,7 +1078,7 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", fmt.Sprintf("Preview of new sprig %s introduced itself: %s", c.DisplayName(), intro))
 	}
-	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines})
+	e.drafts.Store(t.user.ID, &sprigDraft{char: c, look: look, routines: a.Routines, monthlyCap: max(a.MonthlyCapUSD, 0)})
 	return fmt.Sprintf("The preview of %s has been posted in the chat (it said: %q). Ask the user what they think and whether anything feels off. Don't repeat the intro.", c.DisplayName(), intro), nil
 }
 
@@ -1198,6 +1211,17 @@ func (e *Engine) toolSettings(ctx context.Context, t *turn, args json.RawMessage
 	if a.Name == "" {
 		return strings.Join(e.Settings.Describe(ctx), "\n"), nil
 	}
+	if id, period, ok := settings.SprigCapKey(a.Name); ok {
+		// One sprig's cap: its own rules (a kid sprig's parents raise it)
+		// and the trail.
+		usd := 0.0
+		if v := strings.TrimPrefix(strings.TrimSpace(a.Value), "$"); v != "" {
+			if usd, err = strconv.ParseFloat(v, 64); err != nil {
+				return "", fmt.Errorf("%s needs a number of dollars", a.Name)
+			}
+		}
+		return e.SetSprigCap(ctx, t.user, id, period, usd)
+	}
 	if err := e.Settings.Set(ctx, a.Name, a.Value); err != nil {
 		return "", err
 	}
@@ -1230,6 +1254,17 @@ func (e *Engine) toolSpend(ctx context.Context, t *turn, _ json.RawMessage) (str
 			}
 		}
 		fmt.Fprintf(&b, "- %s: $%.4f (%d tokens)\n", name, r.CostUSD, r.Tokens)
+	}
+	for _, c := range e.Chars.All() {
+		if c.PrivateFrom(t.user.ID) {
+			continue
+		}
+		caps, err := e.Budget.SprigCapsOf(ctx, c.ID)
+		if err != nil || caps.Daily <= 0 && caps.Monthly <= 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s's own caps: daily %s (spent %s today), monthly %s (spent %s this month)\n", c.DisplayName(),
+			capText(caps.Daily), money(caps.SpentToday), capText(caps.Monthly), money(caps.SpentMonth))
 	}
 	if mix, err := e.DB.PromptMixSince(ctx, month); err == nil {
 		if line := budget.MixLine(mix); line != "" {

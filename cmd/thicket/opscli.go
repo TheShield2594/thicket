@@ -86,13 +86,22 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 	if err != nil {
 		return err
 	}
+	caps, err := sprigCaps(ctx, db, st, now)
+	if err != nil {
+		return err
+	}
+	estN, estUSD, actUSD, err := db.EstimateAccuracy(ctx, since)
+	if err != nil {
+		return err
+	}
 
 	if asJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(map[string]any{
 			"since": since, "total": total, "by_sprig_and_origin": bySprig, "by_model": byModel, "by_day": byDay,
-			"month_spent_usd": monthSpent, "month_cap_usd": monthCap,
+			"month_spent_usd": monthSpent, "month_cap_usd": monthCap, "sprig_caps": caps,
+			"estimates": map[string]any{"finished": estN, "estimated_usd": estUSD, "actual_usd": actUSD},
 			"chat_prompt_mix": map[string]any{"calls": mix.Calls, "cost_usd": mix.CostUSD, "prompt_tokens": mix.PromptTokens,
 				"history_tokens_est": mix.HistoryTokens, "document_tokens_est": mix.DocTokens,
 				"history_usd_est": mix.HistoryUSD, "document_usd_est": mix.DocUSD},
@@ -116,6 +125,15 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 		fmt.Fprintln(out)
 	} else {
 		fmt.Fprintf(out, "This month: $%.2f (no monthly cap)\n", monthSpent)
+	}
+	if len(caps) > 0 {
+		fmt.Fprintln(out)
+		tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', tabwriter.AlignRight)
+		fmt.Fprintln(tw, "sprig cap\ttoday\tdaily cap\tthis month\tmonthly cap\t")
+		for _, c := range caps {
+			fmt.Fprintf(tw, "%s\t$%.4f\t%s\t$%.4f\t%s\t\n", c.Sprig, c.TodayUSD, capCell(c.DailyUSD, c.TodayUSD), c.MonthUSD, capCell(c.MonthlyUSD, c.MonthUSD))
+		}
+		tw.Flush()
 	}
 	if t.Calls == 0 {
 		return nil
@@ -176,9 +194,65 @@ func printCosts(ctx context.Context, db *store.Store, st *settings.Settings, sin
 		fmt.Fprintf(out, "history_tokens is %s; document_chars is %d. To make each reply cheaper, ask Juni to lower either (\"set history_tokens to 6000\").\n",
 			historySetting(ctx, st), st.Int(ctx, "document_chars"))
 	}
+	if estN > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, budget.EstimateLine(estN, estUSD, actUSD))
+	}
 	fmt.Fprintln(out, "\nheartbeat = jobs, check-ins, follow-ups and memory review; task = chats and work you asked for.")
 	fmt.Fprintln(out, "Costs are what OpenRouter reported per call; local model servers count as $0.")
 	return nil
+}
+
+// sprigCap is one sprig's own caps and spend, for `thicket costs`.
+type sprigCap struct {
+	Sprig      string  `json:"sprig"`
+	DailyUSD   float64 `json:"daily_cap_usd"`
+	MonthlyUSD float64 `json:"monthly_cap_usd"`
+	TodayUSD   float64 `json:"today_usd"`
+	MonthUSD   float64 `json:"month_usd"`
+}
+
+// sprigCaps lists the sprigs that have caps of their own (read from the
+// settings, so it works without loading the characters).
+func sprigCaps(ctx context.Context, db *store.Store, st *settings.Settings, now time.Time) ([]sprigCap, error) {
+	names, err := db.SettingNames(ctx, "budget.character.")
+	if err != nil {
+		return nil, err
+	}
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	seen := map[string]bool{}
+	var out []sprigCap
+	for _, n := range names {
+		id, _, ok := settings.SprigCapKey(n)
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		c := sprigCap{Sprig: id, DailyUSD: st.Float(ctx, settings.SprigCap(id, "daily")), MonthlyUSD: st.Float(ctx, settings.SprigCap(id, "monthly"))}
+		if c.DailyUSD <= 0 && c.MonthlyUSD <= 0 {
+			continue
+		}
+		if c.TodayUSD, err = db.SpendSince(ctx, day, id); err != nil {
+			return nil, err
+		}
+		if c.MonthUSD, err = db.SpendSince(ctx, month, id); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Sprig < out[j].Sprig })
+	return out, nil
+}
+
+func capCell(capUSD, spent float64) string {
+	switch {
+	case capUSD <= 0:
+		return "none"
+	case spent >= capUSD:
+		return fmt.Sprintf("$%.2f reached", capUSD)
+	}
+	return fmt.Sprintf("$%.2f", capUSD)
 }
 
 func historySetting(ctx context.Context, st *settings.Settings) string {
