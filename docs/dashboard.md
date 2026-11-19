@@ -5,8 +5,10 @@ read-mostly: the only things you can do here are answer what needs you.
 
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
-  or stuck when it has failed work in your inbox from the last day). The
-  page checks every 5 seconds.
+  or stuck when it has failed work in your inbox from the last day), or
+  how its last reply went for a few minutes after (pleased, or unsure
+  after a rewrite, a refusal or while it waits on your OK). The page
+  checks every 5 seconds.
 - **Needs you**: requests waiting for your OK (approve or deny), drafts a
   sprig wrote up instead of doing (do it, or dismiss), and failed,
   interrupted or undelivered work (clear it once you've dealt with it).
@@ -54,4 +56,6 @@ file publishes only to the host itself. Either:
 - It can't be embedded in other sites and is never cached.
 
 Avatars are also served on their own: `/avatars/<id>.svg` (live state) or
-`/avatars/<id>.svg?state=thinking`.
+`/avatars/<id>.svg?state=thinking`. The states are idle, thinking,
+working, sleeping, stuck, pleased and unsure (the last two follow how a
+sprig's last reply went: see [Avatars](characters.md#avatars)).

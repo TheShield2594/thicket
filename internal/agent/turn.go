@@ -374,6 +374,7 @@ func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a 
 		return err
 	}
 	e.logActivity(ctx, "info", "approval", c.ID, a.UserID, fmt.Sprintf("approval #%d shown for %s", id, a.Tool), "")
+	e.noteWaiting(c.ID) // unsure until answered (or the mood fades)
 	return nil
 }
 
@@ -404,14 +405,15 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 // for banned phrases, then (if enabled) a cheap-model comparison against
 // the identity. One rewrite is attempted on failure.
 func (e *Engine) ensureInCharacter(ctx context.Context, t *turn, system, reply string) string {
-	problems := bannedPhrases(t.char, reply)
+	problems, mood := bannedPhrases(t.char, reply), ""
 	if len(problems) == 0 && e.Settings.Bool(ctx, "consistency_check") && len(reply) > 60 {
-		if issue, err := e.voiceCheck(ctx, t.char, reply); err != nil {
+		if issue, m, err := e.voiceCheck(ctx, t.char, reply); err != nil {
 			e.Log.Warn("consistency check failed to run", "err", err)
-		} else if issue != "" {
+		} else if mood = m; issue != "" {
 			problems = append(problems, issue)
 		}
 	}
+	e.noteReply(t, len(problems) == 0, mood) // for the avatar's mood
 	if len(problems) == 0 {
 		return reply
 	}
@@ -448,35 +450,38 @@ func bannedPhrases(c *character.Character, reply string) []string {
 	return out
 }
 
-func (e *Engine) voiceCheck(ctx context.Context, c *character.Character, reply string) (string, error) {
+// voiceCheck asks the cheap model whether reply is in character and, in
+// the same call, how it reads (pleased or unsure, for the avatar's mood).
+func (e *Engine) voiceCheck(ctx context.Context, c *character.Character, reply string) (issue, mood string, err error) {
 	temp := 0.0
 	identity := fmt.Sprintf("Name: %s\nRole: %s\nTraits: %s\nVoice rules:\n- %s\nNever says: %s",
 		c.DisplayName(), c.Role, strings.Join(c.Personality.Traits, ", "), strings.Join(c.Voice.Style, "\n- "), strings.Join(c.Voice.NeverSay, " | "))
 	resp, err := e.LLM.Chat(llm.WithPurpose(ctx, "consistency"), llm.Request{
 		Model: e.Settings.String(ctx, "cheap_model"),
 		Messages: []llm.Message{
-			{Role: "system", Content: "You check whether a chat reply matches a character's identity. Be lenient: only flag clear breaks (generic assistant tone, wrong personality, breaking voice rules, claiming to be a different character). Reply with JSON only: {\"in_character\": true|false, \"issue\": \"short reason if false\"}"},
+			{Role: "system", Content: "You check whether a chat reply matches a character's identity. Be lenient: only flag clear breaks (generic assistant tone, wrong personality, breaking voice rules, claiming to be a different character). Also read the reply's mood: \"unsure\" if it refuses, can't help, hedges, apologises or is waiting on the user, else \"pleased\". Reply with JSON only: {\"in_character\": true|false, \"issue\": \"short reason if false\", \"mood\": \"pleased\"|\"unsure\"}"},
 			{Role: "user", Content: "Character:\n" + identity + "\n\nReply to check:\n" + reply},
 		},
 		Temperature: &temp, MaxTokens: 150, JSON: true, NoFallback: true,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var v struct {
 		InCharacter *bool  `json:"in_character"`
 		Issue       string `json:"issue"`
+		Mood        string `json:"mood"`
 	}
 	s := strings.TrimSpace(resp.Message.Content)
 	s = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```"), "```")
 	if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &v); err != nil || v.InCharacter == nil {
-		return "", fmt.Errorf("unreadable consistency verdict")
+		return "", "", fmt.Errorf("unreadable consistency verdict")
 	}
 	if *v.InCharacter {
-		return "", nil
+		return "", v.Mood, nil
 	}
 	if v.Issue == "" {
 		v.Issue = "doesn't sound like " + c.DisplayName()
 	}
-	return v.Issue, nil
+	return v.Issue, v.Mood, nil
 }

@@ -310,7 +310,14 @@ so `RunDraft` can do one later.
 `Engine.mark` counts a sprig as thinking for a whole turn and working
 while a tool runs. `SprigStates` adds stuck (open failed or interrupted
 inbox items from the last day) and sleeping (quiet hours, in the first
-admin's timezone). `internal/avatar` draws validated parameters only
+admin's timezone). Moods sit between thinking and stuck: `ensureInCharacter`
+keeps each reply's verdict per sprig per conversation (`Engine.noteReply`,
+in memory on the sprig's `busy` entry): rewritten for drift, or the mood
+`voiceCheck` reads in the same call. Pleased or unsure shows for
+`moodDecay` (five minutes) from the newest verdict; `deliverApproval`
+marks the sprig waiting (unsure) until `decide` answers it. `persona`
+swaps in `<avatar>.<mood>.<ext>` when that picture exists, for Discord.
+`internal/avatar` draws validated parameters only
 (enums and `#rrggbb`), so an `avatar.json` can't inject markup.
 
 ## Triggers and the commons
