@@ -96,16 +96,18 @@ type Engine struct {
 	// Background tasks sprigs hand each other (delegate_task). They end
 	// with lifetime (set by the app), not with the message that started
 	// them.
-	tasks     sync.WaitGroup
-	taskMu    sync.Mutex
-	taskUse   map[int64]int // user id -> background tasks reserved or running
-	taskSeq   atomic.Int64
-	lifeMu    sync.Mutex
-	lifetime  context.Context
-	activity  sync.Map // sprig id -> *busy (for live avatar state)
-	linkMu    sync.Mutex
-	links     map[string]linkCode    // code -> pending link
-	linkFails map[string][]time.Time // channel:user -> failed attempts
+	tasks    sync.WaitGroup
+	taskMu   sync.Mutex
+	taskUse  map[int64]int // user id -> background tasks reserved or running
+	taskSeq  atomic.Int64
+	lifeMu   sync.Mutex
+	lifetime context.Context
+	activity sync.Map // sprig id -> *busy (for live avatar state)
+	// pendingPkgs: user id -> *pendingPackages (sprig packages sent in chat)
+	pendingPkgs sync.Map
+	linkMu      sync.Mutex
+	links       map[string]linkCode    // code -> pending link
+	linkFails   map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {

@@ -303,6 +303,9 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	for _, m := range msgs[1:] {
 		t.taintFrom(m.Content)
 	}
+	for _, f := range t.pdfs {
+		t.addTaint("pdf " + f.Name) // sent as a file, not as wrapped text
+	}
 	// Models need the conversation to end on a user turn.
 	if last := msgs[len(msgs)-1]; last.Role != "user" {
 		msgs = append(msgs, llm.Message{Role: "user", Content: "[Thicket event] Continue."})

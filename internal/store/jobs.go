@@ -79,8 +79,16 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
-	return s.JobByID(ctx, id)
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	got, err := s.JobByID(ctx, id)
+	if err != nil {
+		// Stored but not read back: the id lets the caller remove it.
+		return &Job{ID: id}, err
+	}
+	return got, nil
 }
 
 func (s *Store) JobByID(ctx context.Context, id int64) (*Job, error) {

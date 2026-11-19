@@ -79,13 +79,36 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	if path == "" {
 		path = id + sprigpkg.Ext
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := writeNew(path, b); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Exported %s to %s: %d voice tests, %d routines, %d skills%s.\n", p.Char.DisplayName(), path,
 		countPrefix(p.Files, "voice_tests/"), len(p.Routines), len(p.Skills), map[bool]string{true: ", a picture", false: ""}[p.Avatar != nil])
+	for _, o := range p.Omitted {
+		fmt.Fprintln(out, "Left out:", o)
+	}
 	fmt.Fprintln(out, "No memories, secrets, chats or permission levels are in it.")
 	return nil
+}
+
+// writeNew creates path, refusing to replace a file that's there, and
+// removes what it wrote if writing fails.
+func writeNew(path string, b []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		return fmt.Errorf("%s already exists; move it, or choose another file with -o", path)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
 
 func countPrefix(m map[string][]byte, prefix string) int {
@@ -102,14 +125,29 @@ func countPrefix(m map[string][]byte, prefix string) int {
 // values of this install's stored secrets.
 func secretCheck(ctx context.Context, cfg *config.Config, db *store.Store) (func(string) bool, error) {
 	red := secrets.NewRedactor()
-	if key, _, err := secrets.ResolveKey(cfg.SecretKey, cfg.SecretKeyFile, cfg.DataDir); err == nil {
-		if sec, err := secrets.New(db, key, red); err == nil {
-			if err := sec.WarmRedactor(ctx); err != nil {
-				return nil, fmt.Errorf("couldn't read the stored secrets to check the package against: %w", err)
-			}
-		}
+	looks := func(s string) bool { return red.Redact(s) != s }
+	names, err := db.SecretNames(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return func(s string) bool { return red.Redact(s) != s }, nil
+	if len(names) == 0 {
+		return looks, nil // nothing stored: credential shapes are all there is to check
+	}
+	fail := func(err error) error {
+		return fmt.Errorf("couldn't read the stored secrets to check the package against, so nothing was exported: %w", err)
+	}
+	key, _, err := secrets.ResolveKey(cfg.SecretKey, cfg.SecretKeyFile, cfg.DataDir)
+	if err != nil {
+		return nil, fail(err)
+	}
+	sec, err := secrets.New(db, key, red)
+	if err != nil {
+		return nil, fail(err)
+	}
+	if err := sec.WarmRedactor(ctx); err != nil {
+		return nil, fail(err)
+	}
+	return looks, nil
 }
 
 func loadRegistry(cfg *config.Config, db *store.Store) *character.Registry {
@@ -155,8 +193,11 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	taken := func(s string) bool { _, ok := reg.FindByName(s); return ok }
 	if err := sprigpkg.CheckClash(p.Char, cfg.CharactersDir, taken); err != nil {
 		var c *sprigpkg.Clash
-		if errors.As(err, &c) {
+		if errors.As(err, &c) && c.Suggest != "" {
 			return fmt.Errorf("%w: pass --%s %q", err, c.What, c.Suggest)
+		}
+		if errors.As(err, &c) {
+			return fmt.Errorf("%w: pass --%s", err, c.What)
 		}
 		return err
 	}
@@ -175,15 +216,18 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	if err != nil {
 		return err
 	}
-	plans, err := p.PlanSkills(ctx, db)
+	plans, err := p.PlanSkills(ctx, db, agent.ValidateSkill)
 	if err != nil {
 		return err
 	}
-	preview, err := p.Preview(plans, stripped)
+	// The CLI runs on the server with access to the data: it's the owner's.
+	preview, err := p.Preview(plans, stripped, true)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Importing %s from %s (made with Thicket %s). This is everything it will get:\n\n%s\n", p.Char.DisplayName(), pos[0], orUnknown(p.Manifest.ThicketVersion), preview)
+	if _, err := fmt.Fprintf(out, "Importing %s from %s (made with Thicket %s). This is everything it will get:\n\n%s\n", p.Char.DisplayName(), pos[0], orUnknown(p.Manifest.ThicketVersion), preview); err != nil {
+		return fmt.Errorf("couldn't show the preview, so nothing was imported: %w", err)
+	}
 	if !*yes {
 		fmt.Fprintf(out, "Import %s? [y/N] ", p.Char.DisplayName())
 		line, _ := bufio.NewReader(in).ReadString('\n')
@@ -196,7 +240,7 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	if owner != nil {
 		ownerID = owner.ID
 	}
-	res, err := p.Install(ctx, db, cfg.CharactersDir, ownerID, agent.ValidateSkill)
+	res, err := p.Install(ctx, db, cfg.CharactersDir, sprigpkg.InstallOptions{Owner: ownerID, Plans: plans, CanWriteSkills: true})
 	if err != nil {
 		return err
 	}

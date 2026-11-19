@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
@@ -28,6 +29,35 @@ type sprigImportArgs struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Package string `json:"package"` // base64 of the file, exactly as shown
+	// Plans are the skill changes shown; if the library changes before
+	// the approval, nothing is imported.
+	Plans []sprigpkg.SkillPlan `json:"plans,omitempty"`
+}
+
+// pendingPackageAge is how long packages sent in chat stay available
+// after their message (to import under another id or name, say).
+const pendingPackageAge = 30 * time.Minute
+
+type pendingPackages struct {
+	at   time.Time
+	pkgs map[string][]byte
+}
+
+// packagesFor returns the packages sent with this turn's message, else the
+// ones this person sent recently, which are remembered for a while.
+func (e *Engine) packagesFor(t *turn) map[string][]byte {
+	if len(t.packages) > 0 {
+		e.pendingPkgs.Store(t.user.ID, &pendingPackages{at: e.now(), pkgs: t.packages})
+		return t.packages
+	}
+	if v, ok := e.pendingPkgs.Load(t.user.ID); ok {
+		p := v.(*pendingPackages)
+		if e.now().Sub(p.at) < pendingPackageAge {
+			return p.pkgs
+		}
+		e.pendingPkgs.Delete(t.user.ID)
+	}
+	return nil
 }
 
 // readPackage reads and prepares a package, refusing id or name clashes.
@@ -62,15 +92,16 @@ func (e *Engine) toolImportSprig(ctx context.Context, t *turn, args json.RawMess
 	if err != nil {
 		return "", err
 	}
-	raw, file := t.packages[a.File], a.File
-	if raw == nil && len(t.packages) == 1 {
-		for n, b := range t.packages {
+	pkgs := e.packagesFor(t)
+	raw, file := pkgs[a.File], a.File
+	if raw == nil && len(pkgs) == 1 {
+		for n, b := range pkgs {
 			raw, file = b, n
 		}
 	}
 	if raw == nil {
 		var names []string
-		for n := range t.packages {
+		for n := range pkgs {
 			names = append(names, n)
 		}
 		sort.Strings(names)
@@ -83,19 +114,20 @@ func (e *Engine) toolImportSprig(ctx context.Context, t *turn, args json.RawMess
 	if err != nil {
 		var c *sprigpkg.Clash
 		if errors.As(err, &c) {
-			return "", fmt.Errorf("%w: ask the user whether to import it as %s %q and pass that as %s", err, c.What, c.Suggest, c.What)
+			return "", fmt.Errorf("%w: ask the user what %s to import it under (suggest %q) and call this again with the same file and that %s", err, c.What, c.Suggest, c.What)
 		}
 		return "", fmt.Errorf("this package can't be imported: %w", err)
 	}
-	plans, err := p.PlanSkills(ctx, e.DB)
+	plans, err := p.PlanSkills(ctx, e.DB, ValidateSkill)
+	if err != nil {
+		return "", fmt.Errorf("this package can't be imported: %w", err)
+	}
+	// Shared skills are changed by owners and admins only (save_skill).
+	preview, err := p.Preview(plans, stripped, t.user.IsAdmin())
 	if err != nil {
 		return "", err
 	}
-	preview, err := p.Preview(plans, stripped)
-	if err != nil {
-		return "", err
-	}
-	b, _ := json.Marshal(sprigImportArgs{File: file, ID: a.ID, Name: a.Name, Package: base64.StdEncoding.EncodeToString(raw)})
+	b, _ := json.Marshal(sprigImportArgs{File: file, ID: a.ID, Name: a.Name, Package: base64.StdEncoding.EncodeToString(raw), Plans: plans})
 	name := p.Char.DisplayName()
 	msg := fmt.Sprintf("📦 Here's everything %s will get from %s. Nothing is written until you say so.\n%s"+
 		"Routines run for you. Reply **approve** or **deny**.", name, file, preview)
@@ -118,10 +150,11 @@ func (e *Engine) importSprig(ctx context.Context, user *store.User, args json.Ra
 	if err != nil {
 		return "", err
 	}
-	res, err := p.Install(ctx, e.DB, e.Chars.Dir(), user.ID, ValidateSkill)
+	res, err := p.Install(ctx, e.DB, e.Chars.Dir(), sprigpkg.InstallOptions{Owner: user.ID, Plans: a.Plans, CanWriteSkills: user.IsAdmin()})
 	if err != nil {
 		return "", err
 	}
+	e.pendingPkgs.Delete(user.ID)
 	if err := e.Chars.Load(); err != nil {
 		e.Log.Warn("reload sprigs after an import", "err", err)
 	}

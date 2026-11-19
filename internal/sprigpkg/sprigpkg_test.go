@@ -5,7 +5,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
 	"os"
@@ -41,7 +46,28 @@ func newInstall(t *testing.T) *install {
 	return &install{dir: dir, chars: filepath.Join(dir, "characters"), db: db, owner: u}
 }
 
-const storedSecret = "hunter2-correct-horse-battery"
+const (
+	storedSecret = "hunter2-correct-horse-battery"
+	memoryText   = "Sam's gate code is 4471, keep it between us"
+)
+
+// pngWithText is a small PNG carrying a text chunk (metadata).
+func pngWithText(t *testing.T, key, text string) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	img.Set(1, 1, color.RGBA{90, 164, 105, 255})
+	var b bytes.Buffer
+	must(t, png.Encode(&b, img))
+	raw := b.Bytes()
+	data := append([]byte(key+"\x00"), text...)
+	chunk := make([]byte, 0, len(data)+12)
+	chunk = binary.BigEndian.AppendUint32(chunk, uint32(len(data)))
+	chunk = append(chunk, "tEXt"...)
+	chunk = append(chunk, data...)
+	chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(append([]byte("tEXt"), data...)))
+	iend := len(raw) - 12 // the IEND chunk is last
+	return append(append(append([]byte{}, raw[:iend]...), chunk...), raw[iend:]...)
+}
 
 // fern is a solo sprig on the source install with everything a package
 // carries, plus things it must leave behind.
@@ -58,7 +84,7 @@ func (in *install) addFern(t *testing.T, extra string) {
 	}
 	must(t, os.MkdirAll(filepath.Join(in.chars, "fern", "voice_tests"), 0o755))
 	must(t, os.WriteFile(filepath.Join(in.chars, "fern.md"), md, 0o644))
-	must(t, os.WriteFile(filepath.Join(in.chars, "fern.png"), []byte("\x89PNG fake"), 0o644))
+	must(t, os.WriteFile(filepath.Join(in.chars, "fern.png"), pngWithText(t, "Comment", "wifi password "+storedSecret), 0o644))
 	must(t, os.WriteFile(avatar.Path(in.chars, "fern"), avatar.Marshal(avatar.Default("fern", "#5aa469")), 0o644))
 	vt, _ := yaml.Marshal(character.VoiceTest{Prompt: "hi!", Reference: "Morning. The tomatoes are thirsty."})
 	must(t, os.WriteFile(filepath.Join(in.chars, "fern", "voice_tests", "01-hello.yaml"), vt, 0o644))
@@ -76,7 +102,10 @@ func (in *install) addFern(t *testing.T, extra string) {
 	if _, err := in.db.CreateJob(ctx, store.Job{UserID: in.owner.ID, Character: "fern", Name: "hook", Prompt: "x", Kind: store.JobWebhook, HookHash: "abc"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := in.db.ApplyMemoryChanges(ctx, 0, []store.MemoryChange{{Action: "add", Memory: store.Memory{UserID: in.owner.ID, Character: "fern", Kind: "fact", Content: "Sam's gate code is 4471", Source: "user"}}}); err != nil {
+	paused, err := in.db.CreateJob(ctx, store.Job{UserID: in.owner.ID, Character: "fern", Name: "paused one", Schedule: "0 9 * * *", Prompt: "y", Kind: store.JobCron})
+	must(t, err)
+	must(t, in.db.SetJobEnabled(ctx, paused.ID, false))
+	if _, err := in.db.ApplyMemoryChanges(ctx, 0, []store.MemoryChange{{Action: "add", Memory: store.Memory{UserID: in.owner.ID, Character: "fern", Kind: "fact", Content: memoryText, Source: "user"}}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -133,14 +162,19 @@ func TestExportImportRoundTrip(t *testing.T) {
 	var names []string
 	for n, c := range files {
 		names = append(names, n)
-		if strings.Contains(c, "4471") || strings.Contains(c, "private") {
-			t.Fatalf("%s leaked install data: %s", n, c)
+		for _, leak := range []string{memoryText, storedSecret, "notes.txt", "paused one"} {
+			if strings.Contains(c, leak) {
+				t.Fatalf("%s leaked %q", n, leak)
+			}
 		}
 	}
 	for _, want := range []string{"manifest.json", "character.md", "sprig/avatar.json", "sprig/voice_tests/01-hello.yaml", "avatar.png", "skills.json", "routines.json"} {
 		if _, ok := files[want]; !ok {
 			t.Fatalf("%s missing; package has %v", want, names)
 		}
+	}
+	if len(p.Omitted) != 1 || !strings.Contains(p.Omitted[0], "paused one") {
+		t.Fatalf("omitted: %v", p.Omitted)
 	}
 	if strings.Contains(files["character.md"], "belongs_to") || strings.Contains(files["skills.json"], "taxes") || strings.Contains(files["routines.json"], "hook") {
 		t.Fatalf("packaged too much:\n%s\n%s\n%s", files["character.md"], files["skills.json"], files["routines.json"])
@@ -159,7 +193,11 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if strings.Join(stripped, ",") != "mcp:gmail/*,admin" || strings.Join(got.Char.Tools, ",") != "schedule,web" {
 		t.Fatalf("tools: kept %v, stripped %v", got.Char.Tools, stripped)
 	}
-	res, err := got.Install(ctx, dst.db, dst.chars, dst.owner.ID, nil)
+	// A sprig once called fern left a level behind on this install.
+	must(t, dst.db.SetToolLevel(ctx, "fern", "web_search", store.LevelAct))
+	plans, err := got.PlanSkills(ctx, dst.db, nil)
+	must(t, err)
+	res, err := got.Install(ctx, dst.db, dst.chars, InstallOptions{Owner: dst.owner.ID, Plans: plans, CanWriteSkills: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,11 +310,11 @@ func TestChangedSkillIsANewVersion(t *testing.T) {
 	if _, err := got.Prepare("", ""); err != nil {
 		t.Fatal(err)
 	}
-	plans, _ := got.PlanSkills(ctx, dst.db)
+	plans, _ := got.PlanSkills(ctx, dst.db, nil)
 	if len(plans) != 1 || plans[0].Action != "new version" {
 		t.Fatalf("plan: %+v", plans)
 	}
-	if _, err := got.Install(ctx, dst.db, dst.chars, dst.owner.ID, nil); err != nil {
+	if _, err := got.Install(ctx, dst.db, dst.chars, InstallOptions{Owner: dst.owner.ID, Plans: plans, CanWriteSkills: true}); err != nil {
 		t.Fatal(err)
 	}
 	hist, _ := dst.db.SkillHistory(ctx, "watering-plan")
@@ -297,5 +335,113 @@ func TestKidSprigsAreNotPackaged(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(in.chars, "pip.md"), md, 0o644))
 	if _, err := Export(Source{CharsDir: in.chars, ID: "pip", LooksSecret: func(string) bool { return false }}); err == nil {
 		t.Fatal("kid sprig exported")
+	}
+}
+
+func exportedFern(t *testing.T) []byte {
+	src := newInstall(t)
+	src.addFern(t, "")
+	p, err := src.export(t)
+	must(t, err)
+	b, err := p.Bytes()
+	must(t, err)
+	return b
+}
+
+func prepared(t *testing.T, b []byte) *Package {
+	p, err := Read(bytes.NewReader(b))
+	must(t, err)
+	_, err = p.Prepare("", "")
+	must(t, err)
+	return p
+}
+
+func TestNonAdminsDontWriteSkills(t *testing.T) {
+	ctx := context.Background()
+	dst := newInstall(t)
+	p := prepared(t, exportedFern(t))
+	plans, _ := p.PlanSkills(ctx, dst.db, nil)
+	if pv, _ := p.Preview(plans, nil, false); !strings.Contains(pv, SkillsNeedAdmin) {
+		t.Fatalf("preview doesn't say the skill won't come:\n%s", pv)
+	}
+	res, err := p.Install(ctx, dst.db, dst.chars, InstallOptions{Owner: dst.owner.ID, Plans: plans})
+	must(t, err)
+	if _, err := dst.db.SkillByID(ctx, "watering-plan", 0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a member's import wrote a shared skill: %v", err)
+	}
+	if len(res.Skills) != 1 || !strings.Contains(res.Skills[0], SkillsNeedAdmin) {
+		t.Fatalf("skills: %v", res.Skills)
+	}
+}
+
+func TestPreviewShowsSkillBodies(t *testing.T) {
+	ctx := context.Background()
+	dst := newInstall(t)
+	_, err := dst.db.SaveSkill(ctx, store.Skill{ID: "watering-plan", Name: "Watering plan", Description: "water by weather", Body: "my own steps"}, 0)
+	must(t, err)
+	p := prepared(t, exportedFern(t))
+	plans, _ := p.PlanSkills(ctx, dst.db, nil)
+	pv, _ := p.Preview(plans, nil, true)
+	if !strings.Contains(pv, "-my own steps") || !strings.Contains(pv, "+1. check rain") {
+		t.Fatalf("no skill diff:\n%s", pv)
+	}
+}
+
+func TestSkillLibraryChangedSincePreview(t *testing.T) {
+	ctx := context.Background()
+	dst := newInstall(t)
+	p := prepared(t, exportedFern(t))
+	plans, _ := p.PlanSkills(ctx, dst.db, nil) // "new"
+	_, err := dst.db.SaveSkill(ctx, store.Skill{ID: "watering-plan", Name: "W", Description: "d", Body: "someone else's"}, 0)
+	must(t, err)
+	if _, err := p.Install(ctx, dst.db, dst.chars, InstallOptions{Owner: dst.owner.ID, Plans: plans, CanWriteSkills: true}); err == nil {
+		t.Fatal("installed a plan nobody saw")
+	}
+	if _, err := os.Stat(filepath.Join(dst.chars, "fern.md")); err == nil {
+		t.Fatal("the sprig went live")
+	}
+	if k, _ := dst.db.SkillByID(ctx, "watering-plan", 0); k.Body != "someone else's" {
+		t.Fatal("the skill was changed")
+	}
+}
+
+func TestInvalidSkillRefusedBeforeWriting(t *testing.T) {
+	ctx := context.Background()
+	dst := newInstall(t)
+	p := prepared(t, exportedFern(t))
+	bad := func(store.Skill) error { return errors.New("bad steps") }
+	if _, err := p.PlanSkills(ctx, dst.db, bad); err == nil || !strings.Contains(err.Error(), "watering-plan") {
+		t.Fatalf("invalid skill: %v", err)
+	}
+}
+
+func TestConcurrentImportOfOneID(t *testing.T) {
+	ctx := context.Background()
+	dst := newInstall(t)
+	p := prepared(t, exportedFern(t))
+	plans, _ := p.PlanSkills(ctx, dst.db, nil)
+	must(t, os.MkdirAll(dst.chars, 0o755))
+	must(t, os.WriteFile(filepath.Join(dst.chars, "fern"+lockSuffix), nil, 0o644))
+	if _, err := p.Install(ctx, dst.db, dst.chars, InstallOptions{Owner: dst.owner.ID, Plans: plans}); err == nil {
+		t.Fatal("a second import of fern went ahead")
+	}
+	if err := CheckClash(p.Char, dst.chars, nil); err == nil {
+		t.Fatal("an id being imported isn't taken")
+	}
+}
+
+func TestSuggestionFitsTheIDLimit(t *testing.T) {
+	long := "a" + strings.Repeat("b", 31)
+	got := freeName(long, "-", maxIDLen, func(s string) bool { return s == long })
+	c := &character.Character{ID: got, Name: "X", Role: "r", Personality: character.Personality{Traits: []string{"t"}}, Voice: character.Voice{Style: []string{"s"}}}
+	if len(got) > maxIDLen || len(c.Validate()) > 0 {
+		t.Fatalf("suggestion %q", got)
+	}
+}
+
+func TestPictureMetadataIsStripped(t *testing.T) {
+	p := prepared(t, exportedFern(t))
+	if p.Avatar == nil || bytes.Contains(p.Avatar, []byte("tEXt")) || bytes.Contains(p.Avatar, []byte(storedSecret)) {
+		t.Fatal("picture missing, or its metadata came along")
 	}
 }

@@ -183,6 +183,10 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 			if packages == nil {
 				packages = map[string][]byte{}
 			}
+			// Two files with one name stay apart: the second is "(2)".
+			for i := 2; packages[name] != nil; i++ {
+				name = fmt.Sprintf("%s (%d)", cleanName(a.Name), i)
+			}
 			packages[name] = body
 			fmt.Fprintf(&b, "\n[sprig package %s: if the user wants it, call import_sprig with this file name to show them everything in it before anything is imported]", name)
 		case kindImage:

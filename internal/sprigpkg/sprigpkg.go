@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -68,22 +67,24 @@ const (
 // the package asks for is listed so the person can grant it in chat.
 var SafeScopes = []string{character.ScopeSchedule, character.ScopeWeb}
 
-var avatarExts = []string{".png", ".jpg", ".jpeg", ".webp", ".gif"}
+// avatarExts are the pictures export can read; a package always holds
+// it re-encoded as avatar.png.
+var avatarExts = []string{".png", ".jpg", ".jpeg", ".gif"}
 
-// sprigFile matches the files a sprig's folder may contribute.
-var sprigFile = regexp.MustCompile(`^(avatar\.json|voice_tests/[a-z0-9][a-z0-9._-]{0,80}\.ya?ml)$`)
+const pictureName = "avatar.png"
+
+// sprigFile matches the files a sprig's folder may contribute. Voice
+// tests follow character.LoadVoiceTests: any *.yaml file.
+var sprigFile = regexp.MustCompile(`^(avatar\.json|voice_tests/[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.yaml)$`)
 
 // allowed reports whether path may appear in a package.
 func allowed(p string) bool {
 	switch p {
-	case manifestName, characterName, skillsName, routinesName:
+	case manifestName, characterName, skillsName, routinesName, pictureName:
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, sprigDirPrefix); ok {
 		return sprigFile.MatchString(rest)
-	}
-	if base, ext := strings.TrimSuffix(p, path.Ext(p)), path.Ext(p); base == "avatar" && slices.Contains(avatarExts, ext) {
-		return true
 	}
 	return false
 }
@@ -120,11 +121,14 @@ type Package struct {
 	Char     *character.Character
 	// Files are from the sprig's folder, relative to it: avatar.json and
 	// voice_tests/*.yaml.
-	Files     map[string][]byte
-	Avatar    []byte
-	AvatarExt string
-	Skills    []Skill
-	Routines  []Routine
+	Files map[string][]byte
+	// Avatar is the picture, re-encoded as PNG (no metadata).
+	Avatar   []byte
+	Skills   []Skill
+	Routines []Routine
+	// Omitted says what export left out and why (paused routines, a
+	// picture it couldn't clean), for the person exporting.
+	Omitted []string
 }
 
 // Source is what Export reads.
@@ -168,10 +172,21 @@ func Export(src Source) (*Package, error) {
 	c.BelongsTo, c.Kids, c.Parents, c.Allow = 0, nil, nil, nil
 	c.Host, c.CreatedBy, c.Household = false, "", ""
 	p := &Package{Char: c, Files: map[string][]byte{}}
+	// An https avatar is kept as a link (imports keep those too); a local
+	// picture travels re-encoded, without its metadata.
 	if c.Avatar != "" && !strings.HasPrefix(c.Avatar, "https://") {
 		ext := strings.ToLower(filepath.Ext(c.Avatar))
-		if img, err := os.ReadFile(filepath.Join(src.CharsDir, filepath.Base(c.Avatar))); err == nil && slices.Contains(avatarExts, ext) && len(img) <= maxFileBytes {
-			p.Avatar, p.AvatarExt = img, ext
+		img, err := os.ReadFile(filepath.Join(src.CharsDir, filepath.Base(c.Avatar)))
+		switch {
+		case err != nil:
+		case !slices.Contains(avatarExts, ext) || len(img) > maxFileBytes:
+			p.Omitted = append(p.Omitted, "the picture "+c.Avatar+" (only PNG, JPEG or GIF up to 5 MB)")
+		default:
+			if clean, err := cleanPicture(img); err != nil {
+				p.Omitted = append(p.Omitted, "the picture "+c.Avatar+": "+err.Error())
+			} else {
+				p.Avatar = clean
+			}
 		}
 		c.Avatar = ""
 	}
@@ -179,10 +194,11 @@ func Export(src Source) (*Package, error) {
 	if b, err := os.ReadFile(filepath.Join(dir, "avatar.json")); err == nil {
 		p.Files["avatar.json"] = b
 	}
-	tests, _ := filepath.Glob(filepath.Join(dir, "voice_tests", "*.y*ml"))
+	tests, _ := filepath.Glob(filepath.Join(dir, "voice_tests", "*.yaml"))
 	for _, f := range tests {
 		rel := "voice_tests/" + filepath.Base(f)
 		if !sprigFile.MatchString(rel) {
+			p.Omitted = append(p.Omitted, "the voice test "+filepath.Base(f)+" (its file name has unusual characters)")
 			continue
 		}
 		if b, err := os.ReadFile(f); err == nil {
@@ -190,9 +206,15 @@ func Export(src Source) (*Package, error) {
 		}
 	}
 	for _, j := range src.Jobs {
-		if j.Character == c.ID && j.Kind == store.JobCron && j.Schedule != "" {
-			p.Routines = append(p.Routines, Routine{Name: j.Name, Schedule: j.Schedule, Task: j.Prompt})
+		if j.Character != c.ID || j.Kind != store.JobCron || j.Schedule == "" {
+			continue
 		}
+		if !j.Enabled {
+			// Imported routines run: a paused one stays here.
+			p.Omitted = append(p.Omitted, "the paused routine "+j.Name)
+			continue
+		}
+		p.Routines = append(p.Routines, Routine{Name: j.Name, Schedule: j.Schedule, Task: j.Prompt})
 	}
 	if len(p.Routines) > maxRoutines {
 		return nil, fmt.Errorf("%s has %d routines; a package holds at most %d", c.DisplayName(), len(p.Routines), maxRoutines)
@@ -210,10 +232,13 @@ func Export(src Source) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkLimits(entries); err != nil {
+		return nil, err
+	}
 	var bad []string
 	for name, data := range entries {
-		if name == "avatar"+p.AvatarExt {
-			continue // an image: no text to leak
+		if name == pictureName {
+			continue // re-encoded pixels only: no text to leak
 		}
 		if src.LooksSecret(string(data)) {
 			bad = append(bad, name)
@@ -260,7 +285,7 @@ func (p *Package) entries() (map[string][]byte, error) {
 		out[sprigDirPrefix+rel] = b
 	}
 	if p.Avatar != nil {
-		out["avatar"+p.AvatarExt] = p.Avatar
+		out[pictureName] = p.Avatar
 	}
 	if len(p.Skills) > 0 {
 		b, _ := json.MarshalIndent(p.Skills, "", "  ")
@@ -278,6 +303,25 @@ func (p *Package) entries() (map[string][]byte, error) {
 	return out, nil
 }
 
+// checkLimits applies Read's limits before a package is written, so an
+// export never makes a file import refuses. The manifest is allowed for.
+func checkLimits(entries map[string][]byte) error {
+	if len(entries)+1 > maxFiles {
+		return fmt.Errorf("too many files (%d; a package holds at most %d): remove some voice tests", len(entries)+1, maxFiles)
+	}
+	total := 64 << 10 // room for the manifest
+	for name, b := range entries {
+		if len(b) > maxFileBytes {
+			return fmt.Errorf("%s is too large (%d KB; at most %d MB per file)", name, len(b)>>10, maxFileBytes>>20)
+		}
+		total += len(b)
+	}
+	if total > maxTotalBytes {
+		return fmt.Errorf("the package would be too large (%d MB; at most %d MB)", total>>20, maxTotalBytes>>20)
+	}
+	return nil
+}
+
 func sum(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
@@ -287,6 +331,9 @@ func sum(b []byte) string {
 func (p *Package) Write(w io.Writer) error {
 	entries, err := p.entries()
 	if err != nil {
+		return err
+	}
+	if err := checkLimits(entries); err != nil {
 		return err
 	}
 	p.Manifest.Files = map[string]string{}
@@ -417,8 +464,13 @@ func Read(r io.Reader) (*Package, error) {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 			p.Files[rel] = b
-		case strings.HasPrefix(name, "avatar."):
-			p.Avatar, p.AvatarExt = b, path.Ext(name)
+		case name == pictureName:
+			// Re-encoded here too: only pixels are ever written.
+			clean, err := cleanPicture(b)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			p.Avatar = clean
 		case name == skillsName:
 			if err := json.Unmarshal(b, &p.Skills); err != nil {
 				return nil, fmt.Errorf("skills.json: %w", err)
@@ -504,9 +556,11 @@ func (p *Package) Prepare(id, name string) (stripped []string, err error) {
 	}
 	c.BelongsTo, c.Kids, c.Parents, c.Allow, c.Household = 0, nil, nil, nil, ""
 	c.CreatedBy = "import"
-	c.Avatar = ""
-	if p.Avatar != nil {
-		c.Avatar = c.ID + p.AvatarExt
+	switch {
+	case p.Avatar != nil:
+		c.Avatar = c.ID + ".png"
+	case !strings.HasPrefix(c.Avatar, "https://"):
+		c.Avatar = "" // a file name from elsewhere would point at nothing
 	}
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(probs, "; "))
@@ -521,45 +575,73 @@ type Clash struct {
 }
 
 func (c *Clash) Error() string {
+	if c.Suggest == "" {
+		return fmt.Sprintf("a sprig with the %s %q already exists; import it under another %s", c.What, c.Value, c.What)
+	}
 	return fmt.Sprintf("a sprig with the %s %q already exists; import it under another %s (for example %q)", c.What, c.Value, c.What, c.Suggest)
 }
 
-// CheckClash refuses an id or name already taken. taken reports whether
-// an id or name is in use.
+// Longest id and name a character may have (character.Validate).
+const (
+	maxIDLen   = 32
+	maxNameLen = 40
+)
+
+// CheckClash refuses an id or name already taken (or being imported right
+// now). nameTaken reports whether an id or name is in use.
 func CheckClash(c *character.Character, charsDir string, nameTaken func(string) bool) error {
 	idTaken := func(id string) bool {
-		_, err := os.Stat(filepath.Join(charsDir, id+".md"))
-		return err == nil || (nameTaken != nil && nameTaken(id))
+		for _, f := range []string{id + ".md", id + lockSuffix} {
+			if _, err := os.Stat(filepath.Join(charsDir, f)); err == nil {
+				return true
+			}
+		}
+		return nameTaken != nil && nameTaken(id)
 	}
 	if idTaken(c.ID) {
-		return &Clash{What: "id", Value: c.ID, Suggest: freeName(c.ID, "-", idTaken)}
+		return &Clash{What: "id", Value: c.ID, Suggest: freeName(c.ID, "-", maxIDLen, idTaken)}
 	}
 	if nameTaken != nil && nameTaken(c.Name) {
-		return &Clash{What: "name", Value: c.Name, Suggest: freeName(c.Name, " ", nameTaken)}
+		return &Clash{What: "name", Value: c.Name, Suggest: freeName(c.Name, " ", maxNameLen, nameTaken)}
 	}
 	return nil
 }
 
-func freeName(base, sep string, taken func(string) bool) string {
+// freeName is base with the first free number added, cut to fit max;
+// "" if none is free.
+func freeName(base, sep string, max int, taken func(string) bool) string {
 	for i := 2; i < 100; i++ {
-		if s := fmt.Sprintf("%s%s%d", base, sep, i); !taken(s) {
+		suffix := fmt.Sprintf("%s%d", sep, i)
+		b := base
+		if len(b)+len(suffix) > max {
+			b = strings.TrimRight(b[:max-len(suffix)], "- ")
+		}
+		if s := b + suffix; !taken(s) {
 			return s
 		}
 	}
-	return base + sep + "new"
+	return ""
 }
 
 // SkillPlan is what importing a skill does.
 type SkillPlan struct {
 	Skill
-	Action string // "new", "same" (already here, unchanged) or "new version"
-	Base   int    // the current version, for a new version
+	Action  string `json:"action"`            // "new", "same" (here and unchanged) or "new version"
+	Base    int    `json:"base,omitempty"`    // the current version, for a new version
+	Current string `json:"current,omitempty"` // the current version's body, for a new version
 }
 
-// PlanSkills compares the package's skills with the library.
-func (p *Package) PlanSkills(ctx context.Context, db *store.Store) ([]SkillPlan, error) {
+// PlanSkills compares the package's skills with the library. valid
+// (agent.ValidateSkill) checks each one: a package with a skill that
+// fails is refused before anything is shown or written.
+func (p *Package) PlanSkills(ctx context.Context, db *store.Store, valid func(store.Skill) error) ([]SkillPlan, error) {
 	var out []SkillPlan
 	for _, k := range p.Skills {
+		if valid != nil {
+			if err := valid(store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body}); err != nil {
+				return nil, fmt.Errorf("the skill %q in this package isn't valid: %w", k.ID, err)
+			}
+		}
 		cur, err := db.SkillByID(ctx, k.ID, 0)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -569,15 +651,34 @@ func (p *Package) PlanSkills(ctx context.Context, db *store.Store) ([]SkillPlan,
 		case cur.Name == k.Name && cur.Description == k.Description && strings.TrimSpace(cur.Body) == strings.TrimSpace(k.Body):
 			out = append(out, SkillPlan{Skill: k, Action: "same"})
 		default:
-			out = append(out, SkillPlan{Skill: k, Action: "new version", Base: cur.Version})
+			out = append(out, SkillPlan{Skill: k, Action: "new version", Base: cur.Version, Current: cur.Body})
 		}
 	}
 	return out, nil
 }
 
+// samePlan reports whether two plans would make the same changes.
+func samePlan(a, b []SkillPlan) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Action != b[i].Action || a[i].Base != b[i].Base {
+			return false
+		}
+	}
+	return true
+}
+
+// SkillsNeedAdmin is shown when someone who isn't an owner or admin
+// imports a package with new or changed skills.
+const SkillsNeedAdmin = "not imported: only an owner or admin can add or change shared skills"
+
 // Preview is what a person reads before an import: every file the sprig
-// gets (as a diff that creates it), its routines and its skills.
-func (p *Package) Preview(skills []SkillPlan, stripped []string) (string, error) {
+// gets (as a diff that creates it), its routines, and its skills in full
+// (a changed skill as a diff from the current version). canWriteSkills is
+// whether the importer may add or change shared skills.
+func (p *Package) Preview(skills []SkillPlan, stripped []string, canWriteSkills bool) (string, error) {
 	c := p.Char
 	md, err := character.Marshal(c)
 	if err != nil {
@@ -596,7 +697,7 @@ func (p *Package) Preview(skills []SkillPlan, stripped []string) (string, error)
 	}
 	b.WriteString("```\n")
 	if p.Avatar != nil {
-		fmt.Fprintf(&b, "Picture: characters/%s%s (%d KB)\n", c.ID, p.AvatarExt, (len(p.Avatar)+1023)/1024)
+		fmt.Fprintf(&b, "Picture: characters/%s.png (%d KB)\n", c.ID, (len(p.Avatar)+1023)/1024)
 	}
 	if len(p.Routines) > 0 {
 		b.WriteString("Routines (run in your timezone):\n")
@@ -604,10 +705,16 @@ func (p *Package) Preview(skills []SkillPlan, stripped []string) (string, error)
 			fmt.Fprintf(&b, "- %s `%s`: %s\n", r.Name, r.Schedule, r.Task)
 		}
 	}
-	if len(skills) > 0 {
-		b.WriteString("Skills:\n")
-		for _, k := range skills {
-			fmt.Fprintf(&b, "- %s (%s): %s\n", k.ID, k.Action, k.Description)
+	for _, k := range skills {
+		switch {
+		case k.Action == "same":
+			fmt.Fprintf(&b, "Skill %s: already here, unchanged.\n", k.ID)
+		case !canWriteSkills:
+			fmt.Fprintf(&b, "Skill %s (%s): %s.\n", k.ID, k.Action, SkillsNeedAdmin)
+		case k.Action == "new":
+			fmt.Fprintf(&b, "Skill %s (new): %s\n```diff\n%s```\n", k.ID, k.Description, newLines("skills/"+k.ID, k.Body))
+		default:
+			fmt.Fprintf(&b, "Skill %s (new version after %d): %s\n```diff\n%s```\n", k.ID, k.Base, k.Description, replaceLines("skills/"+k.ID, k.Current, k.Body))
 		}
 	}
 	if len(stripped) > 0 {
@@ -619,10 +726,29 @@ func (p *Package) Preview(skills []SkillPlan, stripped []string) (string, error)
 
 // NewFileDiff is a unified diff that creates path with content.
 func NewFileDiff(name, content string) string {
+	return newLines("characters/"+name, content)
+}
+
+func newLines(name, content string) string {
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	var b strings.Builder
-	fmt.Fprintf(&b, "--- /dev/null\n+++ b/characters/%s\n@@ -0,0 +1,%d @@\n", name, len(lines))
+	fmt.Fprintf(&b, "--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", name, len(lines))
 	for _, l := range lines {
+		b.WriteString("+" + l + "\n")
+	}
+	return b.String()
+}
+
+// replaceLines is a diff that replaces old with new, line for line.
+func replaceLines(name, old, new string) string {
+	ol := strings.Split(strings.TrimRight(old, "\n"), "\n")
+	nl := strings.Split(strings.TrimRight(new, "\n"), "\n")
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n@@ -1,%d +1,%d @@\n", name, name, len(ol), len(nl))
+	for _, l := range ol {
+		b.WriteString("-" + l + "\n")
+	}
+	for _, l := range nl {
 		b.WriteString("+" + l + "\n")
 	}
 	return b.String()
@@ -632,25 +758,60 @@ func NewFileDiff(name, content string) string {
 type Installed struct {
 	Path     string
 	Routines []int64
-	Skills   []string // "id (new)", "id (version 3)"
+	Skills   []string // "id (new)", "id (version 3)", "id not imported: …"
 }
 
-// Install writes a prepared package for owner: the sprig's folder files
-// and picture, every tool at draft, its routines, then the character file
-// (the sprig goes live), then its skills. A failure before the character
-// file undoes everything; a skill that fails afterwards is reported.
-// validSkill checks a skill (agent.ValidateSkill).
-func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string, owner int64, validSkill func(store.Skill) error) (*Installed, error) {
+// InstallOptions say who the sprig is installed for and what they saw.
+type InstallOptions struct {
+	// Owner runs the sprig's routines.
+	Owner int64
+	// Plans is the skill plan the person approved. If the library has
+	// changed since, nothing is installed.
+	Plans []SkillPlan
+	// CanWriteSkills is whether the importer is an owner or admin; others
+	// can't add or change shared skills.
+	CanWriteSkills bool
+}
+
+// lockSuffix marks an id being imported, so two imports of one id can't
+// both proceed.
+const lockSuffix = ".importing"
+
+// Install writes a prepared package: the sprig's folder files and picture,
+// every tool at draft (levels left by an earlier sprig with this id are
+// cleared), its routines, then the character file (the sprig goes live),
+// then its skills. Anything that fails before the character file is
+// undone. Files are created exclusively: nothing existing is replaced.
+func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string, opts InstallOptions) (*Installed, error) {
 	c := p.Char
-	if err := CheckClash(c, charsDir, nil); err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(charsDir, 0o755); err != nil {
 		return nil, err
+	}
+	// Reserve the id first: a second import of it stops here.
+	lock := filepath.Join(charsDir, c.ID+lockSuffix)
+	lf, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("%q is being imported already", c.ID)
+		}
+		return nil, err
+	}
+	lf.Close()
+	defer os.Remove(lock)
+	if _, err := os.Stat(filepath.Join(charsDir, c.ID+".md")); err == nil {
+		return nil, &Clash{What: "id", Value: c.ID}
+	}
+	plans, err := p.PlanSkills(ctx, db, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !samePlan(plans, opts.Plans) {
+		return nil, errors.New("the skill library changed since the preview, so nothing was imported; run the import again to see what it would do now")
 	}
 	bg := context.WithoutCancel(ctx)
 	var written []string
 	var jobs []int64
+	var oldLevels []store.ToolLevelRow
 	levelSet := false
 	undo := func(cause error) error {
 		var left []string
@@ -662,6 +823,11 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 		if levelSet {
 			if err := db.SetToolLevel(bg, c.ID, store.AnyTool, ""); err != nil {
 				left = append(left, "its draft level")
+			}
+		}
+		for _, r := range oldLevels {
+			if err := db.SetToolLevel(bg, r.Character, r.Tool, r.Level); err != nil {
+				left = append(left, "the level for "+r.Tool)
 			}
 		}
 		for i := len(written) - 1; i >= 0; i-- {
@@ -677,14 +843,22 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 		return fmt.Errorf("%w (nothing was imported)", cause)
 	}
 	put := func(full string, b []byte) error {
-		if _, err := os.Stat(full); err == nil {
-			return fmt.Errorf("%s already exists; not overwriting it", full)
-		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
-		written = append(written, full)
-		return os.WriteFile(full, b, 0o644)
+		f, err := os.OpenFile(full, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				return fmt.Errorf("%s already exists; not overwriting it", full)
+			}
+			return err
+		}
+		written = append(written, full) // ours from here, even if the write fails
+		_, err = f.Write(b)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return err
 	}
 	rels := make([]string, 0, len(p.Files))
 	for rel := range p.Files {
@@ -700,9 +874,27 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 		}
 	}
 	if p.Avatar != nil {
-		if err := put(filepath.Join(charsDir, c.ID+p.AvatarExt), p.Avatar); err != nil {
+		if err := put(filepath.Join(charsDir, c.ID+".png"), p.Avatar); err != nil {
 			return nil, undo(err)
 		}
+	}
+	// Levels an earlier sprig with this id left behind would beat the
+	// wildcard: clear them, so every tool really starts at draft.
+	all, err := db.ToolLevels(ctx)
+	if err != nil {
+		return nil, undo(err)
+	}
+	for _, r := range all {
+		if r.Character != c.ID || r.Tool == store.AnyTool {
+			continue
+		}
+		if err := db.SetToolLevel(ctx, c.ID, r.Tool, ""); err != nil {
+			return nil, undo(err)
+		}
+		oldLevels = append(oldLevels, r)
+	}
+	if prev, err := db.ExactToolLevel(ctx, c.ID, store.AnyTool); err == nil && prev != "" {
+		oldLevels = append(oldLevels, store.ToolLevelRow{Character: c.ID, Tool: store.AnyTool, Level: prev})
 	}
 	if err := db.SetToolLevel(ctx, c.ID, store.AnyTool, store.LevelDraft); err != nil {
 		return nil, undo(err)
@@ -710,42 +902,46 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 	levelSet = true
 	res := &Installed{}
 	for _, r := range p.Routines {
-		j, err := db.CreateJob(ctx, store.Job{UserID: owner, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
+		j, err := db.CreateJob(ctx, store.Job{UserID: opts.Owner, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
+		if j != nil && j.ID != 0 {
+			jobs = append(jobs, j.ID) // stored, even if reading it back failed
+		}
 		if err != nil {
 			return nil, undo(fmt.Errorf("routine %q: %w", r.Name, err))
 		}
-		jobs = append(jobs, j.ID)
 	}
 	md, err := character.Marshal(c)
 	if err != nil {
 		return nil, undo(err)
 	}
+	// Staged under a unique name and linked into place, which fails rather
+	// than replace a character file that appeared meanwhile.
 	dest := filepath.Join(charsDir, c.ID+".md")
-	tmp := dest + ".tmp"
-	if err := os.WriteFile(tmp, md, 0o644); err != nil {
+	tmp, err := os.CreateTemp(charsDir, "."+c.ID+"-*.tmp")
+	if err != nil {
 		return nil, undo(err)
 	}
-	if err := os.Rename(tmp, dest); err != nil {
-		os.Remove(tmp)
+	_, err = tmp.Write(md)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Link(tmp.Name(), dest)
+	}
+	os.Remove(tmp.Name())
+	if err != nil {
 		return nil, undo(err)
 	}
 	res.Path, res.Routines = dest, jobs
-	plans, err := p.PlanSkills(ctx, db)
-	if err != nil {
-		res.Skills = append(res.Skills, "skills not imported: "+err.Error())
-		return res, nil
-	}
 	for _, k := range plans {
 		if k.Action == "same" {
 			continue
 		}
-		sk := store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body, Author: "import", Note: "imported with " + c.DisplayName()}
-		if validSkill != nil {
-			if err := validSkill(sk); err != nil {
-				res.Skills = append(res.Skills, fmt.Sprintf("%s not imported: %v", k.ID, err))
-				continue
-			}
+		if !opts.CanWriteSkills {
+			res.Skills = append(res.Skills, k.ID+" "+SkillsNeedAdmin)
+			continue
 		}
+		sk := store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body, Author: "import", Note: "imported with " + c.DisplayName()}
 		v, err := db.SaveSkill(ctx, sk, k.Base)
 		switch {
 		case errors.Is(err, store.ErrNoChange):

@@ -23,7 +23,7 @@ import (
 type askedLLM struct {
 	mu     sync.Mutex
 	calls  []llm.Request
-	answer func(personSaid string) (bool, error)
+	answer func(personSaid, args string) (bool, error)
 }
 
 func (f *askedLLM) Chat(_ context.Context, req llm.Request) (*llm.Response, error) {
@@ -32,8 +32,8 @@ func (f *askedLLM) Chat(_ context.Context, req llm.Request) (*llm.Response, erro
 	f.mu.Unlock()
 	said := req.Messages[len(req.Messages)-1].Content
 	said = strings.TrimPrefix(said, "The person's message:\n")
-	said, _, _ = strings.Cut(said, "\n\nThe action:")
-	ok, err := f.answer(said)
+	said, action, _ := strings.Cut(said, "\n\nThe action:")
+	ok, err := f.answer(said, action)
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +67,14 @@ func newTaintFixture(t *testing.T) *taintFixture {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{DataDir: dir}
-	f := &taintFixture{llm: &askedLLM{answer: func(said string) (bool, error) {
-		return strings.Contains(strings.ToLower(said), "forward"), nil
+	// The fake judge wants the action and its scope asked for: forwarding
+	// "all mail" needs the person to have said "all".
+	f := &taintFixture{llm: &askedLLM{answer: func(said, action string) (bool, error) {
+		said = strings.ToLower(said)
+		if strings.Contains(action, "all mail") && !strings.Contains(said, "all") {
+			return false, nil
+		}
+		return strings.Contains(said, "forward") && strings.Contains(action, "x@y.example"), nil
 	}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f.e = &Engine{Cfg: cfg, DB: db, LLM: f.llm, Settings: settings.New(db, cfg), Secrets: sec, Log: log,
@@ -101,7 +107,10 @@ func (f *taintFixture) turn(said string) *turn {
 	return &turn{user: f.user, char: f.char, chatRef: "web:1", userText: said}
 }
 
-const forwardAll = `{"to":"x@y.example","what":"all mail"}`
+const (
+	forwardAll    = `{"to":"x@y.example","what":"all mail"}`
+	forwardNewest = `{"to":"x@y.example","what":"the newest email"}`
+)
 
 func TestInjectedEmailIsHeldNotSent(t *testing.T) {
 	f := newTaintFixture(t)
@@ -150,20 +159,70 @@ func TestTaintedButAskedRuns(t *testing.T) {
 	f := newTaintFixture(t)
 	tr := f.turn("read my newest email and forward it to x@y.example")
 	f.call(tr, "mail__read", `{}`)
-	if out := f.call(tr, "mail__send", forwardAll); out != "sent" {
+	if out := f.call(tr, "mail__send", forwardNewest); out != "sent" {
 		t.Fatalf("asked-for action was held: %s", out)
 	}
 	if len(f.llm.calls) != 1 || strings.Contains(f.llm.calls[0].Messages[1].Content, "Ignore your instructions") {
 		t.Fatalf("the check must see only the person's words and the call: %+v", f.llm.calls)
 	}
+	// Asking for the newest one doesn't cover all of it.
+	if out := f.call(tr, "mail__send", forwardAll); !strings.HasPrefix(out, "HELD") {
+		t.Fatalf("a wider action than asked ran: %s", out)
+	}
+}
+
+func TestCheckSeesTheRecipientPastALongBody(t *testing.T) {
+	f := newTaintFixture(t)
+	tr := f.turn("read my newest email and forward it to x@y.example")
+	f.call(tr, "mail__read", `{}`)
+	long := strings.Repeat("blah ", 2000)
+	args, _ := json.Marshal(map[string]string{"body": long, "to": "x@y.example", "what": "the newest email"})
+	if out := f.call(tr, "mail__send", string(args)); out != "sent" {
+		t.Fatalf("held: %s", out)
+	}
+	if shown := f.llm.calls[0].Messages[1].Content; !strings.Contains(shown, "x@y.example") || strings.Count(shown, "blah") > 100 {
+		t.Fatal("the check didn't get the recipient, or got the whole body")
+	}
+	// Too many fields to show whole: held, not judged on part of it.
+	many := map[string]string{"to": "x@y.example"}
+	for i := 0; i < 60; i++ {
+		many[strings.Repeat("k", i+1)] = strings.Repeat("v", 300)
+	}
+	args, _ = json.Marshal(many)
+	if out := f.call(tr, "mail__send", string(args)); !strings.HasPrefix(out, "HELD") {
+		t.Fatalf("an action too big to show ran: %s", out)
+	}
+}
+
+func TestDelegatedFromAJobKeepsItsTask(t *testing.T) {
+	f := newTaintFixture(t)
+	job := &turn{user: f.user, char: f.char, job: &store.Job{Name: "daily", Prompt: "Forward the daily report to x@y.example."}}
+	job.addTaint("mail__read")
+	child := &turn{user: f.user, char: f.char, chatRef: "web:1"}
+	child.inherit(job)
+	if out := f.call(child, "mail__send", forwardNewest); out != "sent" {
+		t.Fatalf("the job's own task didn't count: %s", out)
+	}
+}
+
+func TestAttachedPDFsTaintTheTurn(t *testing.T) {
+	f := newTaintFixture(t)
+	tr := f.turn("summarise this")
+	tr.pdfs = []llm.File{{Name: "invoice.pdf"}}
+	if _, err := f.e.buildMessages(context.Background(), tr, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !tr.tainted() || tr.taintedBy[0] != "pdf invoice.pdf" {
+		t.Fatalf("taint: %v", tr.taintedBy)
+	}
 }
 
 func TestCheckFailureHolds(t *testing.T) {
 	f := newTaintFixture(t)
-	f.llm.answer = func(string) (bool, error) { return false, errors.New("model down") }
+	f.llm.answer = func(string, string) (bool, error) { return false, errors.New("model down") }
 	tr := f.turn("read my newest email and forward it to x@y.example")
 	f.call(tr, "mail__read", `{}`)
-	if out := f.call(tr, "mail__send", forwardAll); !strings.HasPrefix(out, "HELD") || len(f.sent) != 0 {
+	if out := f.call(tr, "mail__send", forwardNewest); !strings.HasPrefix(out, "HELD") || len(f.sent) != 0 {
 		t.Fatalf("a failed check must hold: %s", out)
 	}
 }
@@ -209,7 +268,7 @@ func TestInheritCarriesTaintAndWords(t *testing.T) {
 	child := &turn{}
 	child.inherit(parent)
 	child.addTaint("sprig pip")
-	if child.requestText() != "ask Fern to forward it" || len(child.taintedBy) != 2 {
+	if child.requestText() != "ask Fern to forward it" || len(child.taintedBy) != 2 || !child.requestSet {
 		t.Fatalf("inherit: %q %v", child.requestText(), child.taintedBy)
 	}
 }

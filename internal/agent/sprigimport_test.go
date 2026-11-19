@@ -23,7 +23,7 @@ func TestImportSprigFromChat(t *testing.T) {
 	md, _ := character.Marshal(c)
 	os.WriteFile(filepath.Join(other, "fern.md"), md, 0o644)
 	p, err := sprigpkg.Export(sprigpkg.Source{CharsDir: other, ID: "fern", LooksSecret: func(string) bool { return false },
-		Jobs: []store.Job{{Character: "fern", Name: "morning", Schedule: "0 7 * * *", Prompt: "Say what to water.", Kind: store.JobCron}}})
+		Jobs: []store.Job{{Character: "fern", Name: "morning", Schedule: "0 7 * * *", Prompt: "Say what to water.", Kind: store.JobCron, Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
