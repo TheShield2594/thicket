@@ -101,8 +101,12 @@ about the household ("we're vegetarian", "bins go out on Thursday") with
 `remember` scope `family`. Family memory is separate from everyone's
 private memory: a family sprig talking to Kim sees family memory and
 Kim's own memories, never Sam's. Family sprigs put things on the shared
-household calendar. Nothing goes into family memory unless it's saved
-with scope `family`, and the sprig is told which layer each memory comes
+household calendar. Family memory is saved with `remember` scope
+`family`, or by the memory review when an adult's conversation with
+family sprigs goes quiet: household facts said in passing land there,
+facts about the person stay in their own memory. A kid's conversation or
+a solo sprig's never adds to family memory, and `thicket memory rollback`
+undoes the review's family changes like any other. The sprig is told which layer each memory comes
 from (`family`, the person's `shared` memories, or `yours` between it and
 the person), so it doesn't treat the household's as private or the
 person's as the household's.

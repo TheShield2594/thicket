@@ -161,8 +161,11 @@ conversation starts with none.
   is "shared" (every sprig that person talks to), a sprig id is between
   that person and that sprig, and `household` marks family memory, which
   family sprigs see with every adult (and kid sprigs a parent allowed).
-  Family memory is only created by `remember` with scope `family`; the
-  background review never creates it.
+  Family memory is created by `remember` with scope `family`, and by the
+  background review of a conversation between an adult and family sprigs
+  only (`Reviewer.familyConversation`): then the review sees family memory
+  as scope `family`, may propose `family` adds, and de-duplicates them
+  against family memory. Kid and solo sprig conversations never write it.
   The prompt labels each memory `shared`, `yours` or `family`.
 
 ## Webhook jobs

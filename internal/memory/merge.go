@@ -35,7 +35,7 @@ const (
 type Op struct {
 	Op      string `json:"op"`              // add | update | expire
 	ID      int64  `json:"id,omitempty"`    // update, expire
-	Scope   string `json:"scope,omitempty"` // add: "shared" or a character id
+	Scope   string `json:"scope,omitempty"` // add: "shared", "family" or a character id
 	Kind    string `json:"kind,omitempty"`
 	Content string `json:"content,omitempty"`
 	Due     string `json:"due,omitempty"` // followup: YYYY-MM-DD or YYYY-MM-DDTHH:MM
@@ -47,6 +47,10 @@ type PlanInput struct {
 	Existing []store.Memory
 	Now      time.Time
 	Loc      *time.Location
+	// Family allows scope "family": household facts from an adult's
+	// conversation with family sprigs. Existing may then hold family
+	// memories, which family adds are de-duplicated against.
+	Family bool
 }
 
 type Plan struct {
@@ -83,7 +87,15 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			}
 			scope := strings.TrimSpace(strings.ToLower(op.Scope))
 			char := ""
-			if scope != "" && scope != "shared" {
+			household := false
+			switch {
+			case scope == "family":
+				if !in.Family {
+					p.Skipped = append(p.Skipped, "add: family memory only comes from an adult's conversation with family sprigs")
+					continue
+				}
+				household = true
+			case scope != "" && scope != "shared":
 				if !in.Scopes[scope] {
 					p.Skipped = append(p.Skipped, fmt.Sprintf("add: scope %q is not a character in this conversation", op.Scope))
 					continue
@@ -95,7 +107,11 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				p.Skipped = append(p.Skipped, fmt.Sprintf("add: unknown kind %q", op.Kind))
 				continue
 			}
-			m := store.Memory{UserID: in.UserID, Character: char, Kind: kind, Content: content, Source: "auto"}
+			m := store.Memory{UserID: in.UserID, Character: char, Kind: kind, Content: content, Source: "auto", Household: household}
+			if kind == "followup" && household {
+				p.Skipped = append(p.Skipped, "add: follow-ups are private, not family memory")
+				continue
+			}
 			if kind == "followup" {
 				due, err := parseDue(op.Due, in.Now, in.Loc)
 				if err != nil {
@@ -107,7 +123,7 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			if kind == "context" {
 				m.ExpiresAt = in.Now.Add(ContextTTL)
 			}
-			if dup := findDuplicate(content, char, in.Existing); dup != nil {
+			if dup := findDuplicate(content, char, household, in.Existing); dup != nil {
 				switch {
 				case touched[dup.ID]:
 				case dup.Locked:
@@ -122,7 +138,7 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				touched[dup.ID] = true
 				continue
 			}
-			if findDuplicate(content, char, pending) != nil {
+			if findDuplicate(content, char, household, pending) != nil {
 				p.Skipped = append(p.Skipped, "add: duplicate within this review")
 				continue
 			}
@@ -319,12 +335,14 @@ func Similarity(a, b string) float64 {
 	return float64(inter) / float64(len(sa)+len(sb)-inter)
 }
 
-func findDuplicate(content, char string, among []store.Memory) *store.Memory {
+// findDuplicate finds a near-duplicate in the same layer: the same
+// character scope, and family memory only against family memory.
+func findDuplicate(content, char string, household bool, among []store.Memory) *store.Memory {
 	var best *store.Memory
 	bestScore := 0.0
 	for i := range among {
 		m := &among[i]
-		if m.Character != char {
+		if m.Character != char || m.Household != household {
 			continue
 		}
 		if s := Similarity(content, m.Content); s >= dupeThreshold && s > bestScore {

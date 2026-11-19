@@ -35,6 +35,7 @@ Rules:
 - Prefer "update" of an existing memory over adding a near-duplicate. Use "expire" when a memory is now wrong or obsolete.
 - Memories marked locked:true were set by the user. Never update or expire them.
 - scope "shared" = facts any sprig may use (name, job, family, preferences). Use a character id as scope for things specific to that sprig's relationship (an in-joke with them, their tasks).
+- scope "family" = family memory, about the whole household rather than this one person (the household's diet, who lives here, pets, routines like bin day). Use it only when the request says family memory is allowed in this conversation; otherwise never.
 - kind is one of: fact, preference, person, project, inside_joke, shared_history, followup, context.
 - followup = something a sprig should check back on later. It needs "due" as YYYY-MM-DD or YYYY-MM-DDTHH:MM in the user's local time.
 - Write each memory as one short third-person sentence, e.g. "Has a dog named Biscuit." Max 300 characters.
@@ -129,6 +130,14 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 	if err != nil {
 		return 0, err
 	}
+	family := r.familyConversation(user, scopes)
+	if family {
+		fam, err := r.DB.FamilyMemories(ctx, "")
+		if err != nil {
+			return 0, err
+		}
+		all = append(all, fam...)
+	}
 	// Only show memories this review may touch: shared + participants.
 	var existing []store.Memory
 	var view []existingView
@@ -139,7 +148,10 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 		}
 		existing = append(existing, m)
 		scope := m.Character
-		if scope == "" {
+		switch {
+		case m.Household:
+			scope = "family"
+		case scope == "":
 			scope = "shared"
 		}
 		ev := existingView{ID: m.ID, Scope: scope, Kind: m.Kind, Content: m.Content, Locked: m.Locked}
@@ -150,8 +162,12 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 	}
 	ex, _ := json.Marshal(view)
 	now := time.Now()
-	userMsg := fmt.Sprintf("Today is %s (user's timezone: %s).\nCharacters in this conversation: %s\n\nExisting memories:\n%s\n\n<transcript>\n%s</transcript>",
-		now.In(loc).Format("Monday 2006-01-02 15:04"), loc.String(), strings.Join(keys(scopes), ", "), ex, transcript.String())
+	familyNote := "Family memory is not allowed in this conversation: never use scope \"family\"."
+	if family {
+		familyNote = "Family memory is allowed in this conversation (an adult talking with the household's family sprigs): use scope \"family\" for facts about the whole household, said in passing or not. Facts about this person alone stay \"shared\"."
+	}
+	userMsg := fmt.Sprintf("Today is %s (user's timezone: %s).\nCharacters in this conversation: %s\n%s\n\nExisting memories:\n%s\n\n<transcript>\n%s</transcript>",
+		now.In(loc).Format("Monday 2006-01-02 15:04"), loc.String(), strings.Join(keys(scopes), ", "), familyNote, ex, transcript.String())
 
 	model := r.Settings.String(ctx, "cheap_model")
 	runID, err := r.DB.CreateExtractionRun(ctx, conv.ID, conv.UserID, model)
@@ -176,7 +192,7 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 		_ = r.DB.FinishExtractionRun(ctx, runID, "error", err.Error(), 0, 0)
 		return runID, err
 	}
-	plan := BuildPlan(PlanInput{UserID: conv.UserID, Scopes: scopes, Existing: existing, Now: now, Loc: loc}, ops)
+	plan := BuildPlan(PlanInput{UserID: conv.UserID, Scopes: scopes, Existing: existing, Now: now, Loc: loc, Family: family}, ops)
 	if _, err := r.DB.ApplyMemoryChanges(ctx, runID, plan.Changes); err != nil {
 		_ = r.DB.FinishExtractionRun(ctx, runID, "error", err.Error(), 0, len(plan.Skipped))
 		return runID, err
@@ -191,6 +207,22 @@ func (r *Reviewer) Review(ctx context.Context, conv store.Conversation) (int64, 
 	}
 	_, err = r.DB.MarkReviewed(ctx, conv.ID, conv.LastActivityAt)
 	return runID, err
+}
+
+// familyConversation reports whether a review may propose family
+// memory: an adult talking only with family sprigs. A kid's conversation,
+// or one where a solo or kid sprig took part, never adds to it.
+func (r *Reviewer) familyConversation(user *store.User, scopes map[string]bool) bool {
+	if user.IsKid() || len(scopes) == 0 || r.Chars == nil {
+		return false
+	}
+	for id := range scopes {
+		c, ok := r.Chars.Get(id)
+		if !ok || c.Tier() != character.TierFamily {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Reviewer) charName(id string) string {
