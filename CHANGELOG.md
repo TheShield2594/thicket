@@ -4,6 +4,30 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: quiet hours, calendar removals and PDF limits (schema v17)
+
+- Quiet hours and a daily budget for everything a sprig starts itself.
+  Job and trigger results that finish during a sprig's quiet hours, or
+  after its `initiative.daily_messages` (default 3 per person per day) is
+  used up, are held and delivered when quiet hours end or the next day.
+  A message still held after a day goes to the inbox. Approvals, safety
+  alerts and failures always get through and say why. Change quiet hours
+  or the budget in chat (`set_initiative`); the web app and dashboard
+  show today's count and what's held. Jobs set for inside quiet hours
+  (a 06:30 reminder, say) now arrive when they end.
+- Remove sprig outputs from the Calendar. Each sprig output you may
+  remove (your own, or a shared one for adults) has a small **Remove**
+  action on the web app's Calendar screen. It goes in the trail like
+  `remove_from_calendar`, so undo it under **Changes**. Apps use
+  `DELETE /api/v2/calendar/outputs/{event_id}`; calendar items say
+  `"removable"`. Kids can't remove anything.
+- The owner's setup tour is for the owner and admins only. Members who
+  joined later were getting it, with steps that need admin tools; and
+  members now get check-ins without having to finish a tour.
+- PDF page limits hold for compressed PDFs. Pages kept in compressed
+  object streams (as most modern tools write them) are now counted, and a
+  PDF whose pages still can't be counted is read only up to 2 MB.
+
 ## Unreleased: releases, backups, setup and updates
 
 - Releases. A `vX.Y.Z` tag publishes images for amd64 and arm64 tagged
