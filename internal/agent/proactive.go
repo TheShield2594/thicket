@@ -55,6 +55,14 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	if t.nothingToReport || out == "" {
 		return scheduler.Result{Status: "empty", Cost: cost}
 	}
+	// The worth-saying gate (worth.go): output with nothing new in it, or a
+	// rerun of what the sprig already said, is recorded as empty and never
+	// sent. The run keeps it as its output, so it can be read.
+	if why := e.worthSaying(jctx, user, char, out, jobDraft(&j, t)); why != "" {
+		cost, _ = e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+		return scheduler.Result{Status: "empty", Output: out, Held: why, Cost: cost}
+	}
+	cost, _ = e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
 	return scheduler.Result{Status: "ok", Output: out, Cost: cost}
 }
 
@@ -104,6 +112,10 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 				Title: fmt.Sprintf("Job “%s” ran, but its message couldn't be delivered", j.Name), Detail: res.Output})
 		}
 	case "empty":
+		if res.Held != "" {
+			e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q ran: held back, %s", j.ID, j.Name, res.Held), truncate(res.Output, 200))
+			return
+		}
 		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q ran: nothing to report", j.ID, j.Name), "")
 	default:
 		errText := "unknown error"
@@ -266,9 +278,10 @@ func (e *Engine) FollowUps(ctx context.Context) {
 			continue // attempted recently
 		}
 		done[m.UserID] = true
-		err = e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content))
-		if err == nil {
-			expire("")
+		err = e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content),
+			proactiveDraft{what: "a follow-up", news: []string{"a follow-up they noted is due: " + truncate(m.Content, 200)}})
+		if err == nil || errors.Is(err, errNotWorth) {
+			expire("") // handled: sent, or held back as saying nothing new (the log says why)
 		} else if errors.Is(err, errHeld) || errors.Is(err, ErrPaused) || errors.Is(err, ErrStopped) {
 			_ = e.DB.ReleaseNotice(ctx, fmt.Sprintf("followup:%d", m.ID)) // retry as soon as it may go out
 		}
@@ -312,7 +325,10 @@ func (e *Engine) CheckIns(ctx context.Context) {
 		if ok, _ := e.DB.ClaimOnce(ctx, key); !ok {
 			continue
 		}
-		err = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
+		err = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days),
+			proactiveDraft{what: "a check-in"})
+		// Held back by the worth-saying gate: the claim stays, so this quiet
+		// spell gets no other check-in.
 		if errors.Is(err, errHeld) || errors.Is(err, ErrPaused) || errors.Is(err, ErrStopped) {
 			// Not sent: free the claim so it goes out once it may.
 			_ = e.DB.ReleaseNotice(ctx, key)
@@ -326,10 +342,11 @@ func (e *Engine) CheckIns(ctx context.Context) {
 var errHeld = errors.New("held by quiet hours or the daily budget; not sent")
 
 // proactive generates and delivers a message the user didn't ask for. It
-// returns nil only if the message was delivered. Callers check the gate
+// returns nil only if the message was delivered, and errNotWorth if the
+// worth-saying gate (worth.go) held it back. Callers check the hold gate
 // first, so no generation is wasted; nothing is stored here, because what
 // the message is about stays due and is simply tried again.
-func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string) error {
+func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string, d proactiveDraft) error {
 	t := &turn{user: u, char: c, query: event, noTools: true}
 	// Tracked like a job, so pausing the sprig cancels the generation.
 	ctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("proactive:%d", e.taskSeq.Add(1)), u.ID, "a check-in")
@@ -347,6 +364,10 @@ func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Char
 	if text == "" {
 		return errors.New("model produced no message")
 	}
+	if why := e.worthSaying(pctx, u, c, text, d); why != "" {
+		e.logActivity(ctx, "info", "initiative", c.ID, u.ID, "held back "+d.what+": "+why, truncate(text, 200))
+		return errNotWorth
+	}
 	// Generation can take a while: re-check the gate right before sending.
 	if e.holdReason(ctx, c, u) != "" {
 		return errHeld
@@ -358,6 +379,6 @@ func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Char
 		e.Log.Error("send proactive message", "err", err)
 		return err
 	}
-	e.logActivity(ctx, "info", "character", c.ID, u.ID, "sent a check-in", truncate(text, 200))
+	e.logActivity(ctx, "info", "character", c.ID, u.ID, "sent "+d.what, truncate(text, 200))
 	return nil
 }

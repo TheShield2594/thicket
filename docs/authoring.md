@@ -151,6 +151,10 @@ The sprig needs the `schedule` scope to make or change its own.
   nothing").
 - Results respect quiet hours and the daily budget; failures always get
   through.
+- Results with nothing new in them aren't sent either: Thicket drops a
+  rerun of a recent message, and a result on a day where nothing changed
+  for the person (see [Nothing new, nothing sent](characters.md#nothing-new-nothing-sent)),
+  even if the run forgot `nothing_to_report`.
 - Routines can also fire on events instead of the clock:
   [Triggers](triggers.md) and [Webhooks](webhooks.md).
 

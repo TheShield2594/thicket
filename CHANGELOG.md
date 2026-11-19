@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v22)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v23)
 
 - "Remember this": reply to any message with **remember this** (or say
   "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
@@ -21,6 +21,16 @@ stated.
   fails, your other linked apps are tried before it waits in the inbox.
   Web-only people are told once that a chat app would bring these to
   their phone.
+- A sprig with nothing new stays quiet. Every message it starts itself
+  (job and trigger results, check-ins, follow-ups) is dropped if it
+  repeats one of its last few messages to you, or if nothing changed
+  since it last wrote (no calendar items, nothing due, no new memories or
+  job results) and the message brings nothing of its own. Both are
+  decided by Thicket, not the model; otherwise the cheap model screens out
+  filler. A morning briefing on an empty day sends nothing, never
+  "nothing new today". Held-back job runs count as "nothing to report",
+  and the activity log says what was held back and why. See
+  [Nothing new, nothing sent](docs/characters.md#nothing-new-nothing-sent).
 - The memory review now adds household facts said in passing ("we're
   vegetarian now") to family memory, from an adult's conversations with
   family sprigs only; kid and solo sprig chats never write it. Rollback
