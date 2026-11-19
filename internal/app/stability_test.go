@@ -202,6 +202,7 @@ func TestApprovalRespectsALoweredLevel(t *testing.T) {
 func TestHeartbeatToTaskHandoff(t *testing.T) {
 	a, fc, _, ctx, _, _ := ready(t)
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	daytime(t, a, owner.ID)
 	j, err := a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "juniper", Name: "morning", Schedule: "0 8 * * *", Prompt: "Say good morning.", Kind: store.JobCron})
 	if err != nil {
 		t.Fatal(err)
@@ -260,6 +261,7 @@ func TestHeartbeatsPauseAtTheCap(t *testing.T) {
 func TestFailuresAreDeadLettered(t *testing.T) {
 	a, fc, fm, ctx, _, _ := ready(t)
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	daytime(t, a, owner.ID)
 	j, _ := a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "juniper", Name: "news", Schedule: "0 8 * * *", Prompt: "FAILME fetch the news.", Kind: store.JobCron})
 	fm.mu.Lock()
 	fm.failOn = "FAILME"

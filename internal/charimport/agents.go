@@ -54,7 +54,7 @@ func loadOpenClaw(path string) (*Draft, error) {
 	name = clip(name, 40)
 	c := &character.Character{
 		Name:       name,
-		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 	}
 	who := "Personal assistant"
 	if cr := id["creature"]; cr != "" {
@@ -192,7 +192,7 @@ func loadHermes(path string) (*Draft, error) {
 	name = clip(name, 40)
 	c := &character.Character{
 		Name:       name,
-		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 	}
 	c.Role = role(roleFromInstructions(soul, name), "Personal assistant, brought over from Hermes Agent.")
 	c.Personality.Traits = traitsFromText(soul)
@@ -261,7 +261,7 @@ func loadText(path, from string) (*Draft, error) {
 	name = clip(name, 40)
 	c := &character.Character{
 		Name:       name,
-		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 	}
 	c.Role = role(roleFromInstructions(text, name), name+", brought over from "+app+".")
 	c.Personality.Traits = traitsFromText(text)
@@ -280,7 +280,7 @@ func (d *Draft) fromExport(e export, app string) *Draft {
 	name := clip(e.fields["name"], 40)
 	c := &character.Character{
 		Name:       name,
-		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 	}
 	c.Role = role(e.fields["role"], name+", brought over from "+app+".")
 	c.Personality.Traits = traitList(e.fields["traits"])

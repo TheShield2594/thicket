@@ -65,6 +65,7 @@ func TestWebhookJob(t *testing.T) {
 	onboard(t, a, fc, ctx)
 	j, token := createHook(t, a, fc, ctx)
 	assertTokenHidden(t, a, fm, token)
+	daytime(t, a, j.UserID)
 
 	// The clock never runs a webhook job.
 	a.Scheduler.Tick(ctx)

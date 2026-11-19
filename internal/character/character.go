@@ -70,6 +70,26 @@ type Initiative struct {
 	CheckIns   bool   `yaml:"check_ins"`
 	FollowUps  bool   `yaml:"follow_ups"`
 	QuietHours string `yaml:"quiet_hours,omitempty"` // "22:00-08:00" in the user's timezone
+	// DailyMessages caps the messages the sprig starts itself (job and
+	// trigger output, check-ins, follow-ups) per person per day, in that
+	// person's timezone. 0 means DefaultDailyMessages. Replies never count.
+	DailyMessages int `yaml:"daily_messages,omitempty"`
+}
+
+// DefaultDailyMessages is the daily budget of proactive messages per
+// person when initiative.daily_messages isn't set.
+const DefaultDailyMessages = 3
+
+// MaxDailyMessages is the highest initiative.daily_messages allowed.
+const MaxDailyMessages = 50
+
+// DailyBudget is how many proactive messages the sprig may send one person
+// in a day.
+func (c *Character) DailyBudget() int {
+	if c.Initiative.DailyMessages > 0 {
+		return c.Initiative.DailyMessages
+	}
+	return DefaultDailyMessages
 }
 
 type Character struct {
@@ -249,6 +269,9 @@ func (c *Character) Validate() []string {
 		if _, _, err := ParseQuietHours(c.Initiative.QuietHours); err != nil {
 			p = append(p, err.Error())
 		}
+	}
+	if n := c.Initiative.DailyMessages; n < 0 || n > MaxDailyMessages {
+		p = append(p, fmt.Sprintf("initiative.daily_messages must be between 1 and %d (leave it off for %d)", MaxDailyMessages, DefaultDailyMessages))
 	}
 	if len(c.Body) > 8000 {
 		p = append(p, "the description below the frontmatter is too long (max 8000 characters)")

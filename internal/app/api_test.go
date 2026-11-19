@@ -162,6 +162,7 @@ func TestAPISprigsAndJobs(t *testing.T) {
 	}
 
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	daytime(t, a, owner.ID)
 	j, _ := a.DB.CreateJob(ctx, store.Job{UserID: owner.ID, Character: "juniper", Name: "Digest", Schedule: "0 8 * * *", Prompt: "Summarise the news."})
 	other, _ := a.DB.CreateUser(ctx, "discord", "someone", "", "member")
 	oj, _ := a.DB.CreateJob(ctx, store.Job{UserID: other.ID, Character: "juniper", Name: "Theirs", Schedule: "0 9 * * *", Prompt: "x"})

@@ -655,7 +655,9 @@ func (e *Engine) Notify(ctx context.Context, key string, window time.Duration, l
 	}
 	for _, a := range admins {
 		a := a
-		if err := e.sendNotice(ctx, &a, host, text); err != nil {
+		// Admin notices are failures that need someone: they bypass quiet
+		// hours and the daily budget.
+		if err := e.sendNotice(ctx, &a, host, text+e.mustReach(ctx, host, &a, "Thicket needs an admin")); err != nil {
 			e.Log.Error("notify admin", "user", a.ID, "err", err)
 		}
 	}
