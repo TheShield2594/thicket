@@ -30,7 +30,11 @@ the same memories, from both:
    within 15 minutes.
 
 Proactive messages (job results, follow-ups, check-ins, alerts) go to
-whichever app you last wrote from.
+the app you last wrote from, preferring Telegram or Discord over the web
+app when you have both. To choose, tell a sprig "reach me on Telegram"
+(or "Pip should write on Discord" for one sprig; "auto" goes back to the
+default). If sending there fails, your other linked apps are tried
+before the message waits in the inbox.
 
 An account that already has its own memories, jobs or owner role can't be
 folded into another profile. Codes are single use, and a few wrong codes

@@ -512,8 +512,17 @@ contain the token (Telegram's file URLs do).
 
 A user can have several identities, one per app account
 (`identities` table). `UserByExternal` resolves any of them;
-`users.channel/external_id` hold the one the user last wrote from, which
-is where proactive messages go. Linking uses a one-time code issued by
+`users.channel/external_id` hold the one the user last wrote from, and
+each identity keeps its own `last_seen_at`. Proactive messages
+(`deliverToUser`, `dmAs`) go through `directTo` (`agent/presence.go`),
+which tries the person's accounts in order: the app they chose with
+`set_reach` (`reach_prefs`: `character = ''` for every sprig, a sprig id
+to override it), then the last-used account if it's a phone app
+(Telegram, Discord), then other phone apps by recency, then the rest
+(the web app). A failed send moves on to the next; only when all fail
+does the caller fall back to the inbox. A web-only person is told once
+(a `notices` claim) that linking a chat app would bring these to their
+phone. Linking uses a one-time code issued by
 `link_account` (DMed by code, held in memory for 15 minutes) and redeemed
 by DMing it from the new account. `LinkIdentity` never merges two
 histories and never changes a role: an account with its own memories,

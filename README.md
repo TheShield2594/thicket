@@ -174,8 +174,12 @@ your sessions under the key button or on the dashboard.
 Your web account *is* your Discord account when you sign in through a
 link from Discord or as the owner, so sprigs remember the same things in
 both places. Proactive messages (follow-ups, routine results, alerts) go
-to where your account lives: Discord for Discord users, the sprig's thread
-for web-only users.
+to the chat app you last wrote from, preferring Telegram or Discord over
+the web app when you have both; say "reach me on Telegram" to choose (for
+every sprig, or one). If that app fails, your other linked apps are
+tried. Web-only users get them in the sprig's thread (with a browser
+notification if turned on), and Juni mentions once that a chat app would
+bring them to their phone.
 
 To use it away from home, put it behind a reverse proxy with HTTPS and set
 `THICKET_PUBLIC_URL` so links point at the right address. Sessions last 30

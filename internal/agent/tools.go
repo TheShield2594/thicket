@@ -526,6 +526,12 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolLinkAccount,
 		},
 		{
+			Name:        "set_reach",
+			Description: "Choose where your messages reach the user when they haven't just written (check-ins, reminders, job results): \"reach me on Telegram\", or for one sprig (\"Pip should write on Discord\"). app: telegram, discord, web, or auto (the app they last used, preferring a phone app). The app must be linked to them (link_account first). If it fails, their other apps are tried.",
+			Params:      `{"type":"object","properties":{"app":{"type":"string","enum":["telegram","discord","web","auto"]},"sprig":{"type":"string","description":"only for this sprig (id or name); leave out for every sprig"}},"required":["app"]}`,
+			Run:         e.toolSetReach,
+		},
+		{
 			Name:        "web_app_link",
 			Description: "Post a one-time sign-in link to the Thicket web app, where the user can chat with every sprig side by side; once signed in, its read-only dashboard (/dashboard: memories, jobs, skills, and spending for admins) works too. Thicket posts the link itself right after your reply; never write or guess a URL.",
 			Params:      `{"type":"object","properties":{}}`,
