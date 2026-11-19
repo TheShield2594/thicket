@@ -43,9 +43,14 @@ func compressedPDF(pages, count int) []byte {
 }
 
 func TestPDFPages(t *testing.T) {
-	// /DecodeParms is a nested dictionary between the stream dictionary's
-	// << and its /Filter: the filter must still be found.
-	parms := bytes.Replace(compressedPDF(1, 300), []byte("<< /Type /ObjStm"), []byte("<< /DecodeParms << /Predictor 1 >> /Type /ObjStm"), 1)
+	// /Filter comes first and a nested /DecodeParms dictionary sits between
+	// it and /Type /ObjStm: the nearest << is DecodeParms', so the filter is
+	// found only by finding the enclosing dictionary.
+	parms := bytes.Replace(compressedPDF(1, 300), []byte("<< /Type /ObjStm /N 3 /First 0 /Filter /FlateDecode"),
+		[]byte("<< /Filter /FlateDecode /DecodeParms << /Predictor 1 >> /Type /ObjStm /N 3 /First 0"), 1)
+	if !bytes.Contains(parms, []byte("/DecodeParms")) {
+		t.Fatal("fixture didn't change")
+	}
 	cases := []struct {
 		name     string
 		pdf      []byte
