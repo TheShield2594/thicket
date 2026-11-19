@@ -1,13 +1,17 @@
 # How Thicket works
 
-A short tour for contributors.
+A short tour for contributors. To add a chat app or a capability, see
+[Extending Thicket](adapters.md); to write a sprig,
+[Writing a sprig](authoring.md).
 
 ## Layout
 
 ```
 cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, init, update, backup, restore, settings, changelog, character, memory, migrate
 internal/app         wires everything together (also used by the smoke test)
-internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
+internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative,
+                     ownership, sandboxing, pause and rate limits
+internal/access      per-sprig file access: path resolution (symlinks, ..) and checks
 internal/character   character files: parse, validate, load, write without clobbering
 internal/memory      memory review (cheap model proposes, code validates) and relevance selection
 internal/scheduler   cron and webhook jobs with run history
@@ -35,8 +39,9 @@ internal/avatar      parametric SVG avatars with CSS-animated states
    loops).
 2. `agent.Engine.HandleIncoming`:
    - resolves the user (owner on first DM, invited users, strangers turned
-     away), applies a per-user rate limit, and locks the chat so turns run
-     in order;
+     away), applies a per-user rate limit, answers "paused" from code if
+     everything is paused (and again once the sprig is picked, if it is),
+     and locks the chat so turns run in order;
    - intercepts secrets: a pending `request_secret` capture, or anything
      credential-shaped. These never reach the model or the history;
    - resolves a pending approval if the message is "approve"/"deny";
@@ -152,6 +157,13 @@ conversation starts with none.
   size budget, so only what matters goes in the prompt.
 - `context` memories expire after 14 days; expired memories are deleted 30
   days later.
+- Layers: each memory belongs to one person (`user_id`). `character` empty
+  is "shared" (every sprig that person talks to), a sprig id is between
+  that person and that sprig, and `household` marks family memory, which
+  family sprigs see with every adult (and kid sprigs a parent allowed).
+  Family memory is only created by `remember` with scope `family`; the
+  background review never creates it.
+  The prompt labels each memory `shared`, `yours` or `family`.
 
 ## Webhook jobs
 
@@ -264,6 +276,23 @@ Every response carries a CSP with `default-src 'none'`, no
 framing, no referrer and no caching. A user sees their own memories and
 jobs; spending, health and activity are added for admins.
 
+## Who changes a sprig
+
+`Engine.mayManage` (`agent/ownership.go`) is the one rule for changing
+what a sprig may do: levels, trust upgrades, exec, granted paths and
+pausing. A solo sprig is its person's alone (`belongs_to`; admins and the
+owner included); family and kid sprigs are the owner's and admins'; "every
+sprig" needs an admin. A refusal is logged and written to the trail as
+`refused`, without naming someone else's private sprig. `set_tool_level`,
+`SetToolLevel` (local API, `/api/v2/levels`), `raise_level`,
+`set_sprig_access` and `pause` all go through it, so a member can manage
+their own solo sprigs and nothing else.
+
+Approvals, drafts and held actions go to the sprig's owner: `heldOwner`
+is a solo sprig's person, else the person the turn is for (who made the
+request to a shared sprig). Since only a solo sprig's person can talk to
+it, routing and ownership agree.
+
 ## Permission levels
 
 Every tool call passes `Engine.gate` before it runs. The level comes from
@@ -308,6 +337,73 @@ call straight away.
 So an email that says "forward all mail to x@y" becomes an inbox item,
 while the same request typed by the user runs at `act`. Tests:
 `internal/agent/taint_test.go`.
+
+## Sandboxing
+
+`agent/sandboxing.go` and `internal/access`. Two checks run in the MCP
+tools' `Run`, so every path (straight away, approved, from a draft) gets
+them:
+
+- **Exec.** `mcp_servers.exec` marks an integration that runs commands
+  (the sandbox is set up with it). Its tools are left out of `toolsFor`
+  unless `sprig_access.exec` is on for the sprig, and refused in `Run`
+  if called anyway. Kid sprigs never have it. On the first start after
+  this was added, `App.keepExecGrants` turned exec on for sprigs that
+  already had an exec integration, with a trail entry.
+- **Files.** A sprig's files are `characters/<id>/` plus its
+  `path_grants`. `access.Resolve` walks a path component by component,
+  following each symlink and `..` as the kernel would (`filepath.Join`
+  is avoided, since it cleans `..` lexically first); `Policy.Check`
+  allows the sprig's folder, refuses anything inside a protected path
+  (the data folder, the characters folder, the key file), then allows
+  grants. `CheckGrant` refuses a grant that overlaps a protected path in
+  either direction. For local (`stdio`) integrations, every string under
+  a path-like argument name (`pathArgs`) is checked before the call.
+
+`mcp.Registry` runs a stdio server as one process per sprig (`connKey`
+server + sprig), started in that sprig's folder, plus a neutral one for
+listing tools; `Disconnect` and `Connect` retire them all. Every stdio
+process gets `StdioEnv`: a short allowlist from Thicket's environment,
+`HOME` in `mcp/home`, and the server's configured `env`. Remote servers
+share one connection. Tests: `internal/access`, `mcp/stdio_test.go`
+(a real child process), `app/sandboxing_test.go`.
+
+## Pause and rate limits
+
+The kill switch (`agent/pause.go`) is a row in `pauses` (`*` or a sprig
+id). `paused` reads it from the database on every check and fails
+closed. It's checked in `handle` (before the chat lock, after the user
+rate limit, and again once the sprig is chosen), at the top of
+`runTurn` (which covers jobs, tasks, consults, handoffs, check-ins and
+follow-ups), in `executeTool`, `runApproved` and `RunDraft`, in
+`PausedReason` (scheduled runs are skipped; `Scheduler.Fire` returns
+`ErrHeld`, so webhooks get 503), in trigger polls, `FlushHeld` and the
+initiative loop, and underneath all of them in `budget.Guard.Chat`, so
+no model call runs while paused.
+
+In-flight work is halted by `HaltPaused`: each `inFlight` (replies in
+`turnsIn`, jobs and tasks in `jobsRunning`) carries the sprig doing the
+work (`setChar` in `runTurn`), and matching ones are cancelled like a
+stop, with `paused` set so the acknowledgement and run history say it
+was a pause. `Pause` calls it at once; `RunPauseWatch` calls it every
+250 ms to pick up `thicket pause`, which writes the row from another
+process.
+
+Rate limits (`agent/ratelimit.go`) are sliding windows in memory, checked
+after the gate and before `Run`: tool calls per sprig per minute,
+unapproved changing calls per sprig per hour, and calls per integration
+per minute. Settings give the defaults, with `limits.sprig.<id>.*` and
+`limits.integration.<name>.*` overrides. A refused call is dead-lettered
+to the owner's inbox under one `ref` per limit.
+
+## The trail
+
+`trail` rows record every permission change (levels, grants, exec and
+paths, roles), sprig-created calendar entries, held actions, pauses and
+refusals, each with an optional JSON undo (`trailUndo`). `UndoTrail`
+checks who may undo (admins for shared sprigs, a solo sprig's person for
+theirs, anyone for their own calendar entries), claims the row, runs the
+undo and records that too. It is never pruned.
 
 ## Heartbeats, tasks and the inbox
 
@@ -391,7 +487,9 @@ didn't call `handoff` itself. All handoffs are logged as kind `handoff`.
 
 Implement `channel.Channel` (Run, Send, SendDirect, Delete, Typing,
 Connected), then register it in `cmd/thicket` alongside Discord and
-Telegram, with its token added to the log redactor in `app.New`. Chat
+Telegram, with its token added to the log redactor in `app.New`. The
+full guide, with testing against a fake API, is
+[Extending Thicket](adapters.md). Chat
 references are stored as `<channel>:<chat id>`. Attachments that need an
 authenticated download set `Attachment.Open`, whose errors must not
 contain the token (Telegram's file URLs do).

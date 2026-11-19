@@ -311,8 +311,8 @@ type pageData struct {
 	// The kill switch: whether everything is paused, and whether this
 	// person may pause or resume everything (the owner).
 	PausedAll, CanPauseAll bool
-	InviteLink            string
-	InviteDays            int
+	InviteLink             string
+	InviteDays             int
 }
 
 // changeView is one entry of the reversible trail.
