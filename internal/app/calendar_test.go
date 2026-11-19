@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
@@ -186,5 +189,132 @@ func TestHouseholdCalendar(t *testing.T) {
 	}
 	if got := titles(view(h.kim, calendar.Filter{}), calendar.LayerOutputs); got != "" {
 		t.Fatalf("undone entry still shown: %q", got)
+	}
+}
+
+// Sprig outputs come off the calendar from the Calendar screen and API v2,
+// through the trail like remove_from_calendar, so undo puts them back.
+func TestRemoveSprigOutput(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	for u, name := range map[*store.User]string{h.owner: "sam", h.kim: "kim", h.kid: "max"} {
+		hash, _ := auth.HashPassword(name + " long password")
+		if err := a.DB.SetLogin(ctx, u.ID, name, hash); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go a.Web.Run(runCtx, a.Engine.HandleIncoming)
+	waitFor(t, "web adapter", a.Web.Connected)
+	srv := httptest.NewServer(a.Web.V2Handler())
+	defer srv.Close()
+	anon := &v2client{t: t, base: srv.URL}
+	login := func(user string) *v2client {
+		t.Helper()
+		code, out := anon.call("POST", "/api/v2/auth/login", map[string]string{"username": user, "password": user + " long password"})
+		if code != 200 {
+			t.Fatalf("login %s: %d %v", user, code, out)
+		}
+		return &v2client{t: t, base: srv.URL, token: out["token"].(string)}
+	}
+	owner, kim, kid := login("sam"), login("kim"), login("max")
+
+	start := time.Now().Add(24 * time.Hour)
+	add := func(u *store.User, title string, shared bool) int64 {
+		t.Helper()
+		id, err := a.DB.AddSprigEvent(ctx, store.SprigEvent{UserID: u.ID, Character: "hal", Kind: "dinner", Title: title, StartsAt: start, Shared: shared})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	mine := add(h.owner, "Owner's dinner", false)
+	household := add(h.owner, "Household dinner", true)
+	kims := add(h.kim, "Kim's release date", false)
+	path := func(id int64) string { return fmt.Sprintf("/api/v2/calendar/outputs/%d", id) }
+
+	// The calendar says which outputs each person may remove.
+	removable := func(c *v2client) map[string]bool {
+		t.Helper()
+		code, out := c.call("GET", "/api/v2/calendar", nil)
+		if code != 200 {
+			t.Fatalf("calendar: %d %v", code, out)
+		}
+		got := map[string]bool{}
+		for _, it := range out["items"].([]any) {
+			m := it.(map[string]any)
+			if m["layer"] == calendar.LayerOutputs {
+				got[m["title"].(string)] = m["removable"] == true
+			}
+		}
+		return got
+	}
+	if got := removable(kim); !got["Household dinner"] || !got["Kim's release date"] || len(got) != 2 {
+		t.Fatalf("Kim's removable outputs: %v", got)
+	}
+
+	// Kids can't remove anything; nobody removes someone else's own entry.
+	if code, _ := kid.call("DELETE", path(household), nil); code != 403 {
+		t.Fatalf("kid removed a shared entry: %d", code)
+	}
+	if _, _, err := a.Engine.RemoveSprigEvent(ctx, h.kid, household); err == nil {
+		t.Fatal("the engine let a kid remove a shared entry")
+	}
+	if code, _ := kim.call("DELETE", path(mine), nil); code != 404 {
+		t.Fatalf("Kim removed the owner's own entry: %d", code)
+	}
+	if code, _ := owner.call("DELETE", path(kims), nil); code != 404 {
+		t.Fatalf("the owner removed Kim's own entry: %d", code)
+	}
+	if code, _ := owner.call("DELETE", path(999999), nil); code != 404 {
+		t.Fatalf("missing entry: %d", code)
+	}
+
+	// The owner removes their own entry; it goes in the trail, undoably.
+	code, out := owner.call("DELETE", path(mine), nil)
+	if code != 200 || out["title"] != "Owner's dinner" {
+		t.Fatalf("remove own: %d %v", code, out)
+	}
+	if _, err := a.DB.SprigEventByID(ctx, mine); err == nil {
+		t.Fatal("removed entry is still on the calendar")
+	}
+	entry, err := a.DB.TrailByID(ctx, int64(out["trail_id"].(float64)))
+	if err != nil || !entry.Undoable || entry.Kind != store.TrailEvent || entry.UserID != h.owner.ID || !strings.Contains(entry.Summary, "Owner's dinner") {
+		t.Fatalf("trail entry: %+v %v", entry, err)
+	}
+	if code, _ := owner.call("DELETE", path(mine), nil); code != 404 {
+		t.Fatalf("removed twice: %d", code)
+	}
+
+	// Undo puts it back.
+	if code, out := owner.call("POST", fmt.Sprintf("/api/v2/trail/%d/undo", entry.ID), nil); code != 200 {
+		t.Fatalf("undo: %d %v", code, out)
+	}
+	if _, err := a.DB.SprigEventByID(ctx, mine); err != nil {
+		t.Fatalf("undo didn't put it back: %v", err)
+	}
+
+	// An adult removes a shared entry someone else asked for, and can put it back.
+	code, out = kim.call("DELETE", path(household), nil)
+	if code != 200 {
+		t.Fatalf("Kim removing a shared entry: %d %v", code, out)
+	}
+	if got := removable(owner); len(got) != 1 || !got["Owner's dinner"] {
+		t.Fatalf("shared entry still shown: %v", got)
+	}
+	if code, out := kim.call("POST", fmt.Sprintf("/api/v2/trail/%v/undo", out["trail_id"]), nil); code != 200 {
+		t.Fatalf("Kim putting the shared entry back: %d %v", code, out)
+	}
+	if got := removable(owner); !got["Household dinner"] {
+		t.Fatalf("shared entry not back: %v", got)
+	}
+
+	// The web app's Calendar screen uses the same handler.
+	web := httptest.NewServer(a.Web.Handler())
+	defer web.Close()
+	w := signIn(t, a, ctx, web.URL)
+	if code, out := w.do("DELETE", fmt.Sprintf("/api/calendar/outputs/%d", mine), nil, true); code != 200 || out["trail_id"] == nil {
+		t.Fatalf("web app remove: %d %v", code, out)
 	}
 }

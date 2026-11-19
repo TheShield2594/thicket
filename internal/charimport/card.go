@@ -76,7 +76,7 @@ func loadCard(path string) (*Draft, error) {
 	c := &character.Character{
 		Name:       name,
 		Nickname:   clip(strings.TrimSpace(data.Nickname), 40),
-		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative: character.Initiative{FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 	}
 	if c.Nickname == c.Name {
 		c.Nickname = ""

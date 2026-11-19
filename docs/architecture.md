@@ -285,6 +285,17 @@ to `Engine.RunJob`, unless `Engine.PausedReason` (the scheduler's optional
 `Pauser`) says a spend cap is reached: then the run is recorded as skipped
 and `last_run_at` moves on. The initiative loop checks the same pause.
 
+Every message a sprig starts itself passes one gate (`internal/agent/gate.go`):
+`holdReason` holds it inside the sprig's `initiative.quiet_hours` or once
+its `initiative.daily_messages` budget for that person is used up (counted
+in `proactive_sent` per local day). Finished job and trigger output is
+stored in `held_messages` and delivered by `FlushHeld` (every initiative
+tick) once nothing holds it back; one held more than a day goes to the
+inbox as `undelivered` and the activity log says so. Check-ins and
+follow-ups aren't written until they may go out. Replies, approvals,
+safety alerts and failure reports bypass the gate and aren't counted;
+`mustReach` adds a line saying why when the gate would have held them.
+
 Failures are dead-lettered into `inbox` (kinds `failed`, `interrupted`,
 `undelivered`, `draft`), keyed by `ref` (`job:ID`, `task:ID`) so repeats
 bump one open item. Delegated tasks are rows in `tasks`. At startup,

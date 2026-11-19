@@ -345,6 +345,9 @@ type sprigView struct {
 	Scopes         []string
 	State          string
 	Avatar         template.HTML
+	// Proactive is the viewer's share of the sprig's daily budget of
+	// unprompted messages and what's held for them ("" for kid sprigs).
+	Proactive string
 }
 
 type approvalView struct {
@@ -452,6 +455,16 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		// Inline renders only validated parts and escapes the label.
 		svg := template.HTML(avatar.Inline(look, st, "av-"+c.ID, c.DisplayName()+" is "+st))
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg}
+		if !c.IsKid() && c.UsableBy(u) {
+			sent, _ := d.DB.ProactiveSentSince(ctx, u.ID, c.ID, store.LocalDayStart(d.now(), u.Location()))
+			v.Proactive = fmt.Sprintf("Unprompted messages to you today: %d of %d", sent, c.DailyBudget())
+			if held, _ := d.DB.HeldMessages(ctx, u.ID, c.ID); len(held) > 0 {
+				v.Proactive += fmt.Sprintf(" · %d held for later", len(held))
+			}
+			if c.Initiative.QuietHours != "" {
+				v.Proactive += " · quiet " + c.Initiative.QuietHours
+			}
+		}
 		if c.BelongsTo != 0 {
 			v.Only = "yours"
 			if c.BelongsTo != u.ID {

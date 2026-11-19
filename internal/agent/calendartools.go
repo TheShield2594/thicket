@@ -232,11 +232,51 @@ func (e *Engine) toolRemoveFromCalendar(ctx context.Context, t *turn, args json.
 	if err != nil || (ev.UserID != t.user.ID && !(ev.Shared && t.char.Tier() == character.TierFamily)) {
 		return "", fmt.Errorf("no event %d on this calendar", a.EventID)
 	}
-	if err := e.DB.DeleteSprigEvent(ctx, ev.ID); err != nil {
+	if _, err := e.takeOffCalendar(ctx, t.user.ID, t.char.ID, t.char.DisplayName(), "", ev); err != nil {
 		return "", err
 	}
-	e.addTrail(ctx, t.user.ID, t.char.ID, store.TrailEvent, fmt.Sprintf("%s removed %q from the calendar", t.char.DisplayName(), ev.Title), "", &trailUndo{Type: "restore_event", EventID: ev.ID})
 	return fmt.Sprintf("Removed %q.", ev.Title), nil
+}
+
+// RemoveSprigEvent takes a sprig output off the calendar for a person (the
+// web app's Calendar screen and API v2): their own, or a shared one when
+// they're an adult. Like remove_from_calendar it goes in the trail, so it
+// can be put back. It returns the trail entry that undoes it.
+func (e *Engine) RemoveSprigEvent(ctx context.Context, by *store.User, id int64) (*store.SprigEvent, int64, error) {
+	if by.IsKid() {
+		return nil, 0, errors.New("kids can't change the calendar")
+	}
+	ev, err := e.DB.SprigEventByID(ctx, id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, 0, err
+	}
+	if err != nil || !ev.RemovableBy(by) {
+		return nil, 0, fmt.Errorf("no event %d on your calendar: %w", id, store.ErrNotFound)
+	}
+	added := ev.Character
+	if c, ok := e.Chars.Get(ev.Character); ok {
+		added = c.DisplayName()
+	}
+	who := by.Name
+	if who == "" {
+		who = "someone"
+	}
+	trailID, err := e.takeOffCalendar(ctx, by.ID, ev.Character, who, "added by "+added, ev)
+	if err != nil {
+		return nil, 0, err
+	}
+	return ev, trailID, nil
+}
+
+// takeOffCalendar removes a sprig output and records it in the trail with
+// what puts it back. who names whoever removed it (a sprig or a person).
+func (e *Engine) takeOffCalendar(ctx context.Context, userID int64, char, who, detail string, ev *store.SprigEvent) (int64, error) {
+	undo, err := json.Marshal(trailUndo{Type: "restore_event", EventID: ev.ID})
+	if err != nil {
+		return 0, err
+	}
+	return e.DB.DeleteSprigEventWithTrail(ctx, ev.ID, store.TrailEntry{UserID: userID, Character: char, Kind: store.TrailEvent,
+		Summary: fmt.Sprintf("%s removed %q from the calendar", who, ev.Title), Detail: detail, Undo: undo})
 }
 
 // AddCalendar connects one of an adult's calendars, read-only, after

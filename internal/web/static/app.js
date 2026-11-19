@@ -16,6 +16,8 @@ const S = {
   chats: new Map(),    // chat -> {messages, more, loaded, loading}
   typing: new Map(),   // chat -> timestamp
   routines: new Map(), // sprig id -> routines
+  proactive: new Map(), // sprig id -> {daily_messages, sent_today, held}
+  detailsAt: new Map(), // sprig id -> when its routines and proactive status were last fetched
   status: {},
   panes: [],           // open chat ids, left to right
   focus: 0,
@@ -607,10 +609,13 @@ async function loadChat(chat, opts = {}) {
 
 async function loadRoutines(id) {
   const session = S.session;
-  let routines = null;
-  try { routines = (await api('/api/sprigs/' + encodeURIComponent(id))).routines; } catch { /* shown as unavailable */ }
+  S.detailsAt.set(id, Date.now()); // also stops renderDetails asking again meanwhile
+  let routines = null, proactive = null, failed = false;
+  try { ({ routines, proactive } = await api('/api/sprigs/' + encodeURIComponent(id))); } catch { failed = true; }
   if (session !== S.session) return; // signed out meanwhile
+  if (failed && S.routines.get(id)) return; // a refresh failed: keep what's shown
   S.routines.set(id, routines);
+  S.proactive.set(id, proactive || null);
   renderDetails();
 }
 
@@ -735,7 +740,7 @@ function endSession() {
   S.session++;
   S.me = null;
   S.panes = []; S.focus = 0; S.details = false; S.filter = '';
-  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.drafts].forEach((m) => m.clear());
+  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.proactive, S.detailsAt, S.drafts].forEach((m) => m.clear());
   S.order = [];
   paneEls.clear();
   $sidebar = $main = null;
@@ -1099,6 +1104,13 @@ function calItem(it, sprigInfo) {
     meta.push(h('span', {}, 'Added by ' + (s?.name || it.sprig) + (it.shared ? ' · household' : '')));
     if (it.source_url) meta.push(h('a', { href: it.source_url, target: '_blank', rel: 'noopener noreferrer' }, icon('link'), it.source_label || 'Source'));
     else if (it.source_label) meta.push(h('span', {}, 'From ' + it.source_label));
+    if (it.removable) meta.push(h('button.ag-remove', { type: 'button', 'aria-label': `Remove ${it.title} from the calendar`, onclick: async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      try {
+        await api('/api/calendar/outputs/' + it.event_id, { method: 'DELETE' });
+        toast('Removed. It’s in the trail: put it back from the dashboard’s Changes.'); renderMain();
+      } catch (ex) { btn.disabled = false; toast('Couldn’t remove it: ' + ex.message); }
+    } }, 'Remove'));
   }
   return h('div.ag-item.' + it.layer, { style: { '--c': s?.color || 'var(--accent)' } },
     h('span.ag-time', {}, when),
@@ -1665,7 +1677,10 @@ function renderDetails() {
   }
 
   const s = S.sprigs.get(sprigOf(chat));
+  // Routines and today's message count change on their own, so the cached
+  // copy is shown while a fresh one loads once it's a minute old.
   if (!S.routines.has(s.id)) { S.routines.set(s.id, undefined); loadRoutines(s.id); }
+  else if (Date.now() - (S.detailsAt.get(s.id) || 0) > 60000) loadRoutines(s.id);
   const routines = S.routines.get(s.id);
   const routineList = routines === undefined ? h('div.d-empty', {}, 'Loading…')
     : routines === null ? h('div.d-empty', {}, 'Couldn’t load routines.')
@@ -1681,6 +1696,15 @@ function renderDetails() {
   if (s.follow_ups) initiative.push('Follows up on things you mention');
   if (s.check_ins) initiative.push('Checks in after a quiet spell');
   if (s.quiet_hours) initiative.push('Quiet hours ' + s.quiet_hours);
+  const pro = S.proactive.get(s.id);
+  if (pro) {
+    initiative.push(`Unprompted messages today: ${pro.sent_today} of ${pro.daily_messages}`);
+    for (const m of pro.held || []) {
+      initiative.push(`Held: ${m.title} from ${clock(m.at)} (${m.reason === 'budget' ? 'daily limit reached' : 'quiet hours'})`);
+    }
+  } else if (s.daily_messages) {
+    initiative.push(`Up to ${s.daily_messages} unprompted messages a day`);
+  }
 
   el.replaceChildren(head, h('div.details-scroll', {},
     h('div.profile', { style: { '--c': s.color } }, orb(s, 76),

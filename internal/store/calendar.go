@@ -26,6 +26,13 @@ type SprigEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// RemovableBy says whether a person may take this event off the calendar,
+// or put it back: one on their own calendar, or a shared one when they're
+// an adult. Kids can't change the calendar.
+func (e *SprigEvent) RemovableBy(u *User) bool {
+	return u != nil && !u.IsKid() && (e.UserID == u.ID || e.Shared)
+}
+
 const sprigEventCols = "id, user_id, character, kind, title, starts_at, ends_at, all_day, details, source_label, source_url, shared, created_at"
 
 func scanSprigEvent(r interface{ Scan(...any) error }) (*SprigEvent, error) {
@@ -70,6 +77,35 @@ func (s *Store) DeleteSprigEvent(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// DeleteSprigEventWithTrail takes an event off the calendar and records t
+// (which says how to put it back) in one transaction: either both happen
+// or neither. It returns the trail entry's id.
+func (s *Store) DeleteSprigEventWithTrail(ctx context.Context, id int64, t TrailEntry) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := s.unix()
+	res, err := tx.ExecContext(ctx, "UPDATE sprig_events SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", now, id)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, ErrNotFound
+	}
+	res, err = tx.ExecContext(ctx, "INSERT INTO trail (at, user_id, character, kind, summary, detail, undo) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		now, nullInt(t.UserID), t.Character, t.Kind, s.clean(t.Summary), s.clean(t.Detail), string(t.Undo))
+	if err != nil {
+		return 0, err
+	}
+	trailID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return trailID, tx.Commit()
 }
 
 // SprigEventAny returns an event, removed or not.

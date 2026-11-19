@@ -100,5 +100,6 @@ role changes, invites, calendar entries. See them under **Changes** on the
 dashboard (admins see everything, others what concerns them) and press
 **Undo**, or use `POST /api/v2/trail/{id}/undo`. Admins undo permission
 changes; parents undo changes to their kid's sprig; anyone undoes what a
-sprig put on their own calendar. Unlike the activity log, the trail is
+sprig put on their own calendar, and an adult who took a shared entry off
+the calendar can put it back. Unlike the activity log, the trail is
 never pruned.

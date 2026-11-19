@@ -363,6 +363,14 @@ func (e *Engine) builtinTools() []*Tool {
 			ChatOnly:    true,
 			Run:         e.toolGrantTools,
 		},
+		{
+			Name: "set_initiative",
+			Description: "Show or change when a sprig may message the user unprompted (job and trigger results, check-ins, follow-ups): quiet_hours (\"22:00-08:00\" in the user's timezone, or \"off\") and daily_messages (how many such messages per person per day, 1-50; default 3). " +
+				"Held messages go out when quiet hours end or with the next day's budget. Replies, approvals, safety alerts and failures always get through. Omit both to show the current settings. Edits the sprig's character file (never overwrites manual edits).",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50}}}`,
+			ChatOnly: true,
+			Run:      e.toolSetInitiative,
+		},
 		// --- admin ---
 		{
 			Name:        "settings",
@@ -909,7 +917,7 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		Voice:         character.Voice{Style: a.VoiceStyle, NeverSay: a.NeverSay},
 		Relationships: character.Relationships{User: a.RelToUser, Characters: a.Relationships},
 		Tools:         a.Tools,
-		Initiative:    character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00"},
+		Initiative:    character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
 		CreatedBy:     t.char.ID,
 		Body:          strings.TrimSpace(a.Background),
 	}
@@ -1019,6 +1027,78 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	e.trailGrant(ctx, t.user, c, c.Tools, cp.Tools)
 	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "tool scopes changed", strings.Join(cp.Tools, ", "))
 	return fmt.Sprintf("%s now has: %s.", c.DisplayName(), strings.Join(cp.Tools, ", ")), nil
+}
+
+// toolSetInitiative shows or changes a sprig's quiet hours and daily
+// budget of proactive messages. Admins may change any sprig; anyone may
+// change a sprig that is theirs alone.
+func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
+	a, err := decode[struct {
+		Sprig         string  `json:"sprig"`
+		QuietHours    *string `json:"quiet_hours"`
+		DailyMessages *int    `json:"daily_messages"`
+	}](args)
+	if err != nil {
+		return "", err
+	}
+	c := t.char
+	if a.Sprig != "" {
+		if c, err = e.findSprig(t, a.Sprig); err != nil {
+			return "", err
+		}
+	}
+	describe := func(c *character.Character) string {
+		quiet := "no quiet hours"
+		if c.Initiative.QuietHours != "" {
+			quiet = "quiet hours " + c.Initiative.QuietHours
+		}
+		return fmt.Sprintf("%s: %s, up to %d unprompted messages a day per person (you've had %d today).", c.DisplayName(), quiet, c.DailyBudget(), e.sentToday(ctx, c, t.user))
+	}
+	if a.QuietHours == nil && a.DailyMessages == nil {
+		return describe(c), nil
+	}
+	if c.IsKid() {
+		return "", fmt.Errorf("kid sprigs never message anyone unprompted, so there's nothing to set")
+	}
+	if !t.user.IsAdmin() && c.BelongsTo != t.user.ID {
+		return "", fmt.Errorf("%s is shared, so only an admin can change when it messages people", c.DisplayName())
+	}
+	// Start from the file as it is now: an earlier call in this turn may
+	// have changed the other setting.
+	if fresh, ok := e.Chars.Get(c.ID); ok {
+		c = fresh
+	}
+	cp := *c
+	if a.QuietHours != nil {
+		q := strings.TrimSpace(*a.QuietHours)
+		if strings.EqualFold(q, "off") || strings.EqualFold(q, "none") {
+			q = ""
+		}
+		if q != "" {
+			start, end, err := character.ParseQuietHours(q)
+			if err != nil {
+				return "", err
+			}
+			q = fmt.Sprintf("%02d:%02d-%02d:%02d", start/60, start%60, end/60, end%60)
+		}
+		cp.Initiative.QuietHours = q
+	}
+	if a.DailyMessages != nil {
+		if n := *a.DailyMessages; n < 1 || n > character.MaxDailyMessages {
+			return "", fmt.Errorf("daily_messages must be between 1 and %d", character.MaxDailyMessages)
+		}
+		cp.Initiative.DailyMessages = *a.DailyMessages
+	}
+	path, err := e.Chars.Write(ctx, &cp)
+	if errors.Is(err, character.ErrUserEdited) {
+		return fmt.Sprintf("%s's file was edited by hand, so I didn't overwrite it. My proposed version is at %s; the user can merge it.", c.DisplayName(), path), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "initiative changed",
+		fmt.Sprintf("quiet_hours %q, daily_messages %d", cp.Initiative.QuietHours, cp.DailyBudget()))
+	return "Done. " + describe(&cp), nil
 }
 
 // --- admin ---

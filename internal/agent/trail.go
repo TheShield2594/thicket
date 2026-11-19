@@ -187,7 +187,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		if err != nil {
 			return "", err
 		}
-		if !by.IsAdmin() && ev.UserID != by.ID {
+		if !by.IsAdmin() && !ev.RemovableBy(by) {
 			return "", errors.New("that event isn't yours to put back")
 		}
 		if err := e.DB.RestoreSprigEvent(ctx, u.EventID); err != nil {
