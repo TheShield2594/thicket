@@ -491,10 +491,9 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "set_tool_level",
-			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act).",
+			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act). Only a sprig's owner may: the person a private sprig belongs to, or the owner or an admin for a shared sprig (and for every sprig at once). Anyone else is refused, and the attempt is logged.",
 			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"level":{"type":"string","enum":["read","draft","ask","act","default"]},"sprig":{"type":"string","description":"sprig id or name; omit for every sprig"}},"required":["tool","level"]}`,
 			Scope:       "admin",
-			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolSetLevel,
 		},

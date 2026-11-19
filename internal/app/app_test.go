@@ -415,6 +415,11 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	case strings.Contains(u, "put dinner on the calendar"):
 		return toolCall("add_to_calendar", map[string]any{"title": "Dinner: lentil curry", "start": "2026-11-20 17:30", "kind": "dinner",
 			"source_label": "Recipe box", "source_url": "https://recipes.example/lentil-curry"}), nil
+	case strings.HasPrefix(u, "set level "):
+		// "set level TOOL LEVEL for SPRIG"
+		var tool, level, sprig string
+		fmt.Sscanf(u, "set level %s %s for %s", &tool, &level, &sprig)
+		return toolCall("set_tool_level", map[string]any{"tool": tool, "level": level, "sprig": sprig}), nil
 	case strings.Contains(u, "remember we are vegetarian"):
 		return toolCall("remember", map[string]any{"content": "The household is vegetarian.", "scope": "family", "kind": "preference"}), nil
 	case strings.Contains(u, "remember my dog"):

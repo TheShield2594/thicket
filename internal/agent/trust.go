@@ -45,8 +45,8 @@ func (e *Engine) toolRequestAccess(ctx context.Context, t *turn, args json.RawMe
 	if strings.TrimSpace(a.Reason) == "" {
 		return "", errors.New("say why you need it: the user will read your reason")
 	}
-	if !t.user.IsAdmin() {
-		return "", errors.New("only the owner or an admin can change what sprigs may do; tell the user what you'd need")
+	if !canManage(t.user, t.char) {
+		return "", errors.New("only your owner (the owner or an admin, for a shared sprig) can change what you may do; tell the user what you'd need")
 	}
 	host, ok := e.Chars.Host()
 	if !ok {
@@ -119,9 +119,6 @@ func describeRecord(r store.ToolRecord) string {
 
 // raiseLevel applies an approved trust upgrade.
 func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.RawMessage) (string, error) {
-	if !user.IsAdmin() {
-		return "", errors.New("only the owner or an admin can change levels")
-	}
 	var r levelRequest
 	if err := json.Unmarshal(args, &r); err != nil {
 		return "", err
@@ -129,6 +126,9 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 	c, ok := e.Chars.Get(r.Sprig)
 	if !ok {
 		return "", fmt.Errorf("the sprig %q no longer exists", r.Sprig)
+	}
+	if err := e.mayManage(ctx, user, c, "raise a level"); err != nil {
+		return "", err
 	}
 	if c.IsKid() {
 		return "", fmt.Errorf("%s is a kid sprig: it's locked to read", c.DisplayName())

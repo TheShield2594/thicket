@@ -225,19 +225,22 @@ func orDefault(l string) string {
 }
 
 // SetToolLevel changes a sprig's level for a tool on someone's behalf
-// (the API): admins only, recorded in the trail, never above read for a
-// kid sprig. level "" clears it.
+// (the API): only by the sprig's owner (see mayManage), recorded in the
+// trail, never above read for a kid sprig. level "" clears it.
 func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, level string) error {
-	if !by.IsAdmin() {
-		return errors.New("only the owner or an admin can change levels")
-	}
 	if level != "" && !store.ValidLevel(level) {
 		return errors.New("level must be read, draft, ask, act or empty")
 	}
+	var target *character.Character
 	if sprig != store.AllSprigs {
-		if c, ok := e.Chars.Get(sprig); !ok || c.PrivateFrom(by.ID) {
+		c, ok := e.Chars.Get(sprig)
+		if !ok {
 			return fmt.Errorf("no sprig %q", sprig)
 		}
+		target = c // someone else's private sprig: mayManage says it doesn't exist
+	}
+	if err := e.mayManage(ctx, by, target, "change a permission level"); err != nil {
+		return err
 	}
 	return e.setLevel(ctx, by, sprig, tool, level, "set through the API")
 }

@@ -21,6 +21,20 @@ import (
 // Members can't change family sprigs or anyone else's. A refused attempt
 // is logged and goes in the trail, so the household can see it.
 
+// canManage reports whether by may change sprig c's permissions (c nil:
+// every sprig's), without logging anything.
+func canManage(by *store.User, c *character.Character) bool {
+	switch {
+	case by == nil || by.IsKid():
+		return false
+	case c == nil:
+		return by.IsAdmin()
+	case c.Tier() == character.TierSolo:
+		return c.BelongsTo == by.ID
+	}
+	return by.IsAdmin()
+}
+
 // mayManage reports whether by may change sprig c's permissions, and logs
 // a refusal. what says what was tried, for the log ("raise a level").
 func (e *Engine) mayManage(ctx context.Context, by *store.User, c *character.Character, what string) error {
