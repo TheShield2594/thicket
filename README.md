@@ -427,6 +427,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Desktop app](docs/desktop.md)
 - [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
+- [Security: threat model and review](docs/security.md)
 - [Extending Thicket: chat adapters and integrations](docs/adapters.md)
 - [Changelog](CHANGELOG.md)
 
