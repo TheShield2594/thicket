@@ -165,6 +165,47 @@ for more trust with one tool at a time (`request_access`): Juni puts the
 request to you with its track record from the trail (actions taken,
 drafts, approval rate, mistakes), and only an owner or admin can say yes.
 
+## Sharing a sprig
+
+```bash
+thicket export-sprig fern                 # writes fern.sprig
+thicket import-sprig fern.sprig           # on the other Thicket
+```
+
+A `.sprig` file is a gzipped archive with a `manifest.json` (format
+version and every file's SHA-256) and, from an allowlist of paths only:
+the character file (`character.md`), the sprig's `avatar.json`, its
+picture (re-encoded as `avatar.png`, so no metadata travels), its
+`voice_tests/`, its scheduled routines (`routines.json`; paused ones are
+left out and listed) and the skills it uses (`skills.json`: library skills
+named in its character file or routines, plus any `--skill ID`). An
+existing file is never overwritten: pick another with `-o`.
+
+Never included: memories, secrets or their values, conversations, the
+trail, inbox items, permission levels, integration credentials and
+webhook jobs. Whose sprig it was (`belongs_to`) is cleared, so it arrives
+as a family sprig. If anything in the package looks like a secret (a
+stored secret's value or a key-shaped string), the export is refused and
+names the file. If the stored secrets can't be read to check against,
+nothing is exported. Kid sprigs can't be exported.
+
+`import-sprig` checks the manifest and every file before writing anything,
+then shows every file as a diff, the routines and the skills in full (a
+changed skill as a diff from yours), and asks. A skill that isn't valid
+refuses the whole package. If the skill library changes before you say
+yes, nothing is imported.
+Every tool starts at **draft** whatever the package says, and only the
+`schedule` and `web` scopes are kept; anything else it asked for is listed
+for you to grant in chat; levels left by an earlier sprig with the same
+id are cleared. Routines are scheduled for the owner (or `--user ID`). A
+skill you already have with different content is saved as a new version
+of it, not overwritten. In chat, only an owner or admin brings in new or
+changed skills; for anyone else the sprig comes without them. An id or name that's taken is
+refused with a free one to pass as `--id` or `--name`.
+
+You can also send a `.sprig` file (up to 2 MB) to Juni in chat: she shows
+the same preview, and imports it only when you approve.
+
 ## Bringing a character from another app
 
 ```bash

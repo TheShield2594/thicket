@@ -79,8 +79,16 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
-	return s.JobByID(ctx, id)
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	got, err := s.JobByID(ctx, id)
+	if err != nil {
+		// Stored but not read back: the id lets the caller remove it.
+		return &Job{ID: id}, err
+	}
+	return got, nil
 }
 
 func (s *Store) JobByID(ctx context.Context, id int64) (*Job, error) {
@@ -271,4 +279,9 @@ func (s *Store) JobRunsBetween(ctx context.Context, userID int64, from, to time.
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// CharacterJobs lists one sprig's jobs, for every user.
+func (s *Store) CharacterJobs(ctx context.Context, character string) ([]Job, error) {
+	return s.listJobs(ctx, "SELECT "+jobCols+" FROM jobs WHERE character = ? ORDER BY id", character)
 }

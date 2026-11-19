@@ -4,6 +4,30 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: sprig packages and untrusted content
+
+- Sprig packages. `thicket export-sprig ID [-o FILE] [--skill ID]` writes
+  one `.sprig` file: the character, avatar settings and picture, voice
+  tests, scheduled routines and the skills it uses, with a manifest of
+  checksums. Memories, secrets, chats, the trail, the inbox, permission
+  levels and integration credentials are never in it (an allowlist of
+  paths), and the export is refused if anything looks like a secret.
+  `thicket import-sprig FILE` checks the package, shows everything as a
+  diff and asks; every tool starts at draft, only `schedule` and `web`
+  are kept, a changed skill is added as a new version, and a taken id or
+  name is refused with a suggestion. Send a `.sprig` file to Juni in chat
+  to import it the same way (new `import_sprig` tool). See
+  [Sharing a sprig](docs/characters.md#sharing-a-sprig).
+- Untrusted content can't drive act-level actions. Each turn records, in
+  code, the outside content that entered it (integration and tool output
+  such as email bodies, web pages, files, PDFs, webhook and event
+  payloads, other sprigs' answers, handoffs and delegated tasks; webhook
+  and event jobs from the start). After that, a tool that changes
+  something at `act` runs only if your own words for the turn asked for
+  it. Otherwise it goes to your inbox as a draft naming the sources, and
+  the trail records it as `held`. See
+  [architecture](docs/architecture.md#untrusted-content-and-act).
+
 ## Unreleased: adding people, private sprigs and a fuller tour (schema v18)
 
 - "Add my partner's sprig", in one flow. Ask Juni to add someone: she asks

@@ -21,6 +21,7 @@ const (
 	TrailSafety = "safety" // a safety alert went to a kid's parents
 	TrailUndo   = "undo"   // something above was undone
 	TrailUpdate = "update" // Thicket was updated to a new version
+	TrailHeld   = "held"   // an action after untrusted content went to the inbox instead
 )
 
 type TrailEntry struct {

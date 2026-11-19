@@ -347,6 +347,14 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolCreateCharacter,
 		},
 		{
+			Name:        "import_sprig",
+			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories.",
+			Params:      `{"type":"object","properties":{"file":{"type":"string","description":"the package's file name, as in the message"},"id":{"type":"string","description":"a different id, if its own is taken"},"name":{"type":"string","description":"a different name, if its own is taken"}},"required":["file"]}`,
+			Scope:       "characters",
+			ChatOnly:    true,
+			Run:         e.toolImportSprig,
+		},
+		{
 			Name:        "import_guide",
 			Description: "How to bring a character over from another app (OpenClaw, Hermes Agent, character cards from SillyTavern/Chub, Grok, ChatGPT, Character.AI, anything else): the steps, the import command, and for apps with no export a ready-to-paste prompt that gets the character to write itself out. Use when the user asks how to import or move a companion here.",
 			Params:      `{"type":"object","properties":{"platform":{"type":"string","description":"the app, as the user named it, e.g. openclaw, hermes, sillytavern, grok, chatgpt"},"memories":{"type":"boolean","description":"also bring what that app knows about the user (default true)"}},"required":["platform"]}`,
