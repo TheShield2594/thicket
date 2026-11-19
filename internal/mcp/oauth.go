@@ -10,11 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // OAuth signs Thicket in to MCP servers that use OAuth (the MCP
@@ -79,6 +84,9 @@ type OAuthTokens struct {
 	TokenURL     string    `json:"token_url"`
 	Resource     string    `json:"resource"`
 	Scope        string    `json:"scope,omitempty"`
+	// PublicOnly: the MCP server is on a public address, so its sign-in
+	// server must be too.
+	PublicOnly bool `json:"public_only,omitempty"`
 }
 
 type pendingAuth struct {
@@ -100,7 +108,67 @@ func (o *OAuth) client() *http.Client {
 	if o.HTTP != nil {
 		return o.HTTP
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	return oauthClient
+}
+
+// publicOnlyKey marks a context whose requests may only connect to
+// public addresses.
+type publicOnlyKey struct{}
+
+// oauthClient checks, when connecting, that a request made for a public
+// MCP server goes to a public address: the URLs it's sent to (resource
+// metadata, authorization server, registration and token endpoints) come
+// from that server, and mustn't point Thicket at its own network.
+var oauthClient = &http.Client{
+	Timeout: 20 * time.Second,
+	Transport: &http.Transport{
+		// Through a proxy the dial check below sees only the proxy, so
+		// the target is checked here first.
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			p, err := http.ProxyFromEnvironment(r)
+			if p != nil && err == nil && r.Context().Value(publicOnlyKey{}) != nil && !publicHost(r.Context(), r.URL.String()) {
+				return nil, errors.New("the sign-in server is on a private address, though the MCP server isn't")
+			}
+			return p, err
+		},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := &net.Dialer{Timeout: 10 * time.Second}
+			if ctx.Value(publicOnlyKey{}) != nil {
+				d.Control = func(_, address string, _ syscall.RawConn) error {
+					host, _, err := net.SplitHostPort(address)
+					if err != nil {
+						return err
+					}
+					if ip, err := netip.ParseAddr(host); err != nil || !websearch.Public(ip) {
+						return errors.New("the sign-in server is on a private address, though the MCP server isn't")
+					}
+					return nil
+				}
+			}
+			return d.DialContext(ctx, network, address)
+		},
+		TLSHandshakeTimeout: 10 * time.Second,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
+
+// publicHost reports whether every address rawURL's host resolves to is
+// public.
+func publicHost(ctx context.Context, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	for _, a := range addrs {
+		if !websearch.Public(a.Unmap()) {
+			return false
+		}
+	}
+	return true
 }
 
 // Start discovers how to sign in to the MCP server at serverURL and
@@ -111,11 +179,15 @@ func (o *OAuth) Start(ctx context.Context, server, serverURL, clientID, clientSe
 	if o.RedirectURL == "" {
 		return "", errors.New("no callback address: set THICKET_PUBLIC_URL")
 	}
+	public := publicHost(ctx, serverURL)
+	if public {
+		ctx = context.WithValue(ctx, publicOnlyKey{}, true)
+	}
 	meta, resource, err := o.discover(ctx, serverURL)
 	if err != nil {
 		return "", err
 	}
-	tok := OAuthTokens{ClientID: clientID, ClientSecret: clientSecret, TokenURL: meta.TokenEndpoint, Resource: resource, AuthMethod: "none"}
+	tok := OAuthTokens{ClientID: clientID, ClientSecret: clientSecret, TokenURL: meta.TokenEndpoint, Resource: resource, AuthMethod: "none", PublicOnly: public}
 	if clientSecret != "" {
 		tok.AuthMethod = "client_secret_post"
 	}
@@ -289,6 +361,9 @@ func (e *tokenError) Error() string {
 
 // token calls the token endpoint and updates t with what comes back.
 func (o *OAuth) token(ctx context.Context, t *OAuthTokens, form url.Values) error {
+	if t.PublicOnly {
+		ctx = context.WithValue(ctx, publicOnlyKey{}, true)
+	}
 	if t.AuthMethod != "client_secret_basic" {
 		form.Set("client_id", t.ClientID)
 	}
