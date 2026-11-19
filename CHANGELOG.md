@@ -4,7 +4,36 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing and sprig owners (schema v20)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v22)
+
+- "Remember this": reply to any message with **remember this** (or say
+  "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
+  or tap the new brain button in the web app, and it becomes a locked
+  memory you set, handled by Thicket itself rather than left to the
+  model. The sprig confirms in one line; reply **forget this** to that
+  line to undo it. In a family sprig's chat you're asked once "just for
+  you, or for the family?". Discord now asks for reaction events (not a
+  privileged intent: nothing to change in the developer portal); in
+  Telegram groups, reactions reach the bot only if it's an admin.
+- Proactive messages go where you are: the app you choose ("reach me on
+  Telegram", for every sprig or one), otherwise the app you last wrote
+  from, preferring Telegram or Discord over the web app. If that send
+  fails, your other linked apps are tried before it waits in the inbox.
+  Web-only people are told once that a chat app would bring these to
+  their phone.
+- The memory review now adds household facts said in passing ("we're
+  vegetarian now") to family memory, from an adult's conversations with
+  family sprigs only; kid and solo sprig chats never write it. Rollback
+  undoes it as before.
+- `thicket doctor` checks memory: counts per person and sprig, memories
+  of people who no longer exist, memories you set that aren't locked,
+  and straight after a migration, a comparison with the pre-migration
+  snapshot. `thicket update` rolls back a migration that loses memory.
+- Sprig packages can carry memory: `export-sprig --memories` (plus
+  `--shared`, `--family`, `--user ID`) adds one person's memories with the
+  sprig; `import-sprig` lists them and keeps them locked, reviewable or
+  not at all (`--memories locked|review|skip`). Off by default; chat
+  imports never bring them in. Packages with memories are format 2.
 
 - The kill switch. `thicket pause` stops every reply, job and delegated
   task within a second, and nothing runs (replies, jobs, webhooks,
