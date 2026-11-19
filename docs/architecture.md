@@ -143,6 +143,19 @@ history as a block after the summary (1,500 characters each, 6,000 in
 all, taken from the history budget). Pins are conversation-scoped: a new
 conversation starts with none.
 
+"Remember this" (`agent/remember.go`) is matched the same way, before
+the pin commands: a reply, the newest message, or the text after
+"remember this:" becomes a locked memory with `source = user`
+("<name> said: “…”"), never through the model. A reaction
+(`channel.ReactionWatcher`: Discord's `MessageReactionAdd`, Telegram's
+`message_reaction` update, which is polled only when someone listens) or
+the web app's button (`POST /api/chats/{chat}/messages/{id}/remember`)
+do the same for the message they're on. The sprig's confirmation is sent
+with `SendIDs` and its ids are kept in `remember_acks`, so "forget this"
+in reply to it deletes the memory. In a family sprig's chat an adult is
+asked "just for you, or for the family?" once (a `notices` claim); the
+answer is `users.remember_scope`.
+
 ## Memory
 
 - Written directly when a sprig calls `remember` (memories the user asked

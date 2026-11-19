@@ -37,7 +37,12 @@ type Adapter struct {
 	noHooks  map[string]time.Time          // channels where we lack permission, until when
 	chanInfo map[string]*discordgo.Channel
 	onDelete func(ctx context.Context, d channel.Deletion)
+	onReact  func(ctx context.Context, r channel.Reaction)
 }
+
+// OnReaction registers what to call when someone adds a reaction. Call it
+// before Run.
+func (a *Adapter) OnReaction(f func(ctx context.Context, r channel.Reaction)) { a.onReact = f }
 
 // OnDelete registers what to call when someone deletes messages. Call it
 // before Run.
@@ -114,7 +119,10 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	if err != nil {
 		return err
 	}
-	s.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
+	// Reactions are how "remember this" is one tap (🧠 or 📌). They aren't
+	// privileged intents, so no setting in the developer portal is needed.
+	s.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent |
+		discordgo.IntentsGuildMessageReactions | discordgo.IntentsDirectMessageReactions
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Connect) { a.connected.Store(true) })
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Disconnect) { a.connected.Store(false) })
 	s.AddHandler(func(_ *discordgo.Session, r *discordgo.Ready) {
@@ -173,6 +181,19 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		if a.onDelete != nil && m.Message != nil {
 			go a.onDelete(ctx, channel.Deletion{Channel: "discord", ChatID: m.ChannelID, MessageIDs: []string{m.ID}})
 		}
+	})
+	s.AddHandler(func(s *discordgo.Session, r *discordgo.MessageReactionAdd) {
+		if a.onReact == nil || r.MessageReaction == nil || r.Emoji.Name == "" {
+			return
+		}
+		if r.Member != nil && r.Member.User != nil && r.Member.User.Bot {
+			return
+		}
+		if s.State != nil && s.State.User != nil && r.UserID == s.State.User.ID {
+			return
+		}
+		go a.onReact(ctx, channel.Reaction{Channel: "discord", ChatID: r.ChannelID, MessageID: r.MessageID, UserID: r.UserID,
+			Emoji: r.Emoji.Name, IsDM: r.GuildID == ""})
 	})
 	s.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageDeleteBulk) {
 		if a.onDelete != nil && len(m.Messages) > 0 {

@@ -67,6 +67,14 @@ everything in a group, turn privacy mode off: in @BotFather, use
 group ids in `THICKET_TELEGRAM_CHATS` to have sprigs answer every message
 there. Group ids are negative numbers, such as `-1001234567890`.
 
+## Reactions
+
+React with ✍ on any message to have it remembered for good, as if you'd
+replied "remember this" (Telegram's reactions don't include 🧠). Thicket
+asks Telegram for reaction updates only for this. In a private chat they
+always arrive; in a group, Telegram tells bots about reactions only when
+the bot is an administrator there.
+
 ## Settings
 
 | Variable | |

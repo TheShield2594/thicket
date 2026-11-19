@@ -290,6 +290,13 @@ cookies (`Secure` over HTTPS).
   to 10 pins). **What's pinned?**, **unpin this** and **unpin all** do what
   they say. Pins end with the conversation; for anything longer, ask a
   sprig to remember it.
+- Remember what matters for good: reply to any message with **remember
+  this** (or say **remember this: …**), react with 🧠 or 📌 on Discord or
+  ✍ on Telegram, or tap the brain button in the web app. It becomes a
+  locked memory you set, without the sprig having to decide; reply
+  **forget this** to the sprig's confirmation to undo it. In a family
+  sprig's chat you're asked once whether these are just yours or the
+  family's; kids' always stay their own.
 - Take things back: reply to a message with **forget this** and it's gone
   from the conversation sprigs see (a sprig's message is deleted from the
   chat too). **Delete that** deletes the sprig's last message. Deleting

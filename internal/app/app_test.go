@@ -36,6 +36,16 @@ type fakeChannel struct {
 	failIf   func(text string) bool
 	posted   int // ids handed out by SendIDs
 	onDelete func(ctx context.Context, d channel.Deletion)
+	onReact  func(ctx context.Context, r channel.Reaction)
+}
+
+func (f *fakeChannel) OnReaction(fn func(ctx context.Context, r channel.Reaction)) { f.onReact = fn }
+
+// lastPost is the id SendIDs handed out last.
+func (f *fakeChannel) lastPost() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fmt.Sprintf("out-%d", f.posted)
 }
 
 // SendIDs is Send, naming each post "out-N" (like a chat app's ids).

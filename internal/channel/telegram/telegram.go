@@ -49,6 +49,32 @@ type Adapter struct {
 	albums   map[string]*album
 	// albumWait and albumMaxWait are the constants above; tests shorten them.
 	albumWait, albumMaxWait time.Duration
+
+	onReact func(ctx context.Context, r channel.Reaction)
+}
+
+// OnReaction registers what to call when someone adds a reaction. Call it
+// before Run.
+func (a *Adapter) OnReaction(f func(ctx context.Context, r channel.Reaction)) { a.onReact = f }
+
+// reactions turns a reaction update into the emoji newly added.
+func (a *Adapter) reactions(r *reactionUpdate) []channel.Reaction {
+	if r.User == nil || r.User.IsBot || r.Chat.Type == "channel" {
+		return nil
+	}
+	had := map[string]bool{}
+	for _, o := range r.Old {
+		had[o.Emoji] = true
+	}
+	var out []channel.Reaction
+	for _, n := range r.New {
+		if n.Type != "emoji" || n.Emoji == "" || had[n.Emoji] {
+			continue
+		}
+		out = append(out, channel.Reaction{Channel: "telegram", ChatID: strconv.FormatInt(r.Chat.ID, 10), MessageID: strconv.FormatInt(r.MessageID, 10),
+			UserID: strconv.FormatInt(r.User.ID, 10), Emoji: n.Emoji, IsDM: r.Chat.Type == "private"})
+	}
+	return out
 }
 
 // album gathers the messages of one media group.
@@ -205,6 +231,24 @@ type message struct {
 type update struct {
 	UpdateID int64    `json:"update_id"`
 	Message  *message `json:"message"`
+	// Reaction is someone changing their reactions to a message.
+	Reaction *reactionUpdate `json:"message_reaction"`
+}
+
+type reactionType struct {
+	Type  string `json:"type"` // emoji | custom_emoji | paid
+	Emoji string `json:"emoji"`
+}
+
+type reactionUpdate struct {
+	Chat struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+	} `json:"chat"`
+	MessageID int64          `json:"message_id"`
+	User      *user          `json:"user"`
+	Old       []reactionType `json:"old_reaction"`
+	New       []reactionType `json:"new_reaction"`
 }
 
 // --- receiving ---
@@ -246,7 +290,7 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		var ups []update
-		err := a.call(ctx, a.poll, "getUpdates", map[string]any{"offset": offset, "timeout": pollTimeout, "allowed_updates": []string{"message"}}, &ups)
+		err := a.call(ctx, a.poll, "getUpdates", map[string]any{"offset": offset, "timeout": pollTimeout, "allowed_updates": a.allowedUpdates()}, &ups)
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -272,6 +316,11 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		backoff = time.Second
 		for _, u := range ups {
 			offset = max(offset, u.UpdateID+1)
+			if u.Reaction != nil && a.onReact != nil {
+				for _, r := range a.reactions(u.Reaction) {
+					go a.onReact(ctx, r)
+				}
+			}
 			if u.Message == nil {
 				continue
 			}
@@ -281,6 +330,15 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 		}
 	}
 	return nil
+}
+
+// allowedUpdates are the update kinds polled: messages, and reactions
+// when someone listens for them (Telegram sends reactions only if asked).
+func (a *Adapter) allowedUpdates() []string {
+	if a.onReact != nil {
+		return []string{"message", "message_reaction"}
+	}
+	return []string{"message"}
 }
 
 // deliver hands a message to the engine, holding album parts back until

@@ -106,14 +106,20 @@ type Engine struct {
 	activity sync.Map // sprig id -> *busy (for live avatar state)
 	// pendingPkgs: user id -> *pendingPackages (sprig packages sent in chat)
 	pendingPkgs sync.Map
-	linkMu      sync.Mutex
-	links       map[string]linkCode    // code -> pending link
-	linkFails   map[string][]time.Time // channel:user -> failed attempts
+	// rememberAsks: user id -> rememberAsk ("just for you, or for the
+	// family?" waiting for an answer)
+	rememberAsks sync.Map
+	linkMu       sync.Mutex
+	links        map[string]linkCode    // code -> pending link
+	linkFails    map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
 	if w, ok := c.(channel.DeleteWatcher); ok {
 		w.OnDelete(e.HandleDeleted)
+	}
+	if w, ok := c.(channel.ReactionWatcher); ok {
+		w.OnReaction(e.HandleReaction)
 	}
 	e.chanMu.Lock()
 	defer e.chanMu.Unlock()
