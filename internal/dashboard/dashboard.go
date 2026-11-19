@@ -50,6 +50,9 @@ type Dashboard struct {
 	RunDraft func(ctx context.Context, u *store.User, id int64) error
 	// Undo reverses a trail entry (permission changes, sprig calendar entries).
 	Undo func(ctx context.Context, u *store.User, id int64) (string, error)
+	// Pause pauses (on) or resumes everything (sprig "") or one sprig; it
+	// checks who may.
+	Pause func(ctx context.Context, u *store.User, sprig string, on bool) error
 
 	DB       *store.Store
 	Chars    *character.Registry
@@ -228,6 +231,9 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 	case kind == "approval" && (action == "approve" || action == "deny") && d.Decide != nil:
 		err = d.Decide(ctx, u, id, action == "approve")
 		ok = map[bool]string{true: "approved", false: "denied"}[action == "approve"]
+	case kind == "pause" && (action == "pause" || action == "resume") && d.Pause != nil:
+		err = d.Pause(ctx, u, r.PostFormValue("sprig"), action == "pause")
+		ok, anchor = map[bool]string{true: "paused", false: "resumed"}[action == "pause"], "sprigs"
 	case kind == "trail" && action == "undo" && d.Undo != nil:
 		_, err = d.Undo(ctx, u, id)
 		ok, anchor = "undone", "changes"
@@ -302,6 +308,9 @@ type pageData struct {
 	Health         []checkView
 	// Sign-in: your sessions, everyone's (admins), and an invite just made.
 	Sessions, AllSessions []sessionRow
+	// The kill switch: whether everything is paused, and whether this
+	// person may pause or resume everything (the owner).
+	PausedAll, CanPauseAll bool
 	InviteLink            string
 	InviteDays            int
 }
@@ -362,6 +371,8 @@ type sprigView struct {
 	// Proactive is the viewer's share of the sprig's daily budget of
 	// unprompted messages and what's held for them ("" for kid sprigs).
 	Proactive string
+	// Paused: this sprig is paused. CanPause: the viewer is its owner.
+	Paused, CanPause bool
 }
 
 type approvalView struct {
@@ -450,6 +461,10 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		p.Name = "you"
 	}
 	p.Model = d.Settings.String(ctx, "model")
+	if ps, ok, _ := d.DB.PausedFor(ctx, ""); ok && ps.Scope == store.PauseAll {
+		p.PausedAll = true
+	}
+	p.CanPauseAll = u.Role == store.RoleOwner && d.Pause != nil
 	if url := d.Settings.String(ctx, "model_url"); !strings.Contains(url, "openrouter.ai") {
 		p.Model += " on " + url
 	} else {
@@ -494,6 +509,10 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		// Inline renders only validated parts and escapes the label.
 		svg := template.HTML(avatar.Inline(look, st, "av-"+c.ID, c.DisplayName()+" is "+st))
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), Role: c.Role, Host: c.Host, Scopes: c.Tools, State: st, Avatar: svg}
+		if ps, ok, _ := d.DB.PausedFor(ctx, c.ID); ok && ps.Scope == c.ID {
+			v.Paused, v.State = true, "paused"
+		}
+		v.CanPause = !c.IsKid() && (c.BelongsTo == u.ID || c.BelongsTo == 0 && u.IsAdmin()) || c.IsKid() && u.IsAdmin()
 		if !c.IsKid() && c.UsableBy(u) {
 			sent, _ := d.DB.ProactiveSentSince(ctx, u.ID, c.ID, store.LocalDayStart(d.now(), u.Location()))
 			v.Proactive = fmt.Sprintf("Unprompted messages to you today: %d of %d", sent, c.DailyBudget())

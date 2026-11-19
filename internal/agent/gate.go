@@ -110,6 +110,9 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 				continue
 			}
 		}
+		if e.paused(ctx, char.ID) != nil {
+			continue // a paused sprig sends nothing; it waits for resume
+		}
 		stale := e.now().Sub(h.CreatedAt) > heldMaxAge
 		if !stale {
 			if why := e.holdReason(ctx, char, user); why != "" {

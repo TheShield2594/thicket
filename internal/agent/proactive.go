@@ -43,6 +43,9 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	defer cancel()
 	out, err := e.runTurn(jctx, t, "")
 	cost, _ := e.DB.JobSpendSince(context.WithoutCancel(ctx), j.ID, start.Add(-time.Second))
+	if flight.paused.Load() || errors.Is(err, ErrPaused) {
+		return scheduler.Result{Err: errStoppedByPause, Cost: cost}
+	}
 	if flight.stopped.Load() {
 		return scheduler.Result{Err: ErrStopped, Cost: cost}
 	}
@@ -55,9 +58,12 @@ func (e *Engine) RunJob(ctx context.Context, j store.Job, runID int64) scheduler
 	return scheduler.Result{Status: "ok", Output: out, Cost: cost}
 }
 
-// PausedReason holds scheduled jobs back while a spend cap is reached
-// (scheduler.Pauser).
+// PausedReason holds scheduled jobs back while Thicket or the job's sprig
+// is paused, or a spend cap is reached (scheduler.Pauser).
 func (e *Engine) PausedReason(ctx context.Context, j store.Job) string {
+	if err := e.paused(ctx, j.Character); err != nil {
+		return err.Error()
+	}
 	why := e.Budget.HeartbeatPause(ctx, j.Character)
 	if why != "" {
 		e.logActivity(ctx, "warn", "budget", j.Character, j.UserID, fmt.Sprintf("job #%d %q skipped: %s", j.ID, j.Name, why), "")
@@ -83,7 +89,7 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 	}
 	if errors.Is(res.Err, ErrStopped) {
 		// The user asked for it and was told: no failure report.
-		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q stopped by the user", j.ID, j.Name), "")
+		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q %s", j.ID, j.Name, res.Err), "")
 		return
 	}
 	switch res.Status {
@@ -190,6 +196,10 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Paused: nothing goes out, not even held messages; they wait.
+			if e.paused(ctx, "") != nil {
+				continue
+			}
 			// Held messages are already written: no model needed.
 			e.FlushHeld(ctx)
 			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {

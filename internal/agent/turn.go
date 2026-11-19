@@ -75,6 +75,12 @@ func (t *turn) jobMode() bool { return t.job != nil }
 // runTurn builds the prompt, runs the model/tool loop and returns the
 // final reply text (already checked for character consistency).
 func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, error) {
+	if f := inFlightFrom(ctx); f != nil && t.consult == nil {
+		f.setChar(t.char.ID) // so pausing this sprig stops this work
+	}
+	if err := e.paused(ctx, t.char.ID); err != nil {
+		return "", err
+	}
 	defer e.mark(t.char.ID, false)()
 	msgs, err := e.buildMessages(ctx, t, event)
 	if err != nil {
@@ -357,7 +363,14 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if !json.Valid(args) {
 		return "Error: tool arguments were not valid JSON."
 	}
+	if err := e.paused(ctx, t.char.ID); err != nil {
+		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+name+": "+err.Error(), "")
+		return "Error: " + err.Error() + ", so " + tool.Label() + " was NOT run. Stop and tell the user."
+	}
 	if msg, ok := e.gate(ctx, t, tool, args); !ok {
+		return msg
+	}
+	if msg := e.rateLimited(ctx, t, tool, true); msg != "" {
 		return msg
 	}
 	done := e.mark(t.char.ID, true)

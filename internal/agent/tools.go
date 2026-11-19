@@ -474,6 +474,14 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRemoveIntegration,
 		},
 		{
+			Name:        "pause",
+			Description: "The kill switch. Pause a sprig (it stops what it's doing at once, and no replies, jobs, triggers or tasks run for it until resumed), or with no sprig pause everything (the owner only; then everything, you included, stops answering until it's resumed from the dashboard, the API or `thicket resume`). resume=true lifts a sprig's pause. Only a sprig's owner may pause it: the person a private sprig belongs to, or the owner or an admin for a shared one.",
+			Params:      `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; omit for everything"},"resume":{"type":"boolean"}}}`,
+			Scope:       "host",
+			ChatOnly:    true,
+			Run:         e.toolPause,
+		},
+		{
 			Name:        "set_sprig_access",
 			Description: "Show or change what a sprig may run and read beyond chatting. exec=true lets it use integrations that run commands (the sandbox computer, shell servers); off by default, and needed on top of granting the integration. grant_path / revoke_path: a full path on this machine it may use besides its own folder (Thicket's data can never be granted). Only the sprig's owner may change these: the person a private sprig belongs to, or the owner or an admin for a shared one. With only sprig, it describes the current access.",
 			Params:      `{"type":"object","properties":{"sprig":{"type":"string"},"exec":{"type":"boolean"},"grant_path":{"type":"string"},"revoke_path":{"type":"string"}},"required":["sprig"]}`,

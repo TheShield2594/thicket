@@ -46,6 +46,9 @@ var Known = []Key{
 	{"backup_schedule", "when scheduled backups run, as a cron line in the server's timezone (default 0 3 * * * = 03:00 every day)", "cron"},
 	{"backup_keep", "how many scheduled backups to keep (the oldest are removed)", "int"},
 	{"pdf_engine", "how PDFs are read: auto, native, cloudflare-ai (free, text only) or mistral-ocr (scans, $2 per 1,000 pages)", "choice"},
+	{"limits.tool_calls_per_minute", "most tool calls one sprig makes in a minute (0 = no limit); limits.sprig.<id>.tool_calls_per_minute sets one sprig's", "int"},
+	{"limits.actions_per_hour", "most actions one sprig takes in an hour without asking (tools that change something, at act level; 0 = no limit); limits.sprig.<id>.actions_per_hour sets one sprig's", "int"},
+	{"limits.integration_calls_per_minute", "most calls to one integration in a minute, from all sprigs together (0 = no limit); limits.integration.<name>.calls_per_minute sets one integration's", "int"},
 }
 
 // cronParser reads backup_schedule the way job schedules are read.
@@ -67,6 +70,10 @@ func lookup(name string) (Key, bool) {
 	if strings.HasPrefix(name, "budget.character.") && strings.HasSuffix(name, ".daily_usd") {
 		return Key{name, "per-character daily cap", "float"}, true
 	}
+	if strings.HasPrefix(name, "limits.sprig.") && (strings.HasSuffix(name, ".tool_calls_per_minute") || strings.HasSuffix(name, ".actions_per_hour")) ||
+		strings.HasPrefix(name, "limits.integration.") && strings.HasSuffix(name, ".calls_per_minute") {
+		return Key{name, "rate limit override (0 = no limit)", "int"}, true
+	}
 	for _, k := range Known {
 		if k.Name == name {
 			return k, true
@@ -86,25 +93,28 @@ func New(db *store.Store, cfg *config.Config) *Settings { return &Settings{db: d
 
 func (s *Settings) defaults() map[string]string {
 	return map[string]string{
-		"model":              s.cfg.Model,
-		"fallback_model":     s.cfg.FallbackModel,
-		"cheap_model":        s.cfg.CheapModel,
-		"budget.daily_usd":   strconv.FormatFloat(s.cfg.DailyBudgetUSD, 'f', -1, 64),
-		"budget.monthly_usd": strconv.FormatFloat(s.cfg.MonthlyBudgetUSD, 'f', -1, 64),
-		"consistency_check":  "true",
-		"auto_route":         "false",
-		"checkin_days":       "3",
-		"pdf_engine":         "auto",
-		"transcribe_model":   config.DefaultFallbackModel,
-		"web_search":         "auto",
-		"search_url":         s.cfg.SearchURL,
-		"history_tokens":     "0",
-		"document_chars":     "20000",
-		"model_url":          s.cfg.ModelURL,
-		"timezone":           "",
-		"backup_dir":         "",
-		"backup_schedule":    "0 3 * * *",
-		"backup_keep":        "7",
+		"model":                               s.cfg.Model,
+		"fallback_model":                      s.cfg.FallbackModel,
+		"cheap_model":                         s.cfg.CheapModel,
+		"budget.daily_usd":                    strconv.FormatFloat(s.cfg.DailyBudgetUSD, 'f', -1, 64),
+		"budget.monthly_usd":                  strconv.FormatFloat(s.cfg.MonthlyBudgetUSD, 'f', -1, 64),
+		"consistency_check":                   "true",
+		"auto_route":                          "false",
+		"checkin_days":                        "3",
+		"limits.tool_calls_per_minute":        "30",
+		"limits.actions_per_hour":             "20",
+		"limits.integration_calls_per_minute": "60",
+		"pdf_engine":                          "auto",
+		"transcribe_model":                    config.DefaultFallbackModel,
+		"web_search":                          "auto",
+		"search_url":                          s.cfg.SearchURL,
+		"history_tokens":                      "0",
+		"document_chars":                      "20000",
+		"model_url":                           s.cfg.ModelURL,
+		"timezone":                            "",
+		"backup_dir":                          "",
+		"backup_schedule":                     "0 3 * * *",
+		"backup_keep":                         "7",
 	}
 }
 

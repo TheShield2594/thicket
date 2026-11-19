@@ -1,7 +1,8 @@
 # Dashboard
 
 One page at `/dashboard` with what Thicket knows and does for you. It's
-read-mostly: the only things you can do here are answer what needs you.
+read-mostly: the only things you can do here are answer what needs you,
+and pause.
 
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
@@ -13,6 +14,10 @@ read-mostly: the only things you can do here are answer what needs you.
   sprig wrote up instead of doing (do it, or dismiss), and failed,
   interrupted or undelivered work (clear it once you've dealt with it).
   The sprig reports back in the chat the request came from.
+- **Pause**: the owner has **Pause everything**, and each sprig you own
+  has a **Pause** button (the person a private sprig belongs to, or the
+  owner or an admin for a shared one). While paused, the page says so
+  and offers **Resume**. See [Pausing](operations.md#pausing-the-kill-switch).
 - **Trail**: what sprigs did, newest first: tools used, approvals,
   drafts, handoffs between sprigs, jobs.
 - What they remember about you, your jobs and their recent runs, your

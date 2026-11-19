@@ -216,6 +216,15 @@ func (e *Engine) runTask(ctx context.Context, taskID int64, user *store.User, fr
 	switch {
 	case life != nil && life.Err() != nil:
 		return // shutting down: left running, reported as interrupted at the next start
+	case flight.paused.Load() || errors.Is(err, ErrPaused):
+		// Not run, or cut short, by a pause: in the inbox, not in chat
+		// (nothing is sent while paused).
+		_ = e.DB.FinishTask(bg, taskID, "stopped", "paused")
+		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": stopped by a pause", "")
+		e.deadLetter(bg, store.InboxItem{UserID: user.ID, Character: target.ID, Kind: store.InboxInterrupted, Ref: ref,
+			Title:  fmt.Sprintf("%s's task from %s was stopped by a pause", target.DisplayName(), from.DisplayName()),
+			Detail: "Task: " + task + "\n\nIt wasn't finished and won't restart on its own; ask again once it's resumed."})
+		return
 	case flight.stopped.Load():
 		_ = e.DB.FinishTask(bg, taskID, "stopped", "")
 		e.logActivity(bg, "info", "sprig", target.ID, user.ID, name+": stopped by the user", "")

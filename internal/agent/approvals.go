@@ -159,6 +159,12 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 	if tool == nil {
 		return "Error: that tool is no longer available to you."
 	}
+	if err := e.paused(ctx, t.char.ID); err != nil {
+		return "Error: " + err.Error() + ", so it wasn't run."
+	}
+	if msg := e.rateLimited(ctx, t, tool, false); msg != "" {
+		return msg
+	}
 	if changes(tool) {
 		if lv := e.toolLevel(ctx, t.char, tool); lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
 			return "Error: your access to " + name + " was lowered to " + lv + " since you asked, so it wasn't run."
@@ -222,6 +228,9 @@ func (e *Engine) RunDraft(ctx context.Context, user *store.User, id int64) error
 	}
 	if e.toolLevel(ctx, char, tool) == store.LevelRead {
 		return errors.New(char.DisplayName() + " is at read level for that tool now, so it can't be done")
+	}
+	if err := e.paused(ctx, char.ID); err != nil {
+		return fmt.Errorf("%w: resume it first", err)
 	}
 	if err := e.DB.ResolveInbox(ctx, it.ID, user.ID); err != nil {
 		return errors.New("that draft was already dealt with")

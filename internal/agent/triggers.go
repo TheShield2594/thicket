@@ -186,8 +186,8 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 	}
 	// At a spend cap, wait: a fire couldn't run, and items seen now would
 	// be lost. They're picked up once heartbeats resume.
-	if e.Budget.HeartbeatPause(ctx, j.Character) != "" {
-		return
+	if e.Budget.HeartbeatPause(ctx, j.Character) != "" || e.paused(ctx, j.Character) != nil {
+		return // paused too: items are picked up once it's resumed
 	}
 	// Access is checked on every poll, not only when the trigger was made:
 	// the sprig must still be allowed the tool, and the tool must still

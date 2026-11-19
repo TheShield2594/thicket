@@ -241,6 +241,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		}}
 	a.Engine.LLM = a.Guard
 	a.Engine.Budget = a.Guard
+	a.Guard.Paused = a.Engine.Paused // the kill switch, under every model call
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
 	// Local (stdio) integrations run one process per sprig, in its own
@@ -301,6 +302,12 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
 		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft, Undo: a.Engine.UndoTrail,
+		Pause: func(ctx context.Context, u *store.User, sprig string, on bool) error {
+			if on {
+				return a.Engine.Pause(ctx, u, sprig, "from the dashboard")
+			}
+			return a.Engine.Resume(ctx, u, sprig, "from the dashboard")
+		},
 		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
@@ -536,6 +543,7 @@ func (a *App) Run(parent context.Context) error {
 			a.startErr(fmt.Sprintf("The %s integration didn't connect: %s", name, shortErr(err)))
 		}
 	})
+	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })
 	goRun("memory", func() { a.Reviewer.Run(ctx) })
 	goRun("initiative", func() { a.Engine.RunInitiative(ctx) })

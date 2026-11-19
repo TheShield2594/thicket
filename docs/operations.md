@@ -123,6 +123,68 @@ twice (500ms, 1s) after reconnecting if the connection drops. Calls that
 change something are never retried: if the connection drops mid-call,
 nobody can tell whether it happened, so the sprig says so instead.
 
+## Pausing (the kill switch)
+
+When something is going wrong (a sprig looping, an integration doing
+things it shouldn't), pause:
+
+```bash
+thicket pause
+```
+
+That pauses everything. Within a second, every reply, job and delegated
+task in progress stops (the way "stop" does; what already happened isn't
+undone), and from then on nothing runs: no replies, jobs, webhooks,
+triggers, check-ins, follow-ups, held messages or memory reviews. Every
+model call is refused underneath all of that, as a backstop. Messages
+that arrive get a short "Thicket is paused" answer; nothing is queued for
+later. Webhooks get `503`, so their senders retry later.
+
+```bash
+thicket pause --sprig pip --reason "sending odd emails"
+```
+
+```bash
+thicket pause status
+```
+
+```bash
+thicket resume
+```
+
+`--sprig` pauses one sprig only. Resuming a sprig doesn't lift a pause of
+everything. `thicket pause` writes straight into the database, so it
+works without an API token, while the server is busy, and while it's
+stopped; a pause survives restarts. Every pause and resume is in the
+trail.
+
+The same switch is on the dashboard (**Pause everything** for the owner;
+**Pause** on each sprig for its owner), in the [API](api.md) and in
+chat ("Juni, pause Pip"). Only the owner pauses or resumes everything;
+a sprig's owner pauses that sprig (the person a private sprig belongs
+to, or the owner or an admin for a shared one). While everything is
+paused nobody answers in chat, so resume from the dashboard, the API or
+the command line.
+
+## Rate limits
+
+Sprigs' tool use is limited in code, whatever the model does:
+
+| Setting | Default | Counts |
+|---|---|---|
+| `limits.tool_calls_per_minute` | 30 | tool calls by one sprig |
+| `limits.actions_per_hour` | 20 | actions one sprig takes without asking: tools that change something, at `act` |
+| `limits.integration_calls_per_minute` | 60 | calls to one integration, from every sprig together |
+
+Set one sprig's or one integration's own limit with
+`limits.sprig.<id>.tool_calls_per_minute`,
+`limits.sprig.<id>.actions_per_hour` or
+`limits.integration.<name>.calls_per_minute`; `0` turns a limit off.
+Change them with `thicket settings set`, or ask Juni. A call over a limit
+isn't run: the sprig is told to stop and explain, and its owner gets one
+"needs you" item per limit (repeats bump the count). The counts are kept
+in memory, so a restart starts them afresh.
+
 ## `thicket voice-check SPRIG`
 
 Replays a sprig's reference exchanges against the current model and
