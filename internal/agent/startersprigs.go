@@ -692,6 +692,7 @@ func (e *Engine) listStarters() (string, error) {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("Kid starters need the kid invited as a kid first, and only the owner or an admin can add one: they become its parent and see it first (the parent preview). Routines arrive paused; offer to turn them on once they've tried it.\n")
 	return b.String(), nil
 }
 
@@ -803,22 +804,18 @@ func (e *Engine) addStarter(ctx context.Context, user *store.User, args json.Raw
 	return out, nil
 }
 
-// starterGuide tells the host about the starters, once per process.
+// starterGuide tells the host about the starters, once per process. It's
+// in every host prompt, so it stays short: the details (who each is for,
+// when to offer it) come from starter_sprigs list.
 var starterGuide = sync.OnceValue(func() string {
 	all, err := StarterSprigs()
 	if err != nil || len(all) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(`
-## Starter sprigs
-Thicket comes with a few ready-made sprigs. Before interviewing for a new sprig, check whether one of these fits; offer it in the user's own terms ("You said you have a 9-year-old: want a reading buddy?"), once, and never push:
-`)
-	for _, s := range all {
-		fmt.Fprintf(&b, "- %s: %s, %s. %s Offer it %s.\n", s.ID, s.Char.DisplayName(), s.TierLabel(), s.Summary, s.Offer)
+	names := make([]string, len(all))
+	for i, s := range all {
+		names[i] = fmt.Sprintf("%s (%s)", s.ID, s.TierLabel())
 	}
-	b.WriteString(`To add one, call starter_sprigs with action add: the user sees every file, its levels and spend cap, and approves. Its routines arrive paused; offer to turn them on once they've tried it.
-Kid starters need the kid invited as a kid first, and only the owner or an admin can add one; they become its parent and see everything first (the parent preview). Use starter_sprigs list to see which are already added.
-`)
-	return b.String()
+	return "\n## Starter sprigs\nReady-made sprigs: " + strings.Join(names, ", ") + `. Before interviewing for a new sprig, call starter_sprigs list to see if one fits and when to offer it; offer it once, in the user's own terms ("You said you have a 9-year-old: want a reading buddy?"), and never push. Adding one (action add) shows the user everything and asks them to approve.
+`
 })

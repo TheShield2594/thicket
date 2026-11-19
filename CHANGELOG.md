@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v29)
 
 - Sprigs speak first: check-in presets per sprig, in the character file
   (`initiative.morning_brief`, `initiative.event_reminders`,
@@ -62,7 +62,7 @@ stated.
   decides what it may do. Its own levels and the tool defaults apply.
   If you relied on an every-sprig level for your own solo sprig, set it
   on that sprig.
-- A weekly digest (schema v26): once a week, Sunday 18:00 in each
+- A weekly digest (schema v28): once a week, Sunday 18:00 in each
   adult's own timezone by default (`digest.day`, `digest.time`; `off`
   stops it), Juni sends each adult one short message: per sprig, what it
   did (job runs, replies, changes from the trail), what's waiting on them
@@ -80,7 +80,7 @@ stated.
   (new `weekly_digest` tool, which also shows the digest on request),
   pick it under **Weekly digest** in your web app account, or
   `GET`/`PUT /api/v2/digest`; each person sets only their own.
-  Migration 0026 keeps each person's choice. See
+  Migration 0028 keeps each person's choice. See
   [The weekly digest](docs/household.md#the-weekly-digest).
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
@@ -219,7 +219,7 @@ stated.
   becomes answerable only once the prompt is delivered; a tap in that
   moment is asked to try again. Answered any other way (typed, from the
   dashboard or the API) or left to expire, the prompt is settled too:
-  Thicket keeps the prompt message's id (schema v27) and edits it to show
+  Thicket keeps the prompt message's id (schema v29) and edits it to show
   the outcome without its buttons, through the new optional
   `channel.ActionSettler` (`SettleActions`). A sweep each minute settles
   prompts that expired. Telegram remembers recent prompts' text for the

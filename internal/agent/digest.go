@@ -309,11 +309,11 @@ func (d *Digest) Text(link string) string {
 		}
 		switch {
 		case s.Share:
-			b.WriteString(" · your share " + money(s.CostUSD))
+			b.WriteString(" · your share " + digestMoney(s.CostUSD))
 		case s.WeekCap > 0:
-			b.WriteString(fmt.Sprintf(" · %s of a %s week (7 × %s daily cap)", money(s.CostUSD), money(s.WeekCap), money(s.DailyCap)))
+			b.WriteString(fmt.Sprintf(" · %s of a %s week (7 × %s daily cap)", digestMoney(s.CostUSD), digestMoney(s.WeekCap), digestMoney(s.DailyCap)))
 		default:
-			b.WriteString(" · " + money(s.CostUSD) + ", no cap of its own")
+			b.WriteString(" · " + digestMoney(s.CostUSD) + ", no cap of its own")
 		}
 		b.WriteString("\n")
 		var did []string
@@ -348,9 +348,9 @@ func (d *Digest) Text(link string) string {
 		b.WriteString("\nAlso waiting on you: " + digestList(d.Other) + "\n")
 	}
 	if d.Shares() {
-		b.WriteString("\nTotal: " + money(d.TotalUSD) + " this week, with your share of the family sprigs.")
+		b.WriteString("\nTotal: " + digestMoney(d.TotalUSD) + " this week, with your share of the family sprigs.")
 	} else {
-		b.WriteString("\nTotal: " + money(d.TotalUSD) + " for these sprigs this week.")
+		b.WriteString("\nTotal: " + digestMoney(d.TotalUSD) + " for these sprigs this week.")
 	}
 	b.WriteString(more)
 	return b.String()
@@ -371,7 +371,8 @@ func countOf(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-func money(v float64) string {
+// digestMoney is money for the digest: tiny amounts read "<$0.01", not "$0.00".
+func digestMoney(v float64) string {
 	if v > 0 && v < 0.01 {
 		return "<$0.01"
 	}

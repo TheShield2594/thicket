@@ -480,7 +480,7 @@ last day, waits out the host's quiet hours and pauses, claims
 sees which sprig is `UsableBy` or `IsParent`, never `PrivateFrom`; the
 text is built in code. A family sprig's cost is `SpendBetween` for
 admins and `UserSpendBetween` (`usage.user_id`) for everyone else, as
-the dashboard shows costs to admins only. `digest_prefs` (migration 0026)
+the dashboard shows costs to admins only. `digest_prefs` (migration 0028)
 holds each person's `always`, `skip_empty` or `off`, set by the
 `weekly_digest` tool or `GET`/`PUT /api/v2/digest` (and `/api/digest`
 for the web app; `internal/web/digest.go`).
