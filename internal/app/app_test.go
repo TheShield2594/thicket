@@ -367,6 +367,12 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text("You're in! Who should get the notes tools?"), nil
 	case strings.Contains(u, "create wren"):
 		return toolCall("create_character", map[string]any{"id": "wren"}), nil
+	case strings.HasPrefix(u, "profile: "):
+		// "profile: Name | Area/City": onboarding's name and timezone step.
+		name, tz, _ := strings.Cut(strings.TrimPrefix(lastUserText(req.Messages), "profile: "), "|")
+		return toolCall("set_user_profile", map[string]any{"name": strings.TrimSpace(name), "timezone": strings.TrimSpace(tz)}), nil
+	case strings.Contains(u, "that's the tour"):
+		return toolCall("complete_onboarding", map[string]any{}), nil
 	case strings.Contains(u, "schedule a reminder"):
 		return toolCall("schedule_job", map[string]any{"name": "Reminder", "schedule": "0 9 * * *", "task": "Remind me to stretch."}), nil
 	case strings.Contains(u, "ask for more trust"):
