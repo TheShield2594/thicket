@@ -372,7 +372,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages,
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages, localDocs: media.localDocs,
 		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken, said: in.Text}
 	if user.IsKid() {
 		// One turn at a time per kid, across chats and apps, so two at once
@@ -519,7 +519,7 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	// Keep the text of PDFs sent this turn for follow-up questions (and
 	// for a sprig this is handed to). Even if the reply failed: "try
 	// again" should still know the document.
-	if len(t.pdfs) > 0 && t.conv != nil {
+	if len(t.pdfs)+len(t.localDocs) > 0 && t.conv != nil {
 		e.keepDocuments(ctx, t)
 	}
 	// The user has their reply: now's the time to compact a long

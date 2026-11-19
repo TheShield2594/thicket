@@ -233,7 +233,8 @@ cookies (`Secure` over HTTPS).
 - PDFs are read by the model itself when it can, otherwise by OpenRouter's
   OCR ($2 per 1,000 pages). Ask Juni to set `pdf_engine` to
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
-  `native`; the default is `auto`.
+  `native`; the default is `auto`. On a local model server, Thicket reads
+  the text of PDFs itself (no OCR, so not scanned ones).
 - Share the house: family sprigs everyone uses, with family memory kept
   apart from each person's own; solo sprigs only you see; kid sprigs that
   only chat, only use tools a parent approved, and alert parents if

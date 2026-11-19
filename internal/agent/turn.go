@@ -36,6 +36,8 @@ type turn struct {
 	pdfs   []llm.File
 	// pdfPages counts each PDF's pages, for the cost estimate.
 	pdfPages []int
+	// localDocs is PDF text Thicket read itself, for a local model.
+	localDocs map[string]string
 	// packages are sprig packages sent with the newest message.
 	packages map[string][]byte
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
@@ -289,7 +291,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 		// them all this once (each file is capped, plus its wrapper).
 		limit := 4000
 		if origin {
-			limit = maxFilesPerMessage*(maxTextFileChars+200) + 4000
+			limit = (maxFilesPerMessage+maxPDFsPerMessage)*(maxTextFileChars+200) + 4000
 			if t.budgetChars > 0 {
 				// The model said its context was full: this message must
 				// shrink too, not just the history before it.

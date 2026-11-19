@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/theshield2594/thicket/internal/channel"
+	"github.com/theshield2594/thicket/internal/llm"
 )
 
 // fakeOllama serves an OpenAI-compatible model list.
@@ -62,15 +63,38 @@ func TestLocalModelOnboarding(t *testing.T) {
 		t.Fatalf("health: %+v", h["model_key"])
 	}
 
-	// PDFs are declined politely: local servers can't read them.
+	// Thicket reads a PDF's text itself: local servers can't read PDFs.
+	// One without a text layer (scanned) is declined politely.
 	a.Engine.FetchAttachment = fakeFetch
 	in := dm("summarise")
 	in.Attachments = []channel.Attachment{{Name: "report.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100}}
 	e.HandleIncoming(ctx, in)
 	fc.take()
-	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "PDFs need OpenRouter") {
-		t.Fatalf("pdf note missing:\n%s", got)
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "probably scanned") {
+		t.Fatalf("scanned pdf note missing:\n%s", got)
 	}
+	in = dm("when is rent due?")
+	in.Attachments = []channel.Attachment{{Name: "lease.pdf", URL: "https://cdn.example/text.pdf", ContentType: "application/pdf", Size: 500}}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	req := lastChatReq(fm)
+	got := allUserContent(req)
+	if llm.HasMedia(req.Messages) || !strings.Contains(got, `<untrusted source="pdf lease.pdf">`) || !strings.Contains(got, "Rent is due on the 3rd.") {
+		t.Fatalf("pdf text not read locally:\n%s", got)
+	}
+	if strings.Contains(got, "sk-or-v1-5r") {
+		t.Fatal("a secret in the PDF reached the model")
+	}
+	if fm.parseCalls != 0 {
+		t.Fatalf("a local PDF needs no parse call, got %d", fm.parseCalls)
+	}
+	// Its text is kept for follow-up questions.
+	e.HandleIncoming(ctx, dm("and which day again?"))
+	fc.take()
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "The user sent lease.pdf earlier") || !strings.Contains(got, "Rent is due on the 3rd.") {
+		t.Fatalf("follow-up missing the kept text:\n%s", got)
+	}
+	assertNoLeak(t, a, "sk-or-v1-5r")
 }
 
 func TestLocalServerWithoutChatModels(t *testing.T) {

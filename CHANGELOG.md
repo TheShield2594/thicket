@@ -6,6 +6,11 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v31)
 
+- PDFs on a local model server: Thicket reads the text of a PDF itself
+  (a small built-in reader, no OCR) and gives it to the model with the
+  message, keeping it for follow-up questions as before. Scanned and
+  encrypted PDFs are declined with a note saying why.
+
 - Kid safety (schema v31): time limits per kid sprig, set by its parents
   in chat (`kid_limits`), the web app or the API: chat hours, an earlier
   end on school nights, and a daily allowance in minutes or messages. At
