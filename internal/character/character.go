@@ -107,6 +107,28 @@ type Initiative struct {
 	// trigger output, check-ins, follow-ups) per person per day, in that
 	// person's timezone. 0 means DefaultDailyMessages. Replies never count.
 	DailyMessages int `yaml:"daily_messages,omitempty"`
+	// Check-in presets: the sprig reaches out on its own.
+	// MorningBrief is a time ("07:30", in each person's timezone) for a
+	// short brief of today's calendar and anything due; "" is off.
+	MorningBrief string `yaml:"morning_brief,omitempty"`
+	// EventReminders is how many minutes before a calendar event the
+	// sprig gives a heads-up, once per event; 0 is off.
+	EventReminders int `yaml:"event_reminders,omitempty"`
+	// DueReminders: a reminder when something noted as due (a follow-up
+	// memory with a due time, "the bill is due Friday") is coming up.
+	DueReminders bool `yaml:"due_reminders,omitempty"`
+}
+
+// MaxEventReminders is the longest heads-up before an event, in minutes.
+const MaxEventReminders = 24 * 60
+
+// ParseClock parses "07:30" into minutes after midnight.
+func ParseClock(s string) (int, error) {
+	var h, m int
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d:%d", &h, &m); err != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, fmt.Errorf("initiative.morning_brief %q must be a time like 07:30", s)
+	}
+	return h*60 + m, nil
 }
 
 // DefaultDailyMessages is the daily budget of proactive messages per
@@ -322,6 +344,14 @@ func (c *Character) Validate() []string {
 			p = append(p, err.Error())
 		}
 	}
+	if c.Initiative.MorningBrief != "" {
+		if _, err := ParseClock(c.Initiative.MorningBrief); err != nil {
+			p = append(p, err.Error())
+		}
+	}
+	if n := c.Initiative.EventReminders; n < 0 || n > MaxEventReminders {
+		p = append(p, fmt.Sprintf("initiative.event_reminders is minutes before an event: 1-%d, or leave it off", MaxEventReminders))
+	}
 	if n := c.Initiative.DailyMessages; n < 0 || n > MaxDailyMessages {
 		p = append(p, fmt.Sprintf("initiative.daily_messages must be between 1 and %d (leave it off for %d)", MaxDailyMessages, DefaultDailyMessages))
 	}
@@ -384,8 +414,8 @@ func (c *Character) validateHousehold() []string {
 			p = append(p, fmt.Sprintf("allow %q must be family_memory, calendar or voice", a))
 		}
 	}
-	if c.Initiative.CheckIns || c.Initiative.FollowUps {
-		p = append(p, "a kid sprig doesn't check in or follow up: set initiative off")
+	if c.Initiative.CheckIns || c.Initiative.FollowUps || c.Initiative.MorningBrief != "" || c.Initiative.EventReminders != 0 || c.Initiative.DueReminders {
+		p = append(p, "a kid sprig doesn't check in, follow up or send briefs and reminders: set initiative off")
 	}
 	return p
 }

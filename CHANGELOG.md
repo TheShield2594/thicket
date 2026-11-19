@@ -6,6 +6,15 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
 
+- Sprigs speak first: check-in presets per sprig, in the character file
+  (`initiative.morning_brief`, `initiative.event_reminders`,
+  `initiative.due_reminders`) or in chat (`set_initiative`, and Juni
+  offers them for new sprigs). A morning brief at a set time with today's
+  calendar and anything due; a heads-up some minutes before each calendar
+  event, once per event; a reminder when a follow-up with a due time is
+  coming up. Written in the sprig's voice and sent like every other
+  unprompted message (quiet hours, the daily budget, the worth-saying
+  gate). Kid sprigs stay out of it.
 - People who join later get the short tour of what's already there, not
   the owner's setup: admins who came through an invite included. Juni
   names the family sprigs from a list Thicket gives her (never anyone's

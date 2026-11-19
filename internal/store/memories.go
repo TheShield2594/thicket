@@ -104,6 +104,14 @@ func (s *Store) MemoryByID(ctx context.Context, id int64) (*Memory, error) {
 }
 
 // DueFollowups returns follow-up memories whose time has come.
+// FollowupsDueBetween lists one person's live follow-ups due in [from, to),
+// soonest first (for briefs and due reminders).
+func (s *Store) FollowupsDueBetween(ctx context.Context, userID int64, from, to time.Time) ([]Memory, error) {
+	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE user_id = ? AND kind = 'followup' AND household = 0
+		AND due_at IS NOT NULL AND due_at >= ? AND due_at < ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY due_at LIMIT 20`,
+		userID, from.Unix(), to.Unix(), from.Unix())
+}
+
 func (s *Store) DueFollowups(ctx context.Context) ([]Memory, error) {
 	now := s.unix()
 	return s.queryMemories(ctx, "SELECT "+memCols+` FROM memories WHERE kind = 'followup' AND household = 0 AND due_at IS NOT NULL AND due_at <= ?

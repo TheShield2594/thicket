@@ -325,6 +325,13 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 			return m.hang(ctx)
 		}
 	}
+	// Check-in presets: echo what the sprig was asked to say, so each
+	// message is different (and the test can see what it was given).
+	for _, tag := range []string{"[Morning brief]", "[Event heads-up]", "[Due reminder]"} {
+		if strings.Contains(last.Content, tag) && strings.HasPrefix(sys, "You are ") {
+			return text("Said: " + strings.TrimPrefix(last.Content, "[Thicket event] ")), nil
+		}
+	}
 	switch {
 	case strings.Contains(sys, "You check whether a chat reply"):
 		return text(`{"in_character": true}`), nil

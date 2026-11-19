@@ -405,8 +405,9 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name: "set_initiative",
 			Description: "Show or change when a sprig may message the user unprompted (job and trigger results, check-ins, follow-ups): quiet_hours (\"22:00-08:00\" in the user's timezone, or \"off\") and daily_messages (how many such messages per person per day, 1-50; default 3). " +
+				"Also its check-in presets: morning_brief (a time like \"07:30\", or \"off\": a short brief of today's calendar and anything due), event_reminders (minutes before each calendar event for a heads-up; 0 = off) and due_reminders (true: a reminder when something noted as due is coming up). " +
 				"Held messages go out when quiet hours end or with the next day's budget. Replies, approvals, safety alerts and failures always get through. Omit both to show the current settings. Edits the sprig's character file (never overwrites manual edits).",
-			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50}}}`,
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50},"morning_brief":{"type":"string","description":"07:30, or off"},"event_reminders":{"type":"integer","minimum":0,"maximum":1440},"due_reminders":{"type":"boolean"}}}`,
 			ChatOnly: true,
 			Run:      e.toolSetInitiative,
 		},
@@ -974,6 +975,9 @@ const draftSchema = `{"type":"object","properties":{
 "color":{"type":"string","description":"hex like #e0a458"},
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
 "check_ins":{"type":"boolean"},
+"morning_brief":{"type":"string","description":"a time like 07:30 for a short brief of today's calendar and anything due, if they want one"},
+"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"minutes before each calendar event for a heads-up (0 = none)"},
+"due_reminders":{"type":"boolean","description":"remind them when something they noted as due is coming up"},
 "monthly_cap_usd":{"type":"number","minimum":0,"description":"the most it may spend a month on its own, in dollars, as agreed in the interview (0 or left out = no cap of its own)"},
 "routines":{"type":"array","description":"what they do on a schedule, from the interview","items":{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string","description":"cron, 5 fields, in the user's timezone, e.g. 0 8 * * 1-5"},"task":{"type":"string"}},"required":["name","schedule","task"]}},
 "look":{"type":"object","description":"their drawn avatar; anything left out is picked for them","properties":{"body":{"type":"string","enum":["round","tall","pear","bean"]},"hat":{"type":"string","enum":["sprout","curl","clover","fern","none"]},"hat_color":{"type":"string"},"accessory":{"type":"string","enum":["none","watering-can","glasses","scarf","book","lantern"]},"expression":{"type":"string","enum":["happy","calm","curious","sleepy","determined"]}}}
@@ -996,6 +1000,9 @@ type draftArgs struct {
 	Color         string            `json:"color"`
 	Background    string            `json:"background"`
 	CheckIns      bool              `json:"check_ins"`
+	MorningBrief  string            `json:"morning_brief"`
+	EventReminder int               `json:"event_reminders"`
+	DueReminders  bool              `json:"due_reminders"`
 	Routines      []routineArg      `json:"routines"`
 	Look          avatar.Params     `json:"look"`
 	Private       bool              `json:"private"`
@@ -1023,9 +1030,10 @@ func (e *Engine) toolPreviewCharacter(ctx context.Context, t *turn, args json.Ra
 		Voice:         character.Voice{Style: a.VoiceStyle, NeverSay: a.NeverSay},
 		Relationships: character.Relationships{User: a.RelToUser, Characters: a.Relationships},
 		Tools:         a.Tools,
-		Initiative:    character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages},
-		CreatedBy:     t.char.ID,
-		Body:          strings.TrimSpace(a.Background),
+		Initiative: character.Initiative{CheckIns: a.CheckIns, FollowUps: true, QuietHours: "22:00-08:00", DailyMessages: character.DefaultDailyMessages,
+			MorningBrief: strings.TrimSpace(a.MorningBrief), EventReminders: a.EventReminder, DueReminders: a.DueReminders},
+		CreatedBy: t.char.ID,
+		Body:      strings.TrimSpace(a.Background),
 	}
 	if a.Private {
 		c.BelongsTo = t.user.ID
@@ -1140,9 +1148,12 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 // change a sprig that is theirs alone.
 func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 	a, err := decode[struct {
-		Sprig         string  `json:"sprig"`
-		QuietHours    *string `json:"quiet_hours"`
-		DailyMessages *int    `json:"daily_messages"`
+		Sprig          string  `json:"sprig"`
+		QuietHours     *string `json:"quiet_hours"`
+		DailyMessages  *int    `json:"daily_messages"`
+		MorningBrief   *string `json:"morning_brief"`
+		EventReminders *int    `json:"event_reminders"`
+		DueReminders   *bool   `json:"due_reminders"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -1158,9 +1169,24 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		if c.Initiative.QuietHours != "" {
 			quiet = "quiet hours " + c.Initiative.QuietHours
 		}
-		return fmt.Sprintf("%s: %s, up to %d unprompted messages a day per person (you've had %d today).", c.DisplayName(), quiet, c.DailyBudget(), e.sentToday(ctx, c, t.user))
+		in := c.Initiative
+		var presets []string
+		if in.MorningBrief != "" {
+			presets = append(presets, "a morning brief at "+in.MorningBrief)
+		}
+		if in.EventReminders > 0 {
+			presets = append(presets, fmt.Sprintf("a heads-up %d minutes before calendar events", in.EventReminders))
+		}
+		if in.DueReminders {
+			presets = append(presets, "reminders when something noted is due")
+		}
+		pre := "no morning brief or reminders"
+		if len(presets) > 0 {
+			pre = strings.Join(presets, ", ")
+		}
+		return fmt.Sprintf("%s: %s, up to %d unprompted messages a day per person (you've had %d today); %s.", c.DisplayName(), quiet, c.DailyBudget(), e.sentToday(ctx, c, t.user), pre)
 	}
-	if a.QuietHours == nil && a.DailyMessages == nil {
+	if a.QuietHours == nil && a.DailyMessages == nil && a.MorningBrief == nil && a.EventReminders == nil && a.DueReminders == nil {
 		return describe(c), nil
 	}
 	if c.IsKid() {
@@ -1195,6 +1221,29 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		}
 		cp.Initiative.DailyMessages = *a.DailyMessages
 	}
+	if a.MorningBrief != nil {
+		v := strings.TrimSpace(*a.MorningBrief)
+		if strings.EqualFold(v, "off") || strings.EqualFold(v, "none") {
+			v = ""
+		}
+		if v != "" {
+			m, err := character.ParseClock(v)
+			if err != nil {
+				return "", err
+			}
+			v = fmt.Sprintf("%02d:%02d", m/60, m%60)
+		}
+		cp.Initiative.MorningBrief = v
+	}
+	if a.EventReminders != nil {
+		if n := *a.EventReminders; n < 0 || n > character.MaxEventReminders {
+			return "", fmt.Errorf("event_reminders is minutes before an event, 1-%d (0 = off)", character.MaxEventReminders)
+		}
+		cp.Initiative.EventReminders = *a.EventReminders
+	}
+	if a.DueReminders != nil {
+		cp.Initiative.DueReminders = *a.DueReminders
+	}
 	path, err := e.Chars.Write(ctx, &cp)
 	if errors.Is(err, character.ErrUserEdited) {
 		return fmt.Sprintf("%s's file was edited by hand, so I didn't overwrite it. My proposed version is at %s; the user can merge it.", c.DisplayName(), path), nil
@@ -1203,7 +1252,8 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		return "", err
 	}
 	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "initiative changed",
-		fmt.Sprintf("quiet_hours %q, daily_messages %d", cp.Initiative.QuietHours, cp.DailyBudget()))
+		fmt.Sprintf("quiet_hours %q, daily_messages %d, morning_brief %q, event_reminders %d, due_reminders %t",
+			cp.Initiative.QuietHours, cp.DailyBudget(), cp.Initiative.MorningBrief, cp.Initiative.EventReminders, cp.Initiative.DueReminders))
 	return "Done. " + describe(&cp), nil
 }
 

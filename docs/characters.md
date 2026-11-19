@@ -82,6 +82,9 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `initiative.follow_ups` | | Follows up on things you mentioned ("how did the interview go?"). |
 | `initiative.quiet_hours` | | `"22:00-08:00"` in your timezone: no proactive messages then. Job and trigger results that finish during quiet hours are held and delivered when they end. |
 | `initiative.daily_messages` | | How many messages the sprig may start itself (job and trigger results, check-ins, follow-ups) per person per day, in that person's timezone: 1-50, default 3. Once it's used up, results wait for the next day. Replies never count. Ask the sprig ("message me at most 5 times a day") to change it, or its quiet hours, in chat. |
+| `initiative.morning_brief` | | A time like `"07:30"` (each person's timezone): a short brief of today's calendar and anything due. Off when left out. See [Briefs and reminders](#briefs-and-reminders). |
+| `initiative.event_reminders` | | Minutes before each calendar event for a one-line heads-up (1-1440). Off when left out. |
+| `initiative.due_reminders` | | `true`: a reminder when something noted as due ("the bill is due Friday") is coming up. |
 | `actions.quiet` | | `true` keeps routine built-in work (scheduling jobs, making webhooks and triggers) to the trail, without a line in the chat. What it does through integrations is always said, with undo where there is one. See [Saying what was done](mcp.md#saying-what-was-done-and-undo). |
 | `model` | | Override the chat model for this sprig (an OpenRouter model id). |
 | `created_by` | | Informational. |
@@ -144,6 +147,31 @@ requests for your approval, safety alerts to parents, and failures that
 need you. If one arrives during your quiet hours (or past the day's
 limit), it says why. The web app's sprig details and the dashboard show
 how much of today's budget is used and what's held.
+
+### Briefs and reminders
+
+A sprig can speak first, without a scheduled job:
+
+- **Morning brief** (`initiative.morning_brief: "07:30"`): at that time in
+  your timezone, today's calendar (your calendars, shared ones and what
+  sprigs put on it) and anything due today, in a few lines.
+- **Event heads-ups** (`initiative.event_reminders: 30`): "you have the
+  dentist at 3", that many minutes before each timed event on your
+  calendar. Once per event, whichever sprig gets there first.
+- **Due reminders** (`initiative.due_reminders: true`): when something a
+  sprig noted with a due time (a follow-up: "the water bill is due Friday
+  at 5") is coming up, within the next three hours. Once per item. A
+  sprig only mentions its own follow-ups and shared ones.
+
+Switch them on in the file or in chat ("Pip, send me a morning brief at
+7:30", "remind me half an hour before things"; Juni offers them when she
+sets up a new sprig). What to say is gathered by Thicket; the sprig writes
+it in its own voice, and it goes the way every unprompted message goes:
+quiet hours and the daily budget (a brief whose time falls in quiet hours
+comes when they end, up to two hours late, else that day's is skipped),
+the checks below, and the app you want to be reached on. A family sprig
+briefs everyone who uses Thicket; a private sprig its person. Kid sprigs
+never do any of this.
 
 ### Nothing new, nothing sent
 
