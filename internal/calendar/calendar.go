@@ -7,15 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // Layers of the calendar view.
@@ -81,6 +85,9 @@ type Service struct {
 	DB      *store.Store
 	Secrets Secrets
 	HTTP    *http.Client
+	// AllowPrivate lets every source reach private addresses, not only
+	// admins' (tests serve calendars on localhost).
+	AllowPrivate bool
 	// MCP reads calendars reached through an integration (kind mcp).
 	MCP MCPCaller
 	// CacheFor is how long a fetched calendar is reused (default 5 minutes).
@@ -105,12 +112,49 @@ func (s *Service) now() time.Time {
 	return time.Now()
 }
 
-func (s *Service) client() *http.Client {
+// client is what fetches a source's calendar. A source an admin added
+// may be on the home network (a Radicale or Nextcloud at home); anyone
+// else's may only reach public addresses, checked when connecting (so a
+// redirect or a name that resolves to a private address is refused too),
+// so a calendar link can't be used to probe the network Thicket is on.
+func (s *Service) client(ctx context.Context, src store.CalendarSource) *http.Client {
 	if s.HTTP != nil {
 		return s.HTTP
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	if s.AllowPrivate {
+		return lanClient
+	}
+	if s.DB != nil {
+		if u, err := s.DB.UserByID(ctx, src.UserID); err == nil && u.IsAdmin() {
+			return lanClient
+		}
+	}
+	return publicClient
 }
+
+var (
+	lanClient    = &http.Client{Timeout: 20 * time.Second}
+	publicClient = &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil, // a proxy would connect past the check
+			DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				ip, err := netip.ParseAddr(host)
+				if err != nil || !websearch.Public(ip) {
+					return errPrivateAddress
+				}
+				return nil
+			}}).DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+	errPrivateAddress = errors.New("it's on a private network address, and only an admin can add one of those")
+)
 
 // View is the calendar for one person: their own connected calendars and
 // shared ones, their sprigs' jobs, and sprig outputs (theirs and shared).
@@ -320,7 +364,7 @@ func (s *Service) fetch(ctx context.Context, src store.CalendarSource, from, to 
 		}
 		req.SetBasicAuth(src.Username, pw)
 	}
-	resp, err := s.client().Do(req)
+	resp, err := s.client(ctx, src).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("couldn't reach it: %v", redactURL(err, raw))
 	}

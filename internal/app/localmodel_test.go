@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/theshield2594/thicket/internal/channel"
+	"github.com/theshield2594/thicket/internal/llm"
 )
 
 // fakeOllama serves an OpenAI-compatible model list.
@@ -58,19 +59,85 @@ func TestLocalModelOnboarding(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
-	if h := a.health(ctx); !h["model_key"].OK || !strings.Contains(h["model_key"].Detail, srv.URL) {
+	if h := a.health(ctx); !h["model_key"].OK || h["model_key"].Detail != "local model server" {
 		t.Fatalf("health: %+v", h["model_key"])
 	}
 
-	// PDFs are declined politely: local servers can't read them.
+	// Thicket reads a PDF's text itself: local servers can't read PDFs.
+	// One without a text layer (scanned) is declined politely.
 	a.Engine.FetchAttachment = fakeFetch
 	in := dm("summarise")
 	in.Attachments = []channel.Attachment{{Name: "report.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100}}
 	e.HandleIncoming(ctx, in)
 	fc.take()
-	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "PDFs need OpenRouter") {
-		t.Fatalf("pdf note missing:\n%s", got)
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "probably scanned") {
+		t.Fatalf("scanned pdf note missing:\n%s", got)
 	}
+	in = dm("when is rent due?")
+	in.Attachments = []channel.Attachment{{Name: "lease.pdf", URL: "https://cdn.example/text.pdf", ContentType: "application/pdf", Size: 500}}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	req := lastChatReq(fm)
+	got := allUserContent(req)
+	if llm.HasMedia(req.Messages) || !strings.Contains(got, `<untrusted source="pdf lease.pdf">`) || !strings.Contains(got, "Rent is due on the 3rd.") {
+		t.Fatalf("pdf text not read locally:\n%s", got)
+	}
+	if strings.Contains(got, "sk-or-v1-5r") {
+		t.Fatal("a secret in the PDF reached the model")
+	}
+	if fm.parseCalls != 0 {
+		t.Fatalf("a local PDF needs no parse call, got %d", fm.parseCalls)
+	}
+	// Its text is kept for follow-up questions, in the document message
+	// (the stored user message doesn't carry it).
+	e.HandleIncoming(ctx, dm("and which day again?"))
+	fc.take()
+	if !userMessageWith(lastChatReq(fm), "The user sent lease.pdf earlier", "Rent is due on the 3rd.") {
+		t.Fatalf("follow-up missing the kept text:\n%s", allUserContent(lastChatReq(fm)))
+	}
+	assertNoLeak(t, a, "sk-or-v1-5r")
+
+	// With keeping off, a later turn doesn't see the text at all.
+	a.Settings.Set(ctx, "document_chars", "0")
+	in = dm("summarise this one")
+	in.Attachments = []channel.Attachment{{Name: "lease2.pdf", URL: "https://cdn.example/text.pdf", ContentType: "application/pdf", Size: 500}}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	e.HandleIncoming(ctx, dm("what did it say?"))
+	fc.take()
+	if userMessageWith(lastChatReq(fm), "lease2.pdf", "Rent is due on the 3rd.") {
+		t.Fatal("a PDF's text reached a later turn with document_chars 0")
+	}
+
+	// Three scanned PDFs: the third isn't read (each try counts).
+	in = dm("read these")
+	in.Attachments = []channel.Attachment{
+		{Name: "a.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+		{Name: "b.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+		{Name: "c.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+	}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "c.pdf was not read: only 2 PDFs") {
+		t.Fatalf("third scanned PDF:\n%s", got)
+	}
+}
+
+// userMessageWith reports whether one user message in req has every part.
+func userMessageWith(req llm.Request, parts ...string) bool {
+	for _, m := range req.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		all := true
+		for _, p := range parts {
+			all = all && strings.Contains(m.Content, p)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLocalServerWithoutChatModels(t *testing.T) {

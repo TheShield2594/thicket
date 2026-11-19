@@ -120,12 +120,28 @@ func New(addr, version, charsDir string, health HealthFunc, rt Routes) *http.Ser
 			return
 		}
 		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		http.ServeFile(w, r, filepath.Join(charsDir, name))
 	})
 	if rt.App != nil {
 		mux.Handle("/", rt.App)
 	}
-	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Idle and slow clients can't hold connections open: a request body
+	// must arrive within ReadTimeout (uploads extend their own deadline),
+	// and idle keep-alive connections close.
+	return &http.Server{Addr: addr, Handler: hsts(mux), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
+}
+
+// hsts tells browsers to use only https from now on, on responses that
+// went out over https (directly, or through a proxy that says so).
+func hsts(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, msg string) {

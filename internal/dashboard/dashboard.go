@@ -278,8 +278,11 @@ func (d *Dashboard) invite(w http.ResponseWriter, r *http.Request, u *store.User
 		name = name[:60]
 	}
 	days, _ := strconv.Atoi(r.PostFormValue("days"))
-	if days < 1 || days > 30 {
+	switch {
+	case days < 1:
 		days = 3
+	case days > 7: // the form offers 1 to 7
+		days = 7
 	}
 	token, err := d.DB.CreateInvite(r.Context(), store.Invite{Role: role, Name: name, CreatedBy: u.ID}, time.Duration(days)*24*time.Hour)
 	if err != nil {

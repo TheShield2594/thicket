@@ -358,7 +358,9 @@ delegated task and a handoff (including commons @mentions) carry the
 taint of the turn they came from, plus the sprig that sent them.
 
 In a tainted turn, a tool that changes something (`Risky` or `Writes`)
-at level `act` runs only if the person's own words for the turn asked for
+at level `act`, or one that changes Thicket itself (`Config`: settings,
+integrations, grants, levels, invites, skills; levels don't apply to
+these), runs only if the person's own words for the turn asked for
 it. Those words are their newest message with attached content cut out,
 or a scheduled or webhook job's task as set up; delegated work, questions
 and handoffs carry the words of the turn they came from. The cheap model

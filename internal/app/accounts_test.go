@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/api"
 	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/auth/authtest"
 	"github.com/theshield2594/thicket/internal/store"
@@ -187,12 +188,28 @@ func TestInviteAccountAndSessions(t *testing.T) {
 	if sessions := acct["sessions"].([]any); len(sessions) != 2 || acct["username"] != "robin" || acct["has_password"] != true {
 		t.Fatalf("account: %v", acct)
 	}
-	// Changing the password signs the other browser out.
+	// An app signed in too (POST /api/v2/auth/login names its token so),
+	// and a CLI token exists for scripts.
+	appToken, appHash, _ := api.NewToken()
+	if _, err := e.a.DB.CreateAPIToken(context.Background(), robinID, store.AppTokenPrefix+"phone", appHash); err != nil {
+		t.Fatal(err)
+	}
+	cliToken, cliHash, _ := api.NewToken()
+	if _, err := e.a.DB.CreateAPIToken(context.Background(), robinID, "scripts", cliHash); err != nil {
+		t.Fatal(err)
+	}
+	// Changing the password signs the other browser and the app out.
 	if code, _ := b1.do("POST", "/api/account/password", map[string]string{"current": "wrong current pw", "new": "a brand new password"}, true); code != 401 {
 		t.Fatalf("wrong current password: %d", code)
 	}
-	if code, out := b1.do("POST", "/api/account/password", map[string]string{"current": "robins password ok", "new": "a brand new password"}, true); code != 200 || out["signed_out"] != float64(1) {
+	if code, out := b1.do("POST", "/api/account/password", map[string]string{"current": "robins password ok", "new": "a brand new password"}, true); code != 200 || out["signed_out"] != float64(2) {
 		t.Fatalf("change password: %d %v", code, out)
+	}
+	if _, err := e.a.DB.APITokenByHash(context.Background(), api.HashToken(appToken)); err == nil {
+		t.Fatal("the app's token outlived the password change")
+	}
+	if _, err := e.a.DB.APITokenByHash(context.Background(), api.HashToken(cliToken)); err != nil {
+		t.Fatal("a CLI token was revoked by a password change")
 	}
 	if code, _ := b2.do("GET", "/api/me", nil, false); code != 401 {
 		t.Fatalf("other browser still signed in: %d", code)
@@ -414,4 +431,23 @@ func between(s, a, b string) string {
 	}
 	out, _, _ := strings.Cut(rest, b)
 	return out
+}
+
+// Wrong passwords lock a username for the client guessing, not for its
+// owner signing in from somewhere else.
+func TestUsernameLockIsPerClient(t *testing.T) {
+	e := accountsSetup(t)
+	guesser := e.client(t)
+	guesser.from = "203.0.113.50"
+	for i := 0; i < 5; i++ {
+		guesser.do("POST", "/api/login", map[string]string{"username": "kim", "password": fmt.Sprint("wrong guess ", i)}, true)
+	}
+	if code, _ := guesser.do("POST", "/api/login", map[string]string{"username": "kim", "password": "kims long password"}, true); code != 429 {
+		t.Fatalf("guesser not locked: %d", code)
+	}
+	kim := e.client(t)
+	kim.from = "198.51.100.20"
+	if code, out := kim.do("POST", "/api/login", map[string]string{"username": "kim", "password": "kims long password"}, true); code != 200 {
+		t.Fatalf("kim locked out by someone else's guesses: %d %v", code, out)
+	}
 }

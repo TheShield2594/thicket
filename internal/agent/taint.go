@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -98,8 +99,11 @@ func (t *turn) requestText() string {
 // holdTainted reports whether a tool call at act must be held because
 // outside content entered the turn and the person didn't ask for it.
 func (e *Engine) holdTainted(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) bool {
-	if !t.tainted() || !changes(tool) {
+	if !t.tainted() || !(changes(tool) || tool.Config) {
 		return false
+	}
+	if tool.Shows && onlyArgs(args, tool.ShowWith) {
+		return false // this call only shows the current state
 	}
 	key := tool.Name + "\x00" + string(args)
 	if v, ok := t.askedCache[key]; ok {
@@ -222,4 +226,22 @@ func (e *Engine) holdAction(ctx context.Context, t *turn, tool *Tool, args json.
 	e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "held "+tool.Name+": it followed untrusted content", "sources: "+sources+"; "+redacted)
 	return "HELD: this was NOT done. Outside content (" + sources + ") entered this conversation, and the user didn't ask for this action themselves, " +
 		"so it was saved to their inbox for them to check. Tell them briefly what you wanted to do and why, and that it's waiting in their inbox. Don't say it's done."
+}
+
+// onlyArgs reports whether a call's arguments are an object with no
+// keys but these ("", "null" and "{}" have none).
+func onlyArgs(args json.RawMessage, keys []string) bool {
+	if s := strings.TrimSpace(string(args)); s == "" || s == "null" {
+		return true
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return false
+	}
+	for k := range m {
+		if !slices.Contains(keys, k) {
+			return false
+		}
+	}
+	return true
 }

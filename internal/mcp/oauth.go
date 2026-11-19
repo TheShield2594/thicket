@@ -10,11 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // OAuth signs Thicket in to MCP servers that use OAuth (the MCP
@@ -79,6 +84,9 @@ type OAuthTokens struct {
 	TokenURL     string    `json:"token_url"`
 	Resource     string    `json:"resource"`
 	Scope        string    `json:"scope,omitempty"`
+	// PublicOnly: the MCP server is on a public address, so its sign-in
+	// server must be too.
+	PublicOnly bool `json:"public_only,omitempty"`
 }
 
 type pendingAuth struct {
@@ -96,11 +104,85 @@ func (o *OAuth) now() time.Time {
 	return time.Now()
 }
 
-func (o *OAuth) client() *http.Client {
+// client picks the HTTP client for a request: one held to public
+// addresses for a public MCP server (see publicOnlyKey), else one that may
+// reach the home network. They don't share connections, so a connection
+// opened for the one is never reused by the other.
+func (o *OAuth) client(ctx context.Context) *http.Client {
 	if o.HTTP != nil {
 		return o.HTTP
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	if ctx.Value(publicOnlyKey{}) != nil {
+		return publicOAuthClient
+	}
+	return lanOAuthClient
+}
+
+// publicOnlyKey marks a context whose requests may only connect to
+// public addresses: those made for an MCP server on a public address,
+// whose sign-in URLs (resource metadata, authorization server,
+// registration and token endpoints) come from that server and mustn't
+// point Thicket at its own network.
+type publicOnlyKey struct{}
+
+var errPrivateSignIn = errors.New("the sign-in server is on a private address, though the MCP server isn't")
+
+var (
+	lanOAuthClient = &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+	publicOAuthClient = &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			// Through a proxy the dial check below sees only the proxy, so
+			// the target is checked here first.
+			Proxy: func(r *http.Request) (*url.URL, error) {
+				p, err := http.ProxyFromEnvironment(r)
+				if p != nil && err == nil && !publicHost(r.Context(), r.URL.String()) {
+					return nil, errPrivateSignIn
+				}
+				return p, err
+			},
+			DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				if ip, err := netip.ParseAddr(host); err != nil || !websearch.Public(ip) {
+					return errPrivateSignIn
+				}
+				return nil
+			}}).DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+)
+
+// publicHost reports whether rawURL's host should be held to public
+// addresses: false only when it resolves and an address is on a private
+// network (an MCP server at home). A failed lookup counts as public, so a
+// DNS error never lifts the check.
+func publicHost(ctx context.Context, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
+	if err != nil || len(addrs) == 0 {
+		return true
+	}
+	for _, a := range addrs {
+		if !websearch.Public(a.Unmap()) {
+			return false
+		}
+	}
+	return true
 }
 
 // Start discovers how to sign in to the MCP server at serverURL and
@@ -111,11 +193,15 @@ func (o *OAuth) Start(ctx context.Context, server, serverURL, clientID, clientSe
 	if o.RedirectURL == "" {
 		return "", errors.New("no callback address: set THICKET_PUBLIC_URL")
 	}
+	public := publicHost(ctx, serverURL)
+	if public {
+		ctx = context.WithValue(ctx, publicOnlyKey{}, true)
+	}
 	meta, resource, err := o.discover(ctx, serverURL)
 	if err != nil {
 		return "", err
 	}
-	tok := OAuthTokens{ClientID: clientID, ClientSecret: clientSecret, TokenURL: meta.TokenEndpoint, Resource: resource, AuthMethod: "none"}
+	tok := OAuthTokens{ClientID: clientID, ClientSecret: clientSecret, TokenURL: meta.TokenEndpoint, Resource: resource, AuthMethod: "none", PublicOnly: public}
 	if clientSecret != "" {
 		tok.AuthMethod = "client_secret_post"
 	}
@@ -289,6 +375,9 @@ func (e *tokenError) Error() string {
 
 // token calls the token endpoint and updates t with what comes back.
 func (o *OAuth) token(ctx context.Context, t *OAuthTokens, form url.Values) error {
+	if t.PublicOnly {
+		ctx = context.WithValue(ctx, publicOnlyKey{}, true)
+	}
 	if t.AuthMethod != "client_secret_basic" {
 		form.Set("client_id", t.ClientID)
 	}
@@ -304,7 +393,7 @@ func (o *OAuth) token(ctx context.Context, t *OAuthTokens, form url.Values) erro
 	if t.AuthMethod == "client_secret_basic" {
 		req.SetBasicAuth(url.QueryEscape(t.ClientID), url.QueryEscape(t.ClientSecret))
 	}
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return err
 	}
@@ -355,7 +444,7 @@ func (o *OAuth) register(ctx context.Context, endpoint string) (id, secret, meth
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -465,7 +554,7 @@ func (o *OAuth) probe(ctx context.Context, serverURL string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", protocolVersion)
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("couldn't reach the server: %w", err)
 	}
@@ -511,7 +600,7 @@ func (o *OAuth) getJSON(ctx context.Context, u string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return err
 	}

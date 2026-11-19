@@ -183,17 +183,29 @@ function toast(text) {
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ESC[c]);
 
+// emphasis applies the markup that never makes attributes.
+const emphasis = (s) => s
+  .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+  .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
+  .replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
+  .replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+
+// inline renders one line. Code spans and links are set aside as
+// placeholders as soon as they're made, so no later rule can match inside
+// a tag it already wrote (a URL inside an href becoming a second link
+// would end the attribute early and let message text add its own).
 function inline(src) {
-  const codes = [];
-  let s = esc(src).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  const kept = [];
+  const keep = (html) => { kept.push(html); return `\u0000${kept.length - 1}\u0000`; };
+  const link = (url, label) => keep(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  let s = esc(src.replace(/\u0000/g, '')).replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`));
   s = s
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,!?:;'"])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
-    .replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
-    .replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
-  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\u0000]+)\)/g, (_, label, url) => link(url, emphasis(label)))
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+[^\s<).,!?:;'"\u0000])/g, (_, pre, url) => pre + link(url, url));
+  s = emphasis(s);
+  // Placeholders can nest (a code span in a link's label): undo until none are left.
+  for (let i = 0; i < 4 && s.includes('\u0000'); i++) s = s.replace(/\u0000(\d+)\u0000/g, (_, n) => kept[+n]);
+  return s;
 }
 
 function blocks(src) {

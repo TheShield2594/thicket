@@ -63,8 +63,13 @@ replies can take a while: Thicket waits up to 5 minutes per model call.
 
 ## Differences from OpenRouter
 
-- PDFs aren't read (parsing them is an OpenRouter service); sprigs say so.
-  Images work if the model supports vision (e.g. `llava`, `qwen2.5vl`).
+- Thicket reads a PDF's text itself and hands it to the model (about the
+  first 12,000 bytes with that message, fewer characters in scripts that
+  take several bytes each; `document_chars` of it is kept for
+  follow-ups). That covers PDFs with a text layer, which is most PDFs made
+  on a computer. Scanned PDFs have no text to read without OCR, which is
+  an OpenRouter service, so sprigs say they can't read those. Neither
+  can encrypted PDFs or ones in unusual compressions be read. Images work if the model supports vision (e.g. `llava`, `qwen2.5vl`).
 - There's no fallback model: if the server is down, sprigs tell you it
   failed.
 - Spend is recorded as $0.

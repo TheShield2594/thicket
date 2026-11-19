@@ -41,6 +41,12 @@ or through the app API (`POST /api/v2/calendars`):
   say what shape its result has (see below).
   `{"name": "Family", "kind": "mcp", "mcp": {"integration": "gcal", "tool": "list_events", "preset": "google", "args": {"calendarId": "family@group.calendar.google.com"}}, "shared": true}`
 
+A calendar on the home network (a Radicale or Nextcloud at a private
+address) must be connected by an admin: anyone else's calendar may only
+be on a public address, checked when Thicket connects (redirects
+included), so a calendar link can't be used to look around the network
+Thicket runs on.
+
 Thicket checks the calendar loads before saving it. The address (feed
 links carry a private token) and the password go in the encrypted store,
 never the database. Calendars are read-only: Thicket never writes to

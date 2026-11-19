@@ -6,6 +6,26 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v31)
 
+- Security review (#26, see `docs/security.md`). Admin and permission
+  tools (settings, integrations, grants, levels, invites, skills) are
+  held for the person in a turn that read outside content, unless their
+  own words asked for it. Sign-in attempt limits count per client, so one
+  client can't lock everyone out of signing in; a username still locks
+  for every client after 50 wrong passwords from all clients together,
+  so one client can lock out one username for 15 minutes.
+  `THICKET_TRUSTED_PROXIES` names the reverse proxies whose
+  X-Forwarded-For is believed. Changing a password also ends the apps'
+  sign-in tokens. A member's calendar may only be on a public address
+  (an admin's may be on the home network); a calendar on a private
+  address added by someone else stops loading and needs an admin to
+  connect it. Also: HTTP server timeouts, HSTS over https, a fix to
+  links in the web app's message rendering, and smaller fixes.
+
+- PDFs on a local model server: Thicket reads the text of a PDF itself
+  (a small built-in reader, no OCR) and gives it to the model with the
+  message, keeping it for follow-up questions as before. Scanned and
+  encrypted PDFs are declined with a note saying why.
+
 - Kid safety (schema v31): time limits per kid sprig, set by its parents
   in chat (`kid_limits`), the web app or the API: chat hours, an earlier
   end on school nights, and a daily allowance in minutes or messages. At

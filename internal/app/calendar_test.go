@@ -88,6 +88,12 @@ func TestHouseholdCalendar(t *testing.T) {
 	if _, err := a.Engine.AddCalendar(ctx, h.owner, "Mine", "ics", feed.URL+"/cal.ics?token=secret-feed-token", "", "", false); err != nil {
 		t.Fatal(err)
 	}
+	// Only an admin's calendar may be on a private address (the test
+	// servers are on localhost): a calendar link can't probe the network.
+	if _, err := a.Engine.AddCalendar(ctx, h.kim, "Family", "caldav", caldav.URL+"/cal/", "kim", "dav-pass", true); err == nil || !strings.Contains(err.Error(), "only an admin") {
+		t.Fatalf("a member's calendar on a private address: %v", err)
+	}
+	a.Calendar.AllowPrivate = true
 	if _, err := a.Engine.AddCalendar(ctx, h.kim, "Family", "caldav", caldav.URL+"/cal/", "kim", "dav-pass", true); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,21 @@
+# Weekly update PRs for the things Thicket is built from. The gomod entry
+# updates module requirements only, not the `toolchain` line in go.mod:
+# Go's own security releases need that line raised by hand (govulncheck
+# in CI fails when it's behind).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /sandbox
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule: { interval: weekly }

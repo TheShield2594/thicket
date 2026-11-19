@@ -164,6 +164,16 @@ func (d *Draft) openClawAvatar(dir, avatar string) error {
 		d.Notes = append(d.Notes, "the avatar "+avatar+" isn't an image inside the workspace, so it was left out")
 		return nil
 	}
+	// The name is inside the workspace; the file must be too, so a
+	// symlink can't publish ~/.ssh/id_ed25519 as an avatar.
+	// Both are made absolute: a relative workspace and an absolute link
+	// target can't be compared, and that mustn't count as inside.
+	if real, err := filepath.EvalSymlinks(filepath.Join(dir, rel)); err == nil {
+		if !insideDir(dir, real) {
+			d.Notes = append(d.Notes, "the avatar "+avatar+" links outside the workspace, so it was left out")
+			return nil
+		}
+	}
 	b, err := readLimited(filepath.Join(dir, rel))
 	if errors.Is(err, os.ErrNotExist) {
 		d.Notes = append(d.Notes, "the avatar file "+avatar+" wasn't found")
@@ -335,4 +345,24 @@ func roleFromInstructions(text, name string) string {
 		return strings.ToUpper(s[:1]) + s[1:]
 	}
 	return s
+}
+
+// insideDir reports whether path (symlinks resolved) is inside dir (whose
+// own symlinks are resolved too). Any error is a no.
+func insideDir(dir, path string) bool {
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	if root, err = filepath.Abs(root); err != nil {
+		return false
+	}
+	if path, err = filepath.Abs(path); err != nil {
+		return false
+	}
+	r, err := filepath.Rel(root, path)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) || filepath.IsAbs(r) {
+		return false
+	}
+	return true
 }

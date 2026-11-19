@@ -2,9 +2,11 @@ module github.com/theshield2594/thicket
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/gorilla/websocket v1.4.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.59.0
 	golang.org/x/term v0.48.0

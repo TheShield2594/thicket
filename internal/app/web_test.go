@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,9 @@ type webClient struct {
 	t    *testing.T
 	base string
 	c    *http.Client
+	// from, if set, is the client address a reverse proxy on this
+	// machine reports (X-Forwarded-For).
+	from string
 }
 
 func (w *webClient) do(method, path string, body any, csrf bool) (int, map[string]any) {
@@ -38,6 +42,9 @@ func (w *webClient) do(method, path string, body any, csrf bool) (int, map[strin
 	req.Header.Set("Content-Type", "application/json")
 	if csrf {
 		req.Header.Set("X-Thicket", "1")
+	}
+	if w.from != "" {
+		req.Header.Set("X-Forwarded-For", w.from)
 	}
 	res, err := w.c.Do(req)
 	if err != nil {
@@ -285,20 +292,41 @@ func TestWebLoginThrottle(t *testing.T) {
 	a, _, _, ctx := setup(t)
 	srv := httptest.NewServer(a.Web.Handler())
 	defer srv.Close()
-	w := &webClient{t: t, base: srv.URL, c: &http.Client{}}
-	for i := 0; i < 30; i++ {
+	w := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: "203.0.113.7"}
+	for i := 0; i < 10; i++ {
 		if code, _ := w.do("POST", "/api/login", map[string]string{"token": fmt.Sprint("bad", i)}, true); code != http.StatusUnauthorized {
 			t.Fatalf("bad token %d: %d", i, code)
 		}
 	}
-	// Once the window's failures are used up, even a good link waits.
+	// Once this client's failures are used up, even a good link waits.
 	token, _ := a.DB.CreateWebLink(ctx, 0, time.Hour)
 	if code, _ := w.do("POST", "/api/login", map[string]string{"token": token}, true); code != http.StatusTooManyRequests {
 		t.Fatalf("throttled login: %d", code)
 	}
+	// Someone else isn't locked out by it.
+	other := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: "198.51.100.9"}
+	if code, _ := other.do("POST", "/api/login", map[string]string{"token": "bad-other"}, true); code != http.StatusUnauthorized {
+		t.Fatalf("another client was throttled: %d", code)
+	}
+	// A client sending a made-up X-Forwarded-For first is still counted
+	// by the address its proxy appended.
+	spoof := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: "192.0.2.1, 203.0.113.7"}
+	if code, _ := spoof.do("POST", "/api/login", map[string]string{"token": "bad-spoof"}, true); code != http.StatusTooManyRequests {
+		t.Fatalf("spoofed header escaped the limit: %d", code)
+	}
 	// The link wasn't spent by the refused attempt.
 	if uid, err := a.DB.RedeemWebLink(ctx, token); err != nil || uid != 0 {
 		t.Fatalf("link should still work: %d %v", uid, err)
+	}
+	// Many addresses together still meet the household-wide backstop.
+	refused := false
+	for i := 0; i < 200 && !refused; i++ {
+		c := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: fmt.Sprintf("10.9.%d.%d", i/200, i%200+1)}
+		code, _ := c.do("POST", "/api/login", map[string]string{"token": "bad"}, true)
+		refused = code == http.StatusTooManyRequests
+	}
+	if !refused {
+		t.Fatal("no backstop across many clients")
 	}
 }
 
@@ -340,7 +368,27 @@ func TestWebLoginThrottleConcurrent(t *testing.T) {
 			t.Fatalf("unexpected status %d", c)
 		}
 	}
-	if reached > 30 {
-		t.Fatalf("%d attempts reached the database; the limit is 30", reached)
+	if reached > 10 {
+		t.Fatalf("%d attempts reached the database; the limit is 10 per client", reached)
+	}
+}
+
+// With THICKET_TRUSTED_PROXIES set, X-Forwarded-For from anywhere else
+// (here: the test client on loopback) is ignored: made-up addresses all
+// count as the one peer.
+func TestWebLoginThrottleTrustedProxies(t *testing.T) {
+	a, _, _, _ := setup(t)
+	a.Web.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.99.0.0/16")}
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+	for i := 0; i < 10; i++ {
+		c := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: fmt.Sprintf("203.0.113.%d", i+1)}
+		if code, _ := c.do("POST", "/api/login", map[string]string{"token": "bad"}, true); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i, code)
+		}
+	}
+	c := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: "198.51.100.1"}
+	if code, _ := c.do("POST", "/api/login", map[string]string{"token": "bad"}, true); code != http.StatusTooManyRequests {
+		t.Fatalf("an untrusted proxy's header was believed: %d", code)
 	}
 }

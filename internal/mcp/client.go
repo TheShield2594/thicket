@@ -500,6 +500,9 @@ func (h *httpT) answer(ctx context.Context, req rpcResponse) {
 	}
 }
 
+// maxSSEEvent bounds one server-sent event's data.
+const maxSSEEvent = 16 << 20
+
 // readSSE reads an SSE stream until the response to id arrives. Requests
 // the server sends meanwhile (e.g. ping) are passed to onRequest.
 func readSSE(r io.Reader, id int64, onRequest func(rpcResponse)) (*rpcResponse, error) {
@@ -533,6 +536,11 @@ func readSSE(r io.Reader, id int64, onRequest func(rpcResponse)) (*rpcResponse, 
 		}
 		if strings.HasPrefix(line, "data:") {
 			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			// One event is bounded like a JSON response: a server that
+			// never ends an event can't grow it without limit.
+			if data.Len() > maxSSEEvent {
+				return nil, fmt.Errorf("an event from the server is over %d MB", maxSSEEvent>>20)
+			}
 		}
 	}
 	if r := flush(); r != nil {

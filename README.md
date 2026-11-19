@@ -233,7 +233,8 @@ cookies (`Secure` over HTTPS).
 - PDFs are read by the model itself when it can, otherwise by OpenRouter's
   OCR ($2 per 1,000 pages). Ask Juni to set `pdf_engine` to
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
-  `native`; the default is `auto`.
+  `native`; the default is `auto`. On a local model server, Thicket reads
+  the text of PDFs itself (no OCR, so not scanned ones).
 - Share the house: family sprigs everyone uses, with family memory kept
   apart from each person's own; solo sprigs only you see; kid sprigs that
   only chat, only use tools a parent approved, and alert parents if
@@ -348,6 +349,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
 | `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
+| `THICKET_TRUSTED_PROXIES` | | reverse proxies (addresses or CIDR ranges, comma-separated) whose `X-Forwarded-For` names the client, for sign-in limits; empty: any proxy on a loopback or private address |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
 | `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
 | `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
@@ -426,6 +428,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Desktop app](docs/desktop.md)
 - [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
+- [Security: threat model and review](docs/security.md)
 - [Extending Thicket: chat adapters and integrations](docs/adapters.md)
 - [Changelog](CHANGELOG.md)
 

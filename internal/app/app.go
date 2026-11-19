@@ -287,6 +287,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.Calendar = a.Calendar
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
+	a.Web.TrustedProxies = cfg.TrustedProxies
 	a.Web.Status = a.webStatus
 	a.Web.Pin = a.Engine.PinWebMessage
 	a.Web.Remember = a.Engine.RememberWebMessage
@@ -432,7 +433,9 @@ func (a *App) Avatar(ctx context.Context, id, state string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if state == "" {
+	// The address needs no sign-in (chat apps fetch it), so a private
+	// sprig's picture never shows what it's doing right now.
+	if state == "" && c.Tier() != character.TierSolo {
 		state = a.Engine.SprigStates(ctx)[c.ID]
 	}
 	return avatar.Render(avatar.Load(a.Chars.Dir(), c.ID, c.Color), state), true
@@ -466,7 +469,8 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 	case a.Engine.ModelReady(ctx) && llm.IsOpenRouter(url):
 		out["model_key"] = server.Check{OK: true}
 	case a.Engine.ModelReady(ctx):
-		out["model_key"] = server.Check{OK: true, Detail: "model server " + url}
+		// /health needs no sign-in: the server's address isn't shown.
+		out["model_key"] = server.Check{OK: true, Detail: "local model server"}
 	default:
 		out["model_key"] = server.Check{OK: false, Detail: "no model yet: DM the bot to set one up"}
 	}

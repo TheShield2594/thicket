@@ -35,6 +35,18 @@ type Tool struct {
 	ChatOnly  bool
 	Risky     bool // needs approval unless a level says otherwise
 	Writes    bool // changes something, but acts by default (see levels.go)
+	// Config: changes Thicket itself (settings, integrations, people,
+	// permissions, skills) rather than something outside it. Levels don't
+	// apply, but in a tainted turn it's held like a changing tool unless
+	// the person asked for it: an injected page must not be able to point
+	// model_url elsewhere or connect an integration.
+	Config bool
+	// Shows: a call with no arguments other than ShowWith (a selector,
+	// such as which sprig) only shows the current state and changes
+	// nothing, so it isn't held in a tainted turn. Set only for tools whose
+	// code guarantees that.
+	Shows     bool
+	ShowWith  []string
 	Untrusted bool // output is outside content: wrap it as data
 	// Exec: the tool can run commands or programs. Offered only to sprigs
 	// whose owner turned exec on (see sandboxing.go).
@@ -346,6 +358,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "save_skill",
+			Config:      true,
 			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
 			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
 			AdminOnly:   true,
@@ -354,6 +367,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "manage_skill",
+			Config:      true,
 			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), or delete a skill.",
 			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
 			AdminOnly:   true,
@@ -378,7 +392,8 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolCreateCharacter,
 		},
 		{
-			Name: "create_kid_sprig",
+			Name:   "create_kid_sprig",
+			Config: true,
 			Description: "Set up a kid sprig: a chat-only companion for one or more of the household's kids. Interview first, a question or two at a time: which kids it's for (they must already be in the household as kids), who its parents are (default: the user), a name and a personality. " +
 				"preview: the draft says hello in the chat as it would to the kid (call again with changes to re-preview). create: shows the parent preview of the latest draft and asks for approval; nothing is created until they approve. " +
 				"It starts with no tools, no family memory or calendar, and never messages anyone on its own; its parents decide what it may use later.",
@@ -414,6 +429,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
+			Config:      true,
 			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/* plus exec on (set_sprig_access), since it runs commands. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
@@ -433,6 +449,8 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
+			Shows:       true,
+			Config:      true,
 			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd and .monthly_usd (one sprig's own caps; set_sprig_cap does the same), budget.ask_above_usd (above this estimate a sprig asks before something costly), budget.kid_monthly_usd (a new kid sprig's monthly cap), consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
 			Scope:       "admin",
@@ -440,7 +458,9 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolSettings,
 		},
 		{
-			Name: "set_sprig_cap",
+			Name:  "set_sprig_cap",
+			Shows: true, ShowWith: []string{"sprig"},
+			Config: true,
 			Description: "Show or change one sprig's own spend caps, in dollars: daily_usd and monthly_usd (0 = no cap of its own; the household caps still apply). " +
 				"A kid sprig's cap can only be raised by its parents; anyone who looks after a sprig can lower it. Omit both to show its caps and spend. Every change goes in the trail and can be undone.",
 			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name"},"daily_usd":{"type":"number","minimum":0},"monthly_usd":{"type":"number","minimum":0}},"required":["sprig"]}`,
@@ -466,6 +486,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "request_secret",
+			Config:      true,
 			Description: "Ask the user to send a secret (API key, token) in their next DM. The value is captured by Thicket, stored encrypted and never shown to you. Refer to it in integrations as {{secret:NAME}}.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"lowercase_with_underscores"},"purpose":{"type":"string"}},"required":["name","purpose"]}`,
 			Scope:       "admin",
@@ -474,7 +495,8 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolRequestSecret,
 		},
 		{
-			Name: "connect_chat_app",
+			Name:   "connect_chat_app",
+			Config: true,
 			Description: "Connect this Thicket to Discord or Telegram (so people can talk to the sprigs there), or check that it is. Thicket does it while running: the user sends the bot token in a DM, Thicket connects, stores the token encrypted and answers with the link to add the bot. Nothing goes in an env file and nothing is restarted. " +
 				"Use this, never request_secret, for a chat bot token. If the user already sent the token and it was stored under another name, pass that name as secret.",
 			Params:    `{"type":"object","properties":{"app":{"type":"string","enum":["discord","telegram"]},"secret":{"type":"string","description":"name of an already stored secret holding the bot token (optional)"}},"required":["app"]}`,
@@ -484,7 +506,8 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:       e.toolConnectChatApp,
 		},
 		{
-			Name: "add_integration",
+			Name:   "add_integration",
+			Config: true,
 			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
 				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools. " +
@@ -508,6 +531,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "remove_integration",
+			Config:      true,
 			Description: "Disconnect and remove an MCP integration.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`,
 			Scope:       "admin",
@@ -525,6 +549,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "set_sprig_access",
+			Config:      true,
 			Description: "Show or change what a sprig may run and read beyond chatting. exec=true lets it use integrations that run commands (the sandbox computer, shell servers); off by default, and needed on top of granting the integration. grant_path / revoke_path: a full path on this machine it may use besides its own folder (Thicket's data can never be granted). Only the sprig's owner may change these: the person a private sprig belongs to, or the owner or an admin for a shared one. With only sprig, it describes the current access.",
 			Params:      `{"type":"object","properties":{"sprig":{"type":"string"},"exec":{"type":"boolean"},"grant_path":{"type":"string"},"revoke_path":{"type":"string"}},"required":["sprig"]}`,
 			Scope:       "admin",
@@ -533,6 +558,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "set_tool_level",
+			Config:      true,
 			Description: "Set a tool's permission level, for one sprig or (sprig omitted) all of them: read (may only read), draft (changes are written up for the user, never done), ask (changes need the user's approval), act (no approval), or default (integration tools that change things ask; others act). Only a sprig's owner may: the person a private sprig belongs to, or the owner or an admin for a shared sprig (and for every sprig at once). Anyone else is refused, and the attempt is logged.",
 			Params:      `{"type":"object","properties":{"tool":{"type":"string"},"level":{"type":"string","enum":["read","draft","ask","act","default"]},"sprig":{"type":"string","description":"sprig id or name; omit for every sprig"}},"required":["tool","level"]}`,
 			Scope:       "admin",
@@ -541,6 +567,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_user",
+			Config:      true,
 			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. kid=true makes them a kid: they only talk to kid sprigs set up for them (an admin creates those; parents choose what they may use). To use Thicket from a second app themselves, people use link_account instead.",
 			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"},"kid":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
@@ -550,6 +577,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_person",
+			Config:      true,
 			Description: "Make a one-time invite link for someone joining this household (a partner, a housemate, a kid), for the app they'll chat on: web (the web app; always works), telegram or discord. Thicket posts the link right after your reply for the user to send them; you never see it. own_sprig=true (adults only) means you'll help them make their own private sprig as soon as they arrive, e.g. for \"add my wife's sprig\". Use invite_user instead when you already have their Discord or Telegram user id.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"what they're called"},"app":{"type":"string","enum":["web","telegram","discord"]},"role":{"type":"string","enum":["member","admin","kid"],"description":"default member (an adult)"},"own_sprig":{"type":"boolean"}},"required":["name","app"]}`,
 			Scope:       "admin",
@@ -559,6 +587,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "link_account",
+			Config:      true,
 			Description: "When the user wants to talk to Thicket from another chat app too (Discord or Telegram) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "host",
@@ -581,6 +610,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "memory_reviews",
+			Shows:       true,
+			Config:      true,
 			Description: "List recent automatic memory review runs, or roll one back (undoing every change it made) with rollback_run_id.",
 			Params:      `{"type":"object","properties":{"rollback_run_id":{"type":"integer"}}}`,
 			Scope:       "admin",
