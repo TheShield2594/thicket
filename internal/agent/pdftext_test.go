@@ -210,3 +210,90 @@ func FuzzPDFText(f *testing.F) {
 		}
 	})
 }
+
+// Crafted files from the review: each must end quickly, without a panic,
+// and read what's really there.
+func TestPDFTextCraftedInputs(t *testing.T) {
+	run := func(name string, pdf []byte) (string, error) {
+		t.Helper()
+		type res struct {
+			s   string
+			err error
+		}
+		done := make(chan res, 1)
+		go func() { s, err := pdfText(pdf, 10000); done <- res{s, err} }()
+		select {
+		case r := <-done:
+			return r.s, r.err
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: didn't finish", name)
+		}
+		return "", nil
+	}
+	page := func(content string, font string) []byte {
+		p := newPDF().
+			obj(1, "<< /Type /Catalog /Pages 2 0 R >>").
+			obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>").
+			obj(3, "<< /Type /Page /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>").
+			stream(4, "", []byte(content))
+		if font != "" {
+			p.obj(5, font)
+		}
+		return p.done(1, "")
+	}
+
+	// A bfrange at the top of a 4-byte code space must not wrap around.
+	wrap := newPDF().
+		obj(1, "<< /Type /Catalog /Pages 2 0 R >>").
+		obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>").
+		obj(3, "<< /Type /Page /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>").
+		stream(4, "", []byte("BT /F1 1 Tf <FFFFFFFF> Tj ET")).
+		obj(5, "<< /Type /Font /Subtype /Type0 /ToUnicode 6 0 R >>").
+		stream(6, "", []byte("1 begincodespacerange <00000000> <FFFFFFFF> endcodespacerange 1 beginbfrange <FFFFFFFE> <FFFFFFFF> <0041> endbfrange")).
+		done(1, "")
+	if s, err := run("wrap", wrap); err != nil || s != "B" {
+		t.Errorf("range at the top: %q %v", s, err)
+	}
+
+	// A huge /Length is ignored, not converted.
+	huge := bytes.Replace(page("BT (fine) Tj ET", ""), []byte("/Length 15"), []byte("/Length 1e300"), 1)
+	if s, _ := run("huge length", huge); s != "fine" {
+		t.Errorf("huge length: %q", s)
+	}
+
+	// An unencrypted file that shows "/Encrypt 9 0 R" in its text is read.
+	if s, err := run("quoted encrypt", page("BT (see /Encrypt 9 0 R) Tj ET", "")); err != nil || !strings.Contains(s, "Encrypt") {
+		t.Errorf("quoted encrypt: %q %v", s, err)
+	}
+
+	// Text that shows an object header doesn't replace the real object.
+	if s, _ := run("quoted header", page("BT (5 0 obj << /Type /Font /Subtype /Type0 >>) Tj ET", "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>")); !strings.Contains(s, "5 0 obj") {
+		t.Errorf("quoted header: %q", s)
+	}
+
+	// A font set inside q ... Q is back to the earlier one after Q.
+	qq := newPDF().
+		obj(1, "<< /Type /Catalog /Pages 2 0 R >>").
+		obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>").
+		obj(3, "<< /Type /Page /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>").
+		stream(4, "", []byte("BT /F1 1 Tf q /F2 1 Tf (x) Tj Q (A) Tj ET")).
+		obj(5, "<< /Type /Font /Subtype /Type1 >>").
+		obj(6, "<< /Type /Font /Subtype /Type0 >>"). // no map: reads as nothing
+		done(1, "")
+	if s, _ := run("q/Q", qq); s != "A" {
+		t.Errorf("font after Q: %q", s)
+	}
+
+	// One uncompressed stream named many times is charged each time.
+	big := strings.Repeat("BT (x) Tj ET ", 1<<16) // ~850 KB
+	refs := strings.TrimSpace(strings.Repeat("4 0 R ", 200))
+	many := newPDF().
+		obj(1, "<< /Type /Catalog /Pages 2 0 R >>").
+		obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>").
+		obj(3, "<< /Type /Page /Contents ["+refs+"] >>").
+		stream(4, "", []byte(big)).
+		done(1, "")
+	if _, err := run("repeated stream", many); !errors.Is(err, errPDFBudget) {
+		t.Errorf("repeated stream: %v", err)
+	}
+}

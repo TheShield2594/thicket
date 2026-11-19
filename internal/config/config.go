@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,6 +55,10 @@ type Config struct {
 	// WebProxy sends fetch_page through HTTPS_PROXY/HTTP_PROXY (see
 	// docs/web.md for the trade-off).
 	WebProxy bool
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For says
+	// who the client is (for sign-in limits). Empty: any proxy on a
+	// loopback or private address.
+	TrustedProxies []netip.Prefix
 
 	Model         string
 	FallbackModel string
@@ -119,6 +124,17 @@ func Load() (*Config, error) {
 		c.WebProxy = true
 	default:
 		return nil, fmt.Errorf("THICKET_WEB_PROXY must be 1 or 0, not %q", os.Getenv("THICKET_WEB_PROXY"))
+	}
+	for _, f := range strings.FieldsFunc(env("THICKET_TRUSTED_PROXIES", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			a, aerr := netip.ParseAddr(f)
+			if aerr != nil {
+				return nil, fmt.Errorf("THICKET_TRUSTED_PROXIES: %q isn't an address or CIDR range", f)
+			}
+			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		}
+		c.TrustedProxies = append(c.TrustedProxies, p.Masked())
 	}
 	c.CharactersDir = env("THICKET_CHARACTERS_DIR", filepath.Join(c.DataDir, "characters"))
 

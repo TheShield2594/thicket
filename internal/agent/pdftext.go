@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -64,6 +65,9 @@ type pdfDoc struct {
 	fonts   map[any]*pdfFont
 	inflate int
 	tokens  int
+	// short: something wasn't read for running out of budget, so the
+	// text is incomplete.
+	short bool
 }
 
 // pdfText returns the text of a PDF, at most about maxChars bytes of it.
@@ -81,7 +85,7 @@ func pdfText(b []byte, maxChars int) (string, error) {
 		res, _ := d.resolve(p["Resources"]).(pdfDict)
 		for _, c := range d.contents(p["Contents"]) {
 			if err := d.run(c, res, out, 0); err != nil {
-				return out.String(), err
+				return out.String(), err // only the budget stops a run
 			}
 			out.space()
 		}
@@ -90,10 +94,16 @@ func pdfText(b []byte, maxChars int) (string, error) {
 			break
 		}
 	}
+	if d.short {
+		return out.String(), errPDFBudget
+	}
 	return out.String(), nil
 }
 
-var objRe = regexp.MustCompile(`(\d{1,10})[ \t\r\n\f\x00]+(\d{1,5})[ \t\r\n\f\x00]+obj\b`)
+// objRe matches an object header where one can start: at the start of a
+// line or right after the previous object, not inside text that only
+// shows one.
+var objRe = regexp.MustCompile(`(?:\A|[\r\n]|endobj|endstream)[ \t\f\x00]*(\d{1,10})[ \t\r\n\f\x00]+(\d{1,5})[ \t\r\n\f\x00]+obj\b`)
 
 // index finds every top-level object by scanning for "N G obj" rather
 // than trusting the cross-reference table, which damaged and edited files
@@ -131,7 +141,7 @@ func (d *pdfDoc) index() {
 		for i := 0; i < int(count); i++ {
 			num, ok1 := lx.next().(float64)
 			off, ok2 := lx.next().(float64)
-			if !ok1 || !ok2 || off < 0 || int(first)+int(off) > len(data) {
+			if !ok1 || !ok2 || off < 0 || off > float64(len(data)-int(first)) {
 				break
 			}
 			body := &pdfLexer{b: data[int(first)+int(off):], d: d}
@@ -147,7 +157,23 @@ func (d *pdfDoc) index() {
 // encrypted reports whether the trailer (or cross-reference stream) names
 // an encryption dictionary: the strings and streams are then unreadable.
 func (d *pdfDoc) encrypted() bool {
-	return encryptRe.Match(d.data)
+	for i := 0; ; {
+		j := bytes.Index(d.data[i:], []byte("trailer"))
+		if j < 0 {
+			break
+		}
+		i += j + len("trailer")
+		lx := &pdfLexer{b: d.data, pos: i, d: d}
+		if t, ok := lx.next().(pdfDict); ok && t["Encrypt"] != nil {
+			return true
+		}
+	}
+	for n := range d.offsets {
+		if s, ok := d.object(n).(*pdfStream); ok && s.dict["Type"] == pdfName("XRef") && s.dict["Encrypt"] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // object returns object n, unresolved: a stream, dictionary, or value.
@@ -195,9 +221,9 @@ func (d *pdfDoc) streamData(dict pdfDict, pos int) ([]byte, bool) {
 	if pos < len(b) && b[pos] == '\n' {
 		pos++
 	}
-	// A direct /Length that lands on "endstream" is trusted; otherwise
-	// (an indirect one, or a wrong one) the keyword is searched for.
-	if l, ok := dict["Length"].(float64); ok && l >= 0 && pos+int(l) <= len(b) {
+	// A /Length (direct, or an object of its own) that lands on
+	// "endstream" is trusted; otherwise the keyword is searched for.
+	if l, ok := d.resolve(dict["Length"]).(float64); ok && l >= 0 && l <= float64(len(b)-pos) && l == math.Trunc(l) {
 		end := pos + int(l)
 		rest := bytes.TrimLeft(b[end:], " \t\r\n\f\x00")
 		if bytes.HasPrefix(rest, []byte("endstream")) {
@@ -238,6 +264,13 @@ func (d *pdfDoc) decode(s *pdfStream) ([]byte, error) {
 		return nil, fmt.Errorf("unknown filter")
 	}
 	data := s.raw
+	if len(filters) == 0 {
+		// Uncompressed data counts too: a page can name one stream
+		// thousands of times.
+		if err := d.charge(len(data)); err != nil {
+			return nil, err
+		}
+	}
 	for _, f := range filters {
 		switch d.resolve(f) {
 		case pdfName("FlateDecode"), pdfName("Fl"):
@@ -247,6 +280,7 @@ func (d *pdfDoc) decode(s *pdfStream) ([]byte, error) {
 				}
 			}
 			if d.inflate <= 0 {
+				d.short = true
 				return nil, errPDFBudget
 			}
 			r, err := zlib.NewReader(bytes.NewReader(data))
@@ -256,7 +290,7 @@ func (d *pdfDoc) decode(s *pdfStream) ([]byte, error) {
 			out, err := io.ReadAll(io.LimitReader(r, int64(d.inflate)+1))
 			r.Close()
 			if len(out) > d.inflate {
-				d.inflate = 0
+				d.inflate, d.short = 0, true
 				return nil, errPDFBudget
 			}
 			d.inflate -= len(out)
@@ -266,12 +300,20 @@ func (d *pdfDoc) decode(s *pdfStream) ([]byte, error) {
 			}
 			data = out
 		case pdfName("ASCII85Decode"), pdfName("A85"):
+			// Decoded, ASCII85 is at most four bytes per character
+			// ("z"); that's charged before anything is allocated.
+			if err := d.charge(4 * len(data)); err != nil {
+				return nil, err
+			}
 			out, err := decodeASCII85(data)
 			if err != nil {
 				return nil, err
 			}
 			data = out
 		case pdfName("ASCIIHexDecode"), pdfName("AHx"):
+			if err := d.charge(len(data)); err != nil {
+				return nil, err
+			}
 			lx := &pdfLexer{b: append(append([]byte("<"), data...), '>')}
 			data = lx.hex()
 		default:
@@ -279,6 +321,16 @@ func (d *pdfDoc) decode(s *pdfStream) ([]byte, error) {
 		}
 	}
 	return data, nil
+}
+
+// charge takes n bytes from the file's decoding budget.
+func (d *pdfDoc) charge(n int) error {
+	if n > d.inflate {
+		d.inflate, d.short = 0, true
+		return errPDFBudget
+	}
+	d.inflate -= n
+	return nil
 }
 
 // decodeASCII85 undoes ASCII85Decode: whitespace is ignored, "z" is four
@@ -301,8 +353,6 @@ func decodeASCII85(b []byte) ([]byte, error) {
 	}
 	return out[:n], nil
 }
-
-var encryptRe = regexp.MustCompile(`/Encrypt[ \t\r\n\f\x00]*(\d+[ \t\r\n\f\x00]+\d+[ \t\r\n\f\x00]+R|<<)`)
 
 var rootRe = regexp.MustCompile(`/Root[ \t\r\n\f\x00]+(\d+)[ \t\r\n\f\x00]+\d+[ \t\r\n\f\x00]+R`)
 
@@ -399,7 +449,9 @@ func (d *pdfDoc) run(data []byte, res pdfDict, out *textOut, depth int) error {
 	lx := &pdfLexer{b: data, d: d, content: true}
 	var ops []any
 	var font *pdfFont
+	var saved []*pdfFont // the font in each graphics state q saved
 	lastY, haveY := 0.0, false
+	text := func(v any) { out.text(font.decode(v, out.room())) }
 	num := func(i int) float64 {
 		if i < 0 || i >= len(ops) {
 			return 0
@@ -409,6 +461,7 @@ func (d *pdfDoc) run(data []byte, res pdfDict, out *textOut, depth int) error {
 	}
 	for !out.full() {
 		if d.tokens <= 0 {
+			d.short = true
 			return errPDFBudget
 		}
 		tok := lx.next()
@@ -423,6 +476,14 @@ func (d *pdfDoc) run(data []byte, res pdfDict, out *textOut, depth int) error {
 			continue
 		}
 		switch kw {
+		case "q":
+			if len(saved) < 64 {
+				saved = append(saved, font)
+			}
+		case "Q":
+			if len(saved) > 0 {
+				font, saved = saved[len(saved)-1], saved[:len(saved)-1]
+			}
 		case "Tf":
 			if len(ops) >= 2 {
 				name, _ := ops[len(ops)-2].(pdfName)
@@ -430,12 +491,12 @@ func (d *pdfDoc) run(data []byte, res pdfDict, out *textOut, depth int) error {
 			}
 		case "Tj":
 			if len(ops) > 0 {
-				out.text(font.decode(ops[len(ops)-1]))
+				text(ops[len(ops)-1])
 			}
 		case "'", "\"":
 			out.newline()
 			if len(ops) > 0 {
-				out.text(font.decode(ops[len(ops)-1]))
+				text(ops[len(ops)-1])
 			}
 		case "TJ":
 			if len(ops) > 0 {
@@ -448,7 +509,7 @@ func (d *pdfDoc) run(data []byte, res pdfDict, out *textOut, depth int) error {
 						}
 						continue
 					}
-					out.text(font.decode(e))
+					text(e)
 				}
 			}
 		case "Td", "TD":
@@ -500,6 +561,9 @@ type textOut struct {
 }
 
 func (o *textOut) full() bool { return o.b.Len() >= o.max }
+
+// room is how many more bytes fit.
+func (o *textOut) room() int { return max(o.max-o.b.Len(), 0) }
 
 func (o *textOut) last() byte {
 	s := o.b.String()
@@ -568,6 +632,7 @@ func (o *textOut) String() string {
 type pdfFont struct {
 	cmap    map[string]string // ToUnicode: code bytes → text
 	lengths []int             // code lengths in the map, shortest first
+	skip    int               // how far an unmapped code advances
 	simple  [256]rune         // single-byte fonts without a map
 	none    bool              // codes that can't be turned into text
 }
@@ -587,7 +652,7 @@ func (d *pdfDoc) font(res pdfDict, name pdfName) *pdfFont {
 	f := &pdfFont{}
 	if s, ok := d.resolve(dict["ToUnicode"]).(*pdfStream); ok {
 		if data, err := d.decode(s); err == nil {
-			f.cmap, f.lengths = d.parseCMap(data)
+			f.cmap, f.lengths, f.skip = d.parseCMap(data)
 		}
 	}
 	if len(f.cmap) == 0 {
@@ -628,10 +693,11 @@ func (d *pdfDoc) applyDifferences(f *pdfFont, font pdfDict) {
 	}
 }
 
-// decode turns a string operand into text.
-func (f *pdfFont) decode(v any) string {
+// decode turns a string operand into text, at most about limit bytes
+// of it (the text still fitting in the output).
+func (f *pdfFont) decode(v any, limit int) string {
 	s, ok := v.([]byte)
-	if !ok {
+	if !ok || limit <= 0 {
 		return ""
 	}
 	if f == nil {
@@ -643,13 +709,16 @@ func (f *pdfFont) decode(v any) string {
 	var b strings.Builder
 	if f.cmap == nil {
 		for _, c := range s {
+			if b.Len() >= limit {
+				break
+			}
 			if r := f.simple[c]; r != 0 {
 				b.WriteRune(r)
 			}
 		}
 		return b.String()
 	}
-	for i := 0; i < len(s); {
+	for i := 0; i < len(s) && b.Len() < limit; {
 		matched := false
 		for _, l := range f.lengths {
 			if i+l <= len(s) {
@@ -662,17 +731,25 @@ func (f *pdfFont) decode(v any) string {
 			}
 		}
 		if !matched {
-			// An unmapped code: skip it at the usual width.
-			i += f.lengths[len(f.lengths)-1]
+			// An unmapped code: skip it at the code space's width, so
+			// it doesn't swallow part of the next code.
+			i += f.skip
 		}
 	}
 	return b.String()
 }
 
-// parseCMap reads a ToUnicode map's bfchar and bfrange entries.
-func (d *pdfDoc) parseCMap(data []byte) (map[string]string, []int) {
+// maxCMapDest bounds one destination's bytes: real ones are a character
+// or a ligature, and a long one repeated over a range would be large.
+const maxCMapDest = 32
+
+// parseCMap reads a ToUnicode map's codespace, bfchar and bfrange
+// entries: the map, its code lengths (shortest first) and the width an
+// unmapped code takes (the codespace's shortest).
+func (d *pdfDoc) parseCMap(data []byte) (map[string]string, []int, int) {
 	m := map[string]string{}
 	lengths := map[int]bool{}
+	space := 0
 	lx := &pdfLexer{b: data, d: d, content: true}
 	var ops []any
 	mode := ""
@@ -695,13 +772,20 @@ func (d *pdfDoc) parseCMap(data []byte) (map[string]string, []int) {
 			continue
 		}
 		switch kw {
-		case "beginbfchar", "beginbfrange":
+		case "beginbfchar", "beginbfrange", "begincodespacerange":
 			mode, ops = string(kw), ops[:0]
+		case "endcodespacerange":
+			for _, o := range ops {
+				if b, ok := o.([]byte); ok && len(b) > 0 && len(b) <= 4 && (space == 0 || len(b) < space) {
+					space = len(b)
+				}
+			}
+			mode, ops = "", ops[:0]
 		case "endbfchar":
 			for i := 0; i+1 < len(ops); i += 2 {
 				src, ok1 := ops[i].([]byte)
 				dst, ok2 := ops[i+1].([]byte)
-				if ok1 && ok2 {
+				if ok1 && ok2 && len(dst) <= maxCMapDest {
 					add(src, utf16Text(dst))
 				}
 			}
@@ -717,14 +801,18 @@ func (d *pdfDoc) parseCMap(data []byte) (map[string]string, []int) {
 				if z < a || z-a > 0xFFFF {
 					continue
 				}
-				for c := a; c <= z && len(m) < maxCMapEntries; c++ {
-					code := beBytes(c, len(lo))
+				// Counted by offset, so a range ending at the top of the
+				// code space can't wrap around and run forever.
+				for off := uint32(0); off <= z-a && len(m) < maxCMapEntries; off++ {
+					code := beBytes(a+off, len(lo))
 					switch dst := ops[i+2].(type) {
 					case []byte:
-						add(code, utf16Text(bumpUTF16(dst, c-a)))
+						if len(dst) <= maxCMapDest {
+							add(code, utf16Text(bumpUTF16(dst, off)))
+						}
 					case []any:
-						if int(c-a) < len(dst) {
-							if t, ok := dst[c-a].([]byte); ok {
+						if int(off) < len(dst) {
+							if t, ok := dst[off].([]byte); ok && len(t) <= maxCMapDest {
 								add(code, utf16Text(t))
 							}
 						}
@@ -743,7 +831,13 @@ func (d *pdfDoc) parseCMap(data []byte) (map[string]string, []int) {
 		ls = append(ls, l)
 	}
 	sort.Ints(ls)
-	return m, ls
+	if space == 0 && len(ls) > 0 {
+		space = ls[0]
+	}
+	if space == 0 {
+		space = 1
+	}
+	return m, ls, space
 }
 
 func beUint(b []byte) uint32 {

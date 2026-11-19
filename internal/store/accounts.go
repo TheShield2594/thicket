@@ -38,6 +38,34 @@ func (s *Store) SetLogin(ctx context.Context, userID int64, username, hash strin
 	return err
 }
 
+// ChangePassword sets a user's login and, in the same transaction,
+// deletes their app sign-in tokens except the one with hash keepToken (an
+// app changing its own password), so neither happens without the other.
+// It returns how many tokens were deleted.
+func (s *Store) ChangePassword(ctx context.Context, userID int64, username, hash, keepToken string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO logins (user_id, username, password_hash, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, password_hash = excluded.password_hash, updated_at = excluded.updated_at`,
+		userID, username, hash, s.unix())
+	if isUnique(err) {
+		return 0, ErrUsernameTaken
+	}
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM api_tokens WHERE user_id = ? AND substr(name, 1, ?) = ? AND hash != ?",
+		userID, len(AppTokenPrefix), AppTokenPrefix, keepToken)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, tx.Commit()
+}
+
 // LoginFor returns a user's login, or ErrNotFound.
 func (s *Store) LoginFor(ctx context.Context, userID int64) (*Login, error) {
 	var l Login

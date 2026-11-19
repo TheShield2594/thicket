@@ -1,5 +1,7 @@
-# Weekly update PRs for the things Thicket is built from. Go's own
-# security releases come through the `toolchain` line in go.mod.
+# Weekly update PRs for the things Thicket is built from. The gomod entry
+# updates module requirements only, not the `toolchain` line in go.mod:
+# Go's own security releases need that line raised by hand (govulncheck
+# in CI fails when it's behind).
 version: 2
 updates:
   - package-ecosystem: gomod

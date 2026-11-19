@@ -30,7 +30,7 @@ tools, run commands in the sandbox, change its own settings.
   and other integration output, webhook payloads, other sprigs' answers.
   The model reads it, so it can try to steer the model (prompt
   injection). It's wrapped as untrusted data, and code (not the prompt)
-  stops it from causing changes the person didn't ask for.
+  holds the changes that follow it, unless the person asked for them.
 - **The model's choices**: any URL, command or tool argument the model
   picks may come from injected content.
 - **The network**: anyone who can reach the public URL, and anything on
@@ -50,7 +50,10 @@ provider seeing what it's sent.
   that read outside content is tainted. In a tainted turn, a tool that
   changes something, or changes Thicket itself (admin and permission
   tools, `Tool.Config`), runs only if the person's own words asked for
-  it; otherwise it's held in their inbox. Levels (`read`, `draft`,
+  it; otherwise it's held in their inbox. Whether they asked is judged
+  by the cheap model, shown only their own words and the call: code
+  enforces its answer, but the answer is a model's judgment, so a request
+  worded to look like the person's could get through. Levels (`read`, `draft`,
   `ask`, `act`) and approvals sit on top. See `docs/architecture.md`,
   "Untrusted content and act".
 - **Outbound requests**: `fetch_page` and web search check the address

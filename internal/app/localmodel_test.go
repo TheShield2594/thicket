@@ -88,13 +88,56 @@ func TestLocalModelOnboarding(t *testing.T) {
 	if fm.parseCalls != 0 {
 		t.Fatalf("a local PDF needs no parse call, got %d", fm.parseCalls)
 	}
-	// Its text is kept for follow-up questions.
+	// Its text is kept for follow-up questions, in the document message
+	// (the stored user message doesn't carry it).
 	e.HandleIncoming(ctx, dm("and which day again?"))
 	fc.take()
-	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "The user sent lease.pdf earlier") || !strings.Contains(got, "Rent is due on the 3rd.") {
-		t.Fatalf("follow-up missing the kept text:\n%s", got)
+	if !userMessageWith(lastChatReq(fm), "The user sent lease.pdf earlier", "Rent is due on the 3rd.") {
+		t.Fatalf("follow-up missing the kept text:\n%s", allUserContent(lastChatReq(fm)))
 	}
 	assertNoLeak(t, a, "sk-or-v1-5r")
+
+	// With keeping off, a later turn doesn't see the text at all.
+	a.Settings.Set(ctx, "document_chars", "0")
+	in = dm("summarise this one")
+	in.Attachments = []channel.Attachment{{Name: "lease2.pdf", URL: "https://cdn.example/text.pdf", ContentType: "application/pdf", Size: 500}}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	e.HandleIncoming(ctx, dm("what did it say?"))
+	fc.take()
+	if userMessageWith(lastChatReq(fm), "lease2.pdf", "Rent is due on the 3rd.") {
+		t.Fatal("a PDF's text reached a later turn with document_chars 0")
+	}
+
+	// Three scanned PDFs: the third isn't read (each try counts).
+	in = dm("read these")
+	in.Attachments = []channel.Attachment{
+		{Name: "a.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+		{Name: "b.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+		{Name: "c.pdf", URL: "https://cdn.example/report.pdf", ContentType: "application/pdf", Size: 100},
+	}
+	e.HandleIncoming(ctx, in)
+	fc.take()
+	if got := allUserContent(lastChatReq(fm)); !strings.Contains(got, "c.pdf was not read: only 2 PDFs") {
+		t.Fatalf("third scanned PDF:\n%s", got)
+	}
+}
+
+// userMessageWith reports whether one user message in req has every part.
+func userMessageWith(req llm.Request, parts ...string) bool {
+	for _, m := range req.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		all := true
+		for _, p := range parts {
+			all = all && strings.Contains(m.Content, p)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLocalServerWithoutChatModels(t *testing.T) {

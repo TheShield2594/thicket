@@ -9,8 +9,12 @@ stated.
 - Security review (#26, see `docs/security.md`). Admin and permission
   tools (settings, integrations, grants, levels, invites, skills) are
   held for the person in a turn that read outside content, unless their
-  own words asked for it. Sign-in limits count per client, so one client
-  can't lock others out. Changing a password also ends the apps'
+  own words asked for it. Sign-in attempt limits count per client, so one
+  client can't lock everyone out of signing in; a username still locks
+  for every client after 50 wrong passwords from all clients together,
+  so one client can lock out one username for 15 minutes.
+  `THICKET_TRUSTED_PROXIES` names the reverse proxies whose
+  X-Forwarded-For is believed. Changing a password also ends the apps'
   sign-in tokens. A member's calendar may only be on a public address
   (an admin's may be on the home network); a calendar on a private
   address added by someone else stops loading and needs an admin to

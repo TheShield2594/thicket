@@ -153,6 +153,7 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		device = "app"
 	}
 	var uid int64
+	verified := "" // the password hash a password sign-in checked against
 	switch {
 	case body.Link != "":
 		token := body.Link
@@ -172,7 +173,7 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		uid = id
 	default:
 		username := strings.TrimSpace(body.Username)
-		if a.users.locked(clientIP(r), username, now) {
+		if a.users.locked(a.clientIP(r), username, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords for that username. Wait 15 minutes and try again.")
 			return
 		}
@@ -184,12 +185,12 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		verr := auth.VerifyPassword(hash, body.Password)
 		ok := err == nil && verr == nil && hash != ""
 		a.loginEnd(r, !ok)
-		a.users.record(clientIP(r), username, ok, now)
+		a.users.record(a.clientIP(r), username, ok, now)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "Wrong username or password.")
 			return
 		}
-		uid = u.ID
+		uid, verified = u.ID, hash
 	}
 	token, hash, err := api.NewToken()
 	if err != nil {
@@ -200,6 +201,17 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	// A password change that finished while this sign-in was checked
+	// ended the apps' tokens before this one existed. If the password is no
+	// longer the one checked, this token goes too. (A change after this
+	// check deletes it itself.)
+	if verified != "" {
+		if _, now, err := a.DB.LoginByUsername(ctx, strings.TrimSpace(body.Username)); err != nil || now != verified {
+			_ = a.DB.RevokeAPIToken(ctx, id)
+			writeErr(w, http.StatusUnauthorized, "The password changed while signing in. Sign in again.")
+			return
+		}
 	}
 	u, _ := a.DB.UserByID(ctx, uid)
 	writeJSON(w, http.StatusOK, map[string]any{"token": token, "token_id": id, "user": userView(u)})

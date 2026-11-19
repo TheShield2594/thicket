@@ -40,7 +40,13 @@ type Tool struct {
 	// apply, but in a tainted turn it's held like a changing tool unless
 	// the person asked for it: an injected page must not be able to point
 	// model_url elsewhere or connect an integration.
-	Config    bool
+	Config bool
+	// Shows: a call with no arguments other than ShowWith (a selector,
+	// such as which sprig) only shows the current state and changes
+	// nothing, so it isn't held in a tainted turn. Set only for tools whose
+	// code guarantees that.
+	Shows     bool
+	ShowWith  []string
 	Untrusted bool // output is outside content: wrap it as data
 	// Exec: the tool can run commands or programs. Offered only to sprigs
 	// whose owner turned exec on (see sandboxing.go).
@@ -443,6 +449,7 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- admin ---
 		{
 			Name:        "settings",
+			Shows:       true,
 			Config:      true,
 			Description: "Show or change Thicket settings: model, fallback_model, cheap_model, budget.daily_usd, budget.monthly_usd, budget.character.<id>.daily_usd and .monthly_usd (one sprig's own caps; set_sprig_cap does the same), budget.ask_above_usd (above this estimate a sprig asks before something costly), budget.kid_monthly_usd (a new kid sprig's monthly cap), consistency_check, auto_route (true: when no sprig is named, a cheap model picks who answers by role), checkin_days, pdf_engine (auto | native | cloudflare-ai | mistral-ocr), transcribe_model (hears voice messages; must accept audio), web_search (auto | openrouter | searxng | off), search_url (SearXNG address), history_tokens (how much conversation each reply includes; 0 = automatic), model_url (OpenRouter's API, or a local OpenAI-compatible server; when switching, also set model, cheap_model and fallback_model to model names that server has), timezone (the household's, which new people start with), backup_dir (a folder for scheduled full backups; empty = off; in Docker it must be a mounted folder), backup_schedule (cron, default 0 3 * * *), backup_keep (how many to keep). Omit name to list them. Empty value resets to default.",
 			Params:      `{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}}}`,
@@ -451,7 +458,8 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolSettings,
 		},
 		{
-			Name:   "set_sprig_cap",
+			Name:  "set_sprig_cap",
+			Shows: true, ShowWith: []string{"sprig"},
 			Config: true,
 			Description: "Show or change one sprig's own spend caps, in dollars: daily_usd and monthly_usd (0 = no cap of its own; the household caps still apply). " +
 				"A kid sprig's cap can only be raised by its parents; anyone who looks after a sprig can lower it. Omit both to show its caps and spend. Every change goes in the trail and can be undone.",
@@ -602,6 +610,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "memory_reviews",
+			Shows:       true,
 			Config:      true,
 			Description: "List recent automatic memory review runs, or roll one back (undoing every change it made) with rollback_run_id.",
 			Params:      `{"type":"object","properties":{"rollback_run_id":{"type":"integer"}}}`,

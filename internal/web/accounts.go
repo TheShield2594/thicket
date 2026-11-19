@@ -69,7 +69,7 @@ func (a *Adapter) authOptions(w http.ResponseWriter, r *http.Request) {
 func (a *Adapter) passwordLogin(w http.ResponseWriter, r *http.Request, username, password string) {
 	ctx := r.Context()
 	now := time.Now()
-	if a.users.locked(clientIP(r), username, now) {
+	if a.users.locked(a.clientIP(r), username, now) {
 		w.Header().Set("Retry-After", "900")
 		writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords for that username. Wait 15 minutes and try again.")
 		return
@@ -90,7 +90,7 @@ func (a *Adapter) passwordLogin(w http.ResponseWriter, r *http.Request, username
 	verr := auth.VerifyPassword(hash, password)
 	ok := err == nil && verr == nil && hash != ""
 	a.loginEnd(r, !ok)
-	a.users.record(clientIP(r), username, ok, now)
+	a.users.record(a.clientIP(r), username, ok, now)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "Wrong username or password.")
 		return
@@ -215,13 +215,13 @@ func (a *Adapter) changePassword(w http.ResponseWriter, r *http.Request, u *stor
 	}
 	now := time.Now()
 	if login != nil && login.HasPassword {
-		if a.users.locked(clientIP(r), login.Username, now) {
+		if a.users.locked(a.clientIP(r), login.Username, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords. Wait 15 minutes and try again.")
 			return
 		}
 		_, hash, _ := a.DB.LoginByUsername(ctx, login.Username)
 		if auth.VerifyPassword(hash, body.Current) != nil {
-			a.users.record(clientIP(r), login.Username, false, now)
+			a.users.record(a.clientIP(r), login.Username, false, now)
 			writeErr(w, http.StatusUnauthorized, "Your current password isn't right.")
 			return
 		}
@@ -238,7 +238,14 @@ func (a *Adapter) changePassword(w http.ResponseWriter, r *http.Request, u *stor
 		writeErr(w, http.StatusBadRequest, "Choose a username: 2 to 32 letters, digits, dots, dashes or underscores.")
 		return
 	}
-	if err := a.DB.SetLogin(ctx, u.ID, username, hash); errors.Is(err, store.ErrUsernameTaken) {
+	// The apps' sign-in tokens end with the old password (an app changing
+	// it keeps its own), in one transaction with the change.
+	keepToken := ""
+	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		keepToken = api.HashToken(strings.TrimSpace(tok))
+	}
+	apps, err := a.DB.ChangePassword(ctx, u.ID, username, hash, keepToken)
+	if errors.Is(err, store.ErrUsernameTaken) {
 		writeErr(w, http.StatusConflict, "That username is taken. Try another.")
 		return
 	} else if err != nil {
@@ -250,13 +257,6 @@ func (a *Adapter) changePassword(w http.ResponseWriter, r *http.Request, u *stor
 		keep = c.Value
 	}
 	ended, _ := a.DB.RevokeUserSessions(ctx, u.ID, keep)
-	// The apps' sign-in tokens end too (an app changing the password
-	// keeps its own), so a stolen password's token doesn't outlive it.
-	keepToken := ""
-	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-		keepToken = api.HashToken(strings.TrimSpace(tok))
-	}
-	apps, _ := a.DB.RevokeAppTokens(ctx, u.ID, keepToken)
 	ended += apps
 	_ = a.DB.LogActivity(ctx, store.Activity{Level: "info", Kind: "system", UserID: u.ID, Summary: "changed their web app password"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": username, "signed_out": ended})

@@ -278,7 +278,7 @@ func TestInheritCarriesTaintAndWords(t *testing.T) {
 func TestInjectedConfigChangeIsHeld(t *testing.T) {
 	f := newTaintFixture(t)
 	ran := 0
-	f.tools["settings"] = &Tool{Name: "settings", Description: "change settings", Scope: "admin", AdminOnly: true, Config: true,
+	f.tools["settings"] = &Tool{Name: "settings", Description: "change settings", Scope: "admin", AdminOnly: true, Config: true, Shows: true,
 		Run: func(context.Context, *turn, json.RawMessage) (string, error) { ran++; return "ok", nil }}
 	tr := f.turn("summarise my newest email")
 	f.call(tr, "mail__read", `{}`)
@@ -288,6 +288,13 @@ func TestInjectedConfigChangeIsHeld(t *testing.T) {
 	// Showing the settings changes nothing, so it isn't held.
 	if out := f.call(tr, "settings", `{}`); out != "ok" || ran != 1 {
 		t.Fatalf("listing settings: %q (ran %d)", out, ran)
+	}
+	// A config tool that changes something even with no arguments (a
+	// link code) is held then too.
+	f.tools["link_account"] = &Tool{Name: "link_account", Description: "make a link code", Config: true,
+		Run: func(context.Context, *turn, json.RawMessage) (string, error) { return "code", nil }}
+	if out := f.call(tr, "link_account", `{}`); !strings.HasPrefix(out, "HELD") {
+		t.Fatalf("link_account with no arguments: %s", out)
 	}
 	// In an untainted turn it runs as before.
 	if out := f.call(f.turn("set model_url to http://ollama:11434/v1"), "settings", `{"name":"model_url","value":"http://ollama:11434/v1"}`); out != "ok" || ran != 2 {

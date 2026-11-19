@@ -349,6 +349,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_OIDC_MEMBER_GROUP`, `THICKET_OIDC_ADMIN_GROUP` | | groups (in `THICKET_OIDC_GROUPS_CLAIM`, default `groups`) whose people may sign in, as members or admins |
 | `THICKET_OIDC_SCOPES` | `openid email profile` (+`groups` with a group set) | scopes to ask for |
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
+| `THICKET_TRUSTED_PROXIES` | | reverse proxies (addresses or CIDR ranges, comma-separated) whose `X-Forwarded-For` names the client, for sign-in limits; empty: any proxy on a loopback or private address |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
 | `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
 | `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |

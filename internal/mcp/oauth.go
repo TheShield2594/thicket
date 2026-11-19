@@ -104,64 +104,78 @@ func (o *OAuth) now() time.Time {
 	return time.Now()
 }
 
-func (o *OAuth) client() *http.Client {
+// client picks the HTTP client for a request: one held to public
+// addresses for a public MCP server (see publicOnlyKey), else one that may
+// reach the home network. They don't share connections, so a connection
+// opened for the one is never reused by the other.
+func (o *OAuth) client(ctx context.Context) *http.Client {
 	if o.HTTP != nil {
 		return o.HTTP
 	}
-	return oauthClient
+	if ctx.Value(publicOnlyKey{}) != nil {
+		return publicOAuthClient
+	}
+	return lanOAuthClient
 }
 
 // publicOnlyKey marks a context whose requests may only connect to
-// public addresses.
+// public addresses: those made for an MCP server on a public address,
+// whose sign-in URLs (resource metadata, authorization server,
+// registration and token endpoints) come from that server and mustn't
+// point Thicket at its own network.
 type publicOnlyKey struct{}
 
-// oauthClient checks, when connecting, that a request made for a public
-// MCP server goes to a public address: the URLs it's sent to (resource
-// metadata, authorization server, registration and token endpoints) come
-// from that server, and mustn't point Thicket at its own network.
-var oauthClient = &http.Client{
-	Timeout: 20 * time.Second,
-	Transport: &http.Transport{
-		// Through a proxy the dial check below sees only the proxy, so
-		// the target is checked here first.
-		Proxy: func(r *http.Request) (*url.URL, error) {
-			p, err := http.ProxyFromEnvironment(r)
-			if p != nil && err == nil && r.Context().Value(publicOnlyKey{}) != nil && !publicHost(r.Context(), r.URL.String()) {
-				return nil, errors.New("the sign-in server is on a private address, though the MCP server isn't")
-			}
-			return p, err
-		},
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := &net.Dialer{Timeout: 10 * time.Second}
-			if ctx.Value(publicOnlyKey{}) != nil {
-				d.Control = func(_, address string, _ syscall.RawConn) error {
-					host, _, err := net.SplitHostPort(address)
-					if err != nil {
-						return err
-					}
-					if ip, err := netip.ParseAddr(host); err != nil || !websearch.Public(ip) {
-						return errors.New("the sign-in server is on a private address, though the MCP server isn't")
-					}
-					return nil
-				}
-			}
-			return d.DialContext(ctx, network, address)
-		},
-		TLSHandshakeTimeout: 10 * time.Second,
-		IdleConnTimeout:     30 * time.Second,
-	},
-}
+var errPrivateSignIn = errors.New("the sign-in server is on a private address, though the MCP server isn't")
 
-// publicHost reports whether every address rawURL's host resolves to is
-// public.
+var (
+	lanOAuthClient = &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+	publicOAuthClient = &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			// Through a proxy the dial check below sees only the proxy, so
+			// the target is checked here first.
+			Proxy: func(r *http.Request) (*url.URL, error) {
+				p, err := http.ProxyFromEnvironment(r)
+				if p != nil && err == nil && !publicHost(r.Context(), r.URL.String()) {
+					return nil, errPrivateSignIn
+				}
+				return p, err
+			},
+			DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				if ip, err := netip.ParseAddr(host); err != nil || !websearch.Public(ip) {
+					return errPrivateSignIn
+				}
+				return nil
+			}}).DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+)
+
+// publicHost reports whether rawURL's host should be held to public
+// addresses: false only when it resolves and an address is on a private
+// network (an MCP server at home). A failed lookup counts as public, so a
+// DNS error never lifts the check.
 func publicHost(ctx context.Context, rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
-		return false
+		return true
 	}
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
 	if err != nil || len(addrs) == 0 {
-		return false
+		return true
 	}
 	for _, a := range addrs {
 		if !websearch.Public(a.Unmap()) {
@@ -379,7 +393,7 @@ func (o *OAuth) token(ctx context.Context, t *OAuthTokens, form url.Values) erro
 	if t.AuthMethod == "client_secret_basic" {
 		req.SetBasicAuth(url.QueryEscape(t.ClientID), url.QueryEscape(t.ClientSecret))
 	}
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return err
 	}
@@ -430,7 +444,7 @@ func (o *OAuth) register(ctx context.Context, endpoint string) (id, secret, meth
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -540,7 +554,7 @@ func (o *OAuth) probe(ctx context.Context, serverURL string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", protocolVersion)
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("couldn't reach the server: %w", err)
 	}
@@ -586,7 +600,7 @@ func (o *OAuth) getJSON(ctx context.Context, u string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := o.client().Do(req)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		return err
 	}

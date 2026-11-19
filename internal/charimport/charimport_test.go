@@ -359,3 +359,23 @@ func TestOpenClawAvatarSymlinkOutside(t *testing.T) {
 		t.Fatalf("avatar %q, notes %v", d.Avatar, d.Notes)
 	}
 }
+
+// The same from a relative workspace path, with an absolute link.
+func TestOpenClawAvatarSymlinkFromRelativePath(t *testing.T) {
+	home := t.TempDir()
+	ws := filepath.Join(home, "workspace")
+	writeFile(t, ws, "IDENTITY.md", "- **Name:** Clawdia\n- **Avatar:** me.png\n")
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	writeFile(t, filepath.Dir(outside), "secret.png", "private key")
+	if err := os.Symlink(outside, filepath.Join(ws, "me.png")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	t.Chdir(home)
+	d, err := Load("workspace", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Avatar != nil {
+		t.Fatalf("avatar copied from outside: %q", d.Avatar)
+	}
+}

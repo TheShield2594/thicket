@@ -36,8 +36,11 @@ type turn struct {
 	pdfs   []llm.File
 	// pdfPages counts each PDF's pages, for the cost estimate.
 	pdfPages []int
-	// localDocs is PDF text Thicket read itself, for a local model.
+	// localDocs is PDF text Thicket read itself, for a local model;
+	// localText is how the model sees it with the message this turn
+	// answers (not stored with it).
 	localDocs map[string]string
+	localText string
 	// packages are sprig packages sent with the newest message.
 	packages map[string][]byte
 	// annotations are OpenRouter's parsed copies of pdfs from this turn.
@@ -313,6 +316,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 			m := llm.Message{Role: "user", Content: content}
 			if origin {
 				m.Images, m.Files = t.images, t.pdfs
+				m.Content += t.localText
 			}
 			msgs = append(msgs, m)
 		case h.Role == "assistant" && h.Character == t.char.ID:

@@ -63,8 +63,9 @@ replies can take a while: Thicket waits up to 5 minutes per model call.
 
 ## Differences from OpenRouter
 
-- Thicket reads a PDF's text itself and hands it to the model (the first
-  12,000 characters with that message; `document_chars` of it is kept for
+- Thicket reads a PDF's text itself and hands it to the model (about the
+  first 12,000 bytes with that message, fewer characters in scripts that
+  take several bytes each; `document_chars` of it is kept for
   follow-ups). That covers PDFs with a text layer, which is most PDFs made
   on a computer. Scanned PDFs have no text to read without OCR, which is
   an OpenRouter service, so sprigs say they can't read those. Neither

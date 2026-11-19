@@ -372,7 +372,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages, localDocs: media.localDocs,
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages, localDocs: media.localDocs, localText: media.localText,
 		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken, said: in.Text}
 	if user.IsKid() {
 		// One turn at a time per kid, across chats and apps, so two at once

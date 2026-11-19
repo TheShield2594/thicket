@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -369,5 +370,25 @@ func TestWebLoginThrottleConcurrent(t *testing.T) {
 	}
 	if reached > 10 {
 		t.Fatalf("%d attempts reached the database; the limit is 10 per client", reached)
+	}
+}
+
+// With THICKET_TRUSTED_PROXIES set, X-Forwarded-For from anywhere else
+// (here: the test client on loopback) is ignored: made-up addresses all
+// count as the one peer.
+func TestWebLoginThrottleTrustedProxies(t *testing.T) {
+	a, _, _, _ := setup(t)
+	a.Web.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.99.0.0/16")}
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+	for i := 0; i < 10; i++ {
+		c := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: fmt.Sprintf("203.0.113.%d", i+1)}
+		if code, _ := c.do("POST", "/api/login", map[string]string{"token": "bad"}, true); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i, code)
+		}
+	}
+	c := &webClient{t: t, base: srv.URL, c: &http.Client{}, from: "198.51.100.1"}
+	if code, _ := c.do("POST", "/api/login", map[string]string{"token": "bad"}, true); code != http.StatusTooManyRequests {
+		t.Fatalf("an untrusted proxy's header was believed: %d", code)
 	}
 }

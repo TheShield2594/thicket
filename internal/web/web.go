@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,6 +71,8 @@ type Adapter struct {
 	Status func(ctx context.Context, admin bool) Status
 	// SecureCookies forces the Secure flag (set when PublicURL is https).
 	SecureCookies bool
+	// TrustedProxies: whose X-Forwarded-For is believed (see clientIP).
+	TrustedProxies []netip.Prefix
 	// Pin pins or unpins the conversation message behind a web message,
 	// returning what to tell the user (the engine's PinWebMessage).
 	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)

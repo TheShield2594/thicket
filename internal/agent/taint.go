@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -101,8 +102,8 @@ func (e *Engine) holdTainted(ctx context.Context, t *turn, tool *Tool, args json
 	if !t.tainted() || !(changes(tool) || tool.Config) {
 		return false
 	}
-	if !changes(tool) && noArgs(args) {
-		return false // a config tool called with nothing only shows the current state
+	if tool.Shows && onlyArgs(args, tool.ShowWith) {
+		return false // this call only shows the current state
 	}
 	key := tool.Name + "\x00" + string(args)
 	if v, ok := t.askedCache[key]; ok {
@@ -227,11 +228,20 @@ func (e *Engine) holdAction(ctx context.Context, t *turn, tool *Tool, args json.
 		"so it was saved to their inbox for them to check. Tell them briefly what you wanted to do and why, and that it's waiting in their inbox. Don't say it's done."
 }
 
-// noArgs reports whether a call has no arguments ("{}", "null" or "").
-func noArgs(args json.RawMessage) bool {
-	var m map[string]any
+// onlyArgs reports whether a call's arguments are an object with no
+// keys but these ("", "null" and "{}" have none).
+func onlyArgs(args json.RawMessage, keys []string) bool {
 	if s := strings.TrimSpace(string(args)); s == "" || s == "null" {
 		return true
 	}
-	return json.Unmarshal(args, &m) == nil && len(m) == 0
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return false
+	}
+	for k := range m {
+		if !slices.Contains(keys, k) {
+			return false
+		}
+	}
+	return true
 }

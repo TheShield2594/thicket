@@ -17,14 +17,21 @@ func TestOAuthClientKeepsPublicServersPublic(t *testing.T) {
 		t.Fatal("localhost counted as public")
 	}
 	ctx := context.WithValue(context.Background(), publicOnlyKey{}, true)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
-	if _, err := oauthClient.Do(req); err == nil || !strings.Contains(err.Error(), "private address") {
-		t.Fatalf("public-only request reached localhost: %v", err)
-	}
-	req, _ = http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
-	resp, err := oauthClient.Do(req)
+	o := &OAuth{}
+	// A home-network request first, leaving a connection open to reuse...
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	resp, err := o.client(req.Context()).Do(req)
 	if err != nil {
 		t.Fatalf("a home-network server's request: %v", err)
 	}
 	resp.Body.Close()
+	// ...which a public-only request to the same place must not use.
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if _, err := o.client(req.Context()).Do(req); err == nil || !strings.Contains(err.Error(), "private address") {
+		t.Fatalf("public-only request reached localhost: %v", err)
+	}
+	// An unresolvable host is held to public addresses, not let through.
+	if !publicHost(context.Background(), "https://no-such-host.invalid/mcp") {
+		t.Fatal("a failed lookup lifted the check")
+	}
 }

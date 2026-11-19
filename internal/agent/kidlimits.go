@@ -308,8 +308,10 @@ func (e *Engine) SetKidReportFor(ctx context.Context, u *store.User, mode string
 
 func (e *Engine) kidLimitTools() []*Tool {
 	return []*Tool{{
-		Name:   "kid_limits",
-		Config: true,
+		Name:     "kid_limits",
+		Config:   true,
+		Shows:    true,
+		ShowWith: []string{"sprig"},
 		Description: "For a parent of a kid sprig: show or change when their kid may chat with it and how much, and how they get reports on it. " +
 			"hours: when the kid may chat each day (\"07:00-20:00\", or \"off\"); school_nights: no chatting after this time on school nights, Sunday to Thursday (\"20:00\", or \"off\"); " +
 			"daily_minutes and daily_messages: a daily allowance (0 = none). At a limit the sprig tells the kid kindly and stops; the kid can't change it. " +

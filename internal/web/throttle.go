@@ -31,12 +31,14 @@ const (
 	maxTracked = 10000
 )
 
-// clientIP is the address a request came from. Behind a reverse proxy on
-// the same machine or network (the peer is loopback or private), it's the
-// last address the proxy added to X-Forwarded-For; a client can put
-// anything earlier in that header, but not the entry its proxy appends.
-// Elsewhere the header is ignored.
-func clientIP(r *http.Request) string {
+// clientIP is the address a request came from. Behind a reverse proxy
+// it's the last address the proxy added to X-Forwarded-For: a client can
+// put anything earlier in that header, but not the entry its proxy
+// appends. The header is believed only from a trusted proxy: one listed
+// in THICKET_TRUSTED_PROXIES, or, when none are, any peer on a loopback
+// or private address (a proxy on the same machine or network). Elsewhere
+// the peer's own address is the client.
+func (a *Adapter) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -46,15 +48,27 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	peer = peer.Unmap()
-	if peer.IsLoopback() || peer.IsPrivate() {
+	if a.trustedProxy(peer) {
 		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
 			parts := strings.Split(xff[len(xff)-1], ",")
-			if a, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
-				return a.Unmap().String()
+			if c, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
+				return c.Unmap().String()
 			}
 		}
 	}
 	return peer.String()
+}
+
+func (a *Adapter) trustedProxy(peer netip.Addr) bool {
+	if len(a.TrustedProxies) == 0 {
+		return peer.IsLoopback() || peer.IsPrivate()
+	}
+	for _, p := range a.TrustedProxies {
+		if p.Contains(peer) {
+			return true
+		}
+	}
+	return false
 }
 
 // loginThrottle limits failed sign-in attempts per window.
@@ -72,7 +86,7 @@ type loginThrottle struct {
 // admitted attempt must call loginEnd.
 func (a *Adapter) loginBegin(r *http.Request, now time.Time) bool {
 	l := &a.logins
-	client := clientIP(r)
+	client := a.clientIP(r)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.byPend == nil {
@@ -95,7 +109,7 @@ func (a *Adapter) loginBegin(r *http.Request, now time.Time) bool {
 // loginEnd releases an admitted attempt's slot, counting it if it failed.
 func (a *Adapter) loginEnd(r *http.Request, failed bool) {
 	l := &a.logins
-	client := clientIP(r)
+	client := a.clientIP(r)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.pending--
