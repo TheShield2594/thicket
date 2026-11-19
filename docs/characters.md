@@ -81,6 +81,10 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `model` | | Override the chat model for this sprig (an OpenRouter model id). |
 | `created_by` | | Informational. |
 | `belongs_to` | | A Thicket user id (`thicket user list`): the sprig is that person's own, and only they can talk to it, see it in the web app or its dashboard card, or hand work to it. Leave it off (the default) for a sprig everyone shares. The host is always shared. Ask Juni for a "private" sprig and she sets it to you. |
+| `household` | | The sprig's tier: `solo` (one person's: needs `belongs_to`), `family` (shared by every adult; the default without `belongs_to`) or `kid`. See [Households](household.md). |
+| `kids` | kid sprigs | User ids of the kids it talks to. |
+| `parents` | kid sprigs | User ids of the adults who set it up: they read its chats, get its safety alerts and choose what it may use. |
+| `allow` | | Kid sprigs only: adult data a parent lets it see, `family_memory` and/or `calendar`. Nothing by default. |
 
 Unknown fields are an error, so typos don't silently do nothing.
 
@@ -93,6 +97,7 @@ and work with other sprigs (hand off, ask one a question, or give one a backgrou
 |---|---|
 | `schedule` | Create, list, pause and delete scheduled jobs. |
 | `web` | Search the web and read pages ([details](web.md)). |
+| `calendar` | Read the household calendar and put things on it ([details](calendar.md)). |
 | `characters` | Interview, preview and create new sprigs. |
 | `admin` | Settings, spend report, activity log, integrations, approvals, inviting users, memory rollback. Only usable when the person talking is the owner or an admin. |
 | `mcp:<integration>/*` | Every tool of an integration. |

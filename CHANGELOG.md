@@ -4,7 +4,39 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
+## Unreleased: households, calendar and the app API (schema v15)
+
+- Households. Roles are owner, admin, member and kid (kids are stored as
+  members with `users.kid`). Sprigs have a tier, `household: solo |
+  family | kid`: solo sprigs are one person's, family sprigs every
+  adult's, kid sprigs talk only to the `kids` listed and are set up by
+  `parents`. Kid sprigs are enforced in code: only approved tools that
+  read, levels forced to read, no jobs, routines, follow-ups or
+  check-ins, and no adult data unless a parent allows `family_memory` or
+  `calendar`. Parents read the whole chat (kids can't delete it and
+  retention keeps it), get no routine notifications, and get a safety
+  alert if a chat touches self-harm, strangers asking for personal
+  details, grooming or bullying.
+- Family memory: `remember` scope `family` keeps what family sprigs learn
+  about the household (`memories.household`), apart from private memory.
+- The trail: every permission change (levels, grants, kid access, roles,
+  invites) and every sprig calendar entry, with undo. New `trail` table,
+  never pruned; a Changes list with Undo buttons on the dashboard.
+- Calendar: adults connect calendars read-only (ICS feeds, CalDAV), with
+  addresses and passwords in the encrypted store. The view merges
+  connected calendars, sprig jobs (scheduled, ran, failed) and sprig
+  outputs (each linking to its source), with filters per layer and per
+  sprig. New `calendar` scope with `calendar`, `add_to_calendar` and
+  `remove_from_calendar`. New tables `calendar_sources`, `sprig_events`.
+- API v2 (`/api/v2`) for apps: token sign-in with a password or one-time
+  link, chats (the web app's threads and event stream), the calendar,
+  approvals, the trail, levels, and the household (invites, roles, kid
+  sprigs, kid chats for parents, kid access). See docs/api-v2.md.
+- Composio documented as an optional MCP adapter for quick connectors;
+  direct MCP servers, OAuth and CalDAV remain for privacy-sensitive
+  services.
+
+## Earlier unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
 - Desktop app (`desktop/`). An Electron app for macOS, Windows and Linux
   that opens your Thicket server in its own window, with a tray icon

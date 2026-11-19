@@ -100,6 +100,28 @@ in the service's developer settings with the redirect URL above, then
 give Juni its client id, and its secret when she asks for it (it goes
 into the encrypted store like any other).
 
+## Composio, for quick connectors (optional)
+
+[Composio](https://composio.dev) hosts connectors for hundreds of apps and
+serves them over MCP. It's an adapter like any other integration, not
+part of Thicket: nothing in Thicket depends on it, and you can leave it
+out.
+
+1. In Composio, create an MCP server with the apps you want and copy its
+   MCP URL and API key.
+2. Tell Juni: "Connect Composio at <the URL>." Send the key when she asks
+   for it (`request_secret`), and she adds it as an `http` integration
+   with the key in the header Composio's docs give.
+3. Grant sprigs its tools one by one, as with any integration.
+
+**Privacy.** With Composio, your sign-ins to those apps are held by
+Composio and every call goes through their servers. For privacy-sensitive
+services (Gmail, calendars, notes), prefer a direct MCP server you run
+yourself or sign in to directly ([OAuth](#services-you-sign-in-to-oauth)),
+or, for calendars, Thicket's own read-only [calendar](calendar.md)
+(CalDAV and ICS). Approvals and permission levels apply to Composio's
+tools like any other.
+
 ## Approvals and permission levels
 
 Before a sprig runs a tool that changes something, Thicket posts the exact

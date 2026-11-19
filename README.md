@@ -1,8 +1,15 @@
 # Thicket
 
-A small, self-hosted family of AI companions. Its characters are called
-**sprigs**. They live in your Discord or Telegram, remember you, take a
-little initiative, and stay true to who they are.
+A small, self-hosted, open-source family of AI companions, for one person
+or a whole household: an open-source alternative to Grok Bot that keeps
+your data on your own server. Its characters are called **sprigs**. They
+live in your Discord or Telegram, remember you, take a little initiative,
+and stay true to who they are.
+
+Each person has private sprigs of their own, the household shares family
+sprigs, and kids get kid sprigs that are locked down in code
+([Households](docs/household.md)). The core stays small: integrations are
+adapters you connect.
 
 Talk to them in Discord, in the built-in web app, or both. The web app
 installs on your phone and desktop and shows every sprig at once, and
@@ -181,6 +188,14 @@ cookies (`Secure` over HTTPS).
   OCR ($2 per 1,000 pages). Ask Juni to set `pdf_engine` to
   `cloudflare-ai` (free, text only), `mistral-ocr` (best for scans) or
   `native`; the default is `auto`.
+- Share the house: family sprigs everyone uses, with family memory kept
+  apart from each person's own; solo sprigs only you see; kid sprigs that
+  only chat, only use tools a parent approved, and alert parents if
+  something worrying comes up. Every permission change is in the trail
+  and can be undone. See [Households](docs/household.md).
+- One calendar for the household: connect your calendars (ICS or CalDAV,
+  read-only), and see your sprigs' jobs and what they put on the calendar,
+  with toggles per layer and per sprig. See [Calendar](docs/calendar.md).
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
 - Routines can fire on events, not just the clock: "When I get an email
   from Maya, summarise it" watches an integration for new items
@@ -312,12 +327,15 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 ## Docs
 
 - [Character file reference](docs/characters.md)
+- [Households: solo, family and kid sprigs](docs/household.md)
+- [Calendar](docs/calendar.md)
 - [Integrations (MCP) setup](docs/mcp.md)
 - [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)
 - [Local API and CLI](docs/api.md)
+- [API v2 for apps](docs/api-v2.md)
 - [Thicket as an MCP server](docs/mcp-server.md)
 - [Skills](docs/skills.md)
 - [Local models](docs/local-models.md)
