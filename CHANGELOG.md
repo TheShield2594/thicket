@@ -201,6 +201,15 @@ stated.
   sprig's file was removed could finish last and bring the sprig back,
   without its cap, until the next file check. Each reload now drops what
   it read if a later reload has already finished.
+- One-tap **Approve** / **Deny** buttons on approval prompts in Telegram
+  (inline keyboard, `callback_query` updates) and Discord (message
+  components, sent through the bot or an application-owned webhook). A
+  tap settles the message (the buttons go, the outcome shows) and runs or
+  cancels the action; anyone but the person asked is told privately that
+  it isn't theirs. Typing approve or deny still works. Adapters opt in
+  with the new `channel.ActionSender` interface. An approval is now
+  reserved before its prompt is sent (so the buttons can name it) and
+  becomes answerable only once the prompt is delivered.
 
 ## Unreleased: sprig packages and untrusted content
 

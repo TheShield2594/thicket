@@ -421,6 +421,37 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status string) (bo
 	return n == 1, nil
 }
 
+// ReserveApproval stores an approval whose prompt isn't out yet, so its id
+// can go on the prompt's buttons. Until OpenApproval nothing can answer it:
+// it is held as expired, with no decision time.
+func (s *Store) ReserveApproval(ctx context.Context, a Approval) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at) VALUES (?, ?, ?, ?, ?, 'expired', ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// OpenApproval makes a reserved approval answerable, from now.
+func (s *Store) OpenApproval(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE approvals SET status = 'pending', created_at = ? WHERE id = ? AND status = 'expired' AND decided_at IS NULL", s.unix(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DropApproval deletes a reserved approval whose prompt never reached the
+// user.
+func (s *Store) DropApproval(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM approvals WHERE id = ? AND status = 'expired' AND decided_at IS NULL", id)
+	return err
+}
+
 func (s *Store) SetApprovalResult(ctx context.Context, id int64, result string) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE approvals SET result = ? WHERE id = ?", result, id)
 	return err

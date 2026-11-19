@@ -44,7 +44,9 @@ internal/avatar      parametric SVG avatars with CSS-animated states
      and locks the chat so turns run in order;
    - intercepts secrets: a pending `request_secret` capture, or anything
      credential-shaped. These never reach the model or the history;
-   - resolves a pending approval if the message is "approve"/"deny";
+   - resolves a pending approval if the message is "approve"/"deny"
+     (on Telegram and Discord, the prompt's buttons do the same; see
+     [Adding a channel](#adding-a-channel));
    - if no model key exists yet, sends the scripted first-run greeting;
    - picks the sprig: addressed by name, else whoever spoke last in this
      chat, else the host.
@@ -570,6 +572,32 @@ full guide, with testing against a fake API, is
 references are stored as `<channel>:<chat id>`. Attachments that need an
 authenticated download set `Attachment.Open`, whose errors must not
 contain the token (Telegram's file URLs do).
+
+Optional interfaces, checked by type assertion, add more:
+`channel.Poster` (say which message ids a send became),
+`channel.DeleteWatcher` (hear about deleted messages) and
+`channel.ActionSender` (buttons on a message). An `ActionSender` posts
+text with `[]channel.Action` (a label and an opaque id under 64 bytes)
+and delivers each tap to the handler given to `OnPress` as a
+`channel.Press` carrying the chat, the message and who pressed. The
+handler answers within a moment with a `PressReply`: a `Notice` shown to
+the presser alone (Telegram's callback answer, a Discord ephemeral
+follow-up) and/or an `Outcome` that settles the message (buttons removed,
+outcome shown), so it can't be pressed twice. Telegram uses an inline
+keyboard and `callback_query` updates; Discord uses message components and
+interactions, acknowledged at once (Discord allows three seconds) and
+posted through the bot, or the persona webhook when an application owns
+it, since only then do presses reach the bot. Channels without buttons
+get the text alone.
+
+Approval prompts use this: the approval row is reserved (stored as
+expired with no decision time) so the buttons can name it
+(`approval:<id>:approve|deny`), sent, then opened as pending; an
+undelivered prompt's row is deleted. A tap from anyone but the approval's
+user, or from another chat, is refused privately. The engine claims the
+approval at once and runs the action and the sprig's reply afterwards,
+in turn with the chat. Presses only come from people in a chat app, so
+an agent (the local API, the MCP server) still can't answer an approval.
 
 A user can have several identities, one per app account
 (`identities` table). `UserByExternal` resolves any of them;

@@ -212,3 +212,60 @@ func (r Reaction) ChatRef() string { return r.Channel + ":" + r.ChatID }
 type ReactionWatcher interface {
 	OnReaction(func(ctx context.Context, r Reaction))
 }
+
+// Action is a button on a message. ID is opaque to the channel: it comes
+// back in the Press when someone taps the button. Keep it under 64 bytes
+// (Telegram's limit).
+type Action struct {
+	ID    string
+	Label string
+	Style ActionStyle
+}
+
+// ActionStyle hints how a button looks, where the app supports it.
+type ActionStyle int
+
+const (
+	ActionDefault ActionStyle = iota
+	ActionPrimary
+	ActionDanger
+)
+
+// Press is someone tapping a message's button.
+type Press struct {
+	Channel   string
+	ChatID    string
+	MessageID string // the message the button is on
+	UserID    string // who pressed it, channel-specific
+	UserName  string
+	IsDM      bool
+	ActionID  string
+}
+
+// ChatRef is the press's channel-qualified chat id.
+func (p Press) ChatRef() string { return p.Channel + ":" + p.ChatID }
+
+// PressReply is how a press is answered. It must come back quickly
+// (Discord allows three seconds), so slow work happens after it.
+type PressReply struct {
+	// Notice is shown only to the person who pressed.
+	Notice string
+	// Outcome, when set, settles the message: its buttons are removed and
+	// Outcome is shown with it, so nobody can press them again.
+	Outcome string
+}
+
+// PressHandler answers a press.
+type PressHandler func(ctx context.Context, p Press) PressReply
+
+// ActionSender is implemented by channels that can put buttons on a
+// message (Telegram, Discord). Elsewhere the text alone is sent and
+// people answer by typing.
+type ActionSender interface {
+	// SendActions posts text as a persona with buttons under it (on the
+	// last part, if the text is split), returning the ids posted.
+	SendActions(ctx context.Context, chatID string, p Persona, text string, actions []Action) ([]string, error)
+	// OnPress registers what to call when a button is pressed. Call it
+	// before Run.
+	OnPress(PressHandler)
+}

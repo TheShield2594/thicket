@@ -276,7 +276,8 @@ cookies (`Secure` over HTTPS).
   stored encrypted and refreshed for you. See
   [Integrations](docs/mcp.md#services-you-sign-in-to-oauth).
 - Risky actions (sending email, controlling devices) show the exact action
-  and wait for you to reply **approve** or **deny**. Each sprig's access to
+  and wait for you to tap **Approve** or **Deny** (or reply with either
+  word). Each sprig's access to
   each tool can be set to `read`, `draft` (write it up, don't do it), `ask`
   or `act` ([details](docs/mcp.md#approvals-and-permission-levels)).
 - Nothing fails silently: failed or interrupted jobs and tasks, and

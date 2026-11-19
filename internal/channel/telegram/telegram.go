@@ -53,6 +53,7 @@ type Adapter struct {
 	albumWait, albumMaxWait time.Duration
 
 	onReact func(ctx context.Context, r channel.Reaction)
+	onPress channel.PressHandler
 }
 
 // OnReaction registers what to call when someone adds a reaction. Call it
@@ -78,6 +79,10 @@ func (a *Adapter) reactions(r *reactionUpdate) []channel.Reaction {
 	}
 	return out
 }
+
+// OnPress registers what to call when someone presses a button. Call it
+// before Run.
+func (a *Adapter) OnPress(h channel.PressHandler) { a.onPress = h }
 
 // album gathers the messages of one media group.
 type album struct {
@@ -276,6 +281,8 @@ type update struct {
 	Message  *message `json:"message"`
 	// Reaction is someone changing their reactions to a message.
 	Reaction *reactionUpdate `json:"message_reaction"`
+	// CallbackQuery is someone pressing a message's button.
+	CallbackQuery *callbackQuery `json:"callback_query"`
 }
 
 type reactionType struct {
@@ -292,6 +299,24 @@ type reactionUpdate struct {
 	User      *user          `json:"user"`
 	Old       []reactionType `json:"old_reaction"`
 	New       []reactionType `json:"new_reaction"`
+}
+
+// callbackQuery is a press of an inline keyboard button.
+type callbackQuery struct {
+	ID      string `json:"id"`
+	From    *user  `json:"from"`
+	Data    string `json:"data"`
+	Message *struct {
+		MessageID int64 `json:"message_id"`
+		Chat      struct {
+			ID   int64  `json:"id"`
+			Type string `json:"type"`
+		} `json:"chat"`
+		Text string `json:"text"`
+		// Entities are kept as sent, to edit the message without losing
+		// its formatting.
+		Entities []json.RawMessage `json:"entities"`
+	} `json:"message"`
 }
 
 // --- receiving ---
@@ -364,6 +389,10 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 					go a.onReact(ctx, r)
 				}
 			}
+			if u.CallbackQuery != nil {
+				go a.press(ctx, u.CallbackQuery)
+				continue
+			}
 			if u.Message == nil {
 				continue
 			}
@@ -378,10 +407,14 @@ func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
 // allowedUpdates are the update kinds polled: messages, and reactions
 // when someone listens for them (Telegram sends reactions only if asked).
 func (a *Adapter) allowedUpdates() []string {
+	up := []string{"message"}
 	if a.onReact != nil {
-		return []string{"message", "message_reaction"}
+		up = append(up, "message_reaction")
 	}
-	return []string{"message"}
+	if a.onPress != nil {
+		up = append(up, "callback_query")
+	}
+	return up
 }
 
 // deliver hands a message to the engine, holding album parts back until
@@ -435,6 +468,57 @@ func (a *Adapter) flushAlbum(ctx context.Context, h channel.Handler, key string,
 	}
 	in.Text = strings.Join(texts, "\n\n")
 	h(ctx, in)
+}
+
+// press handles a button press: the handler decides, the callback is
+// answered (Telegram shows the notice to the presser only), and a settled
+// message is edited to show the outcome without its buttons.
+func (a *Adapter) press(ctx context.Context, q *callbackQuery) {
+	var r channel.PressReply
+	switch m := q.Message; {
+	case q.From == nil || q.From.IsBot:
+	case m == nil || m.MessageID == 0: // too old for Telegram to say which
+		r.Notice = "That button has expired."
+	case a.onPress == nil:
+		r.Notice = "That button doesn't do anything here."
+	default:
+		name := strings.TrimSpace(q.From.FirstName + " " + q.From.LastName)
+		if name == "" {
+			name = q.From.Username
+		}
+		r = a.onPress(ctx, channel.Press{
+			Channel: "telegram", ChatID: strconv.FormatInt(m.Chat.ID, 10), MessageID: strconv.FormatInt(m.MessageID, 10),
+			UserID: strconv.FormatInt(q.From.ID, 10), UserName: name, IsDM: m.Chat.Type == "private", ActionID: q.Data,
+		})
+	}
+	params := map[string]any{"callback_query_id": q.ID}
+	if r.Notice != "" {
+		params["text"] = r.Notice
+	}
+	if err := a.callRetry(ctx, "answerCallbackQuery", params, nil); err != nil {
+		a.log.Debug("telegram answerCallbackQuery failed", "err", err)
+	}
+	if r.Outcome == "" || q.Message == nil || q.Message.MessageID == 0 {
+		return
+	}
+	m := q.Message
+	none := map[string]any{"inline_keyboard": [][]any{}}
+	// The outcome goes under the text in italics; the original entities
+	// still fit, since text is only added after them.
+	ents := append([]json.RawMessage(nil), m.Entities...)
+	if b, err := json.Marshal(map[string]any{"type": "italic", "offset": len(utf16Units(m.Text + "\n\n")), "length": len(utf16Units(r.Outcome))}); err == nil {
+		ents = append(ents, b)
+	}
+	err := a.callRetry(ctx, "editMessageText", map[string]any{"chat_id": m.Chat.ID, "message_id": m.MessageID,
+		"text": m.Text + "\n\n" + r.Outcome, "entities": ents, "reply_markup": none,
+		"link_preview_options": map[string]any{"is_disabled": true}}, nil)
+	if err != nil {
+		// At least take the buttons away.
+		a.log.Debug("telegram editMessageText failed", "err", err)
+		if err := a.callRetry(ctx, "editMessageReplyMarkup", map[string]any{"chat_id": m.Chat.ID, "message_id": m.MessageID, "reply_markup": none}, nil); err != nil {
+			a.log.Warn("telegram: couldn't remove a message's buttons", "err", err)
+		}
+	}
 }
 
 // incoming normalises a message. ok is false for messages to ignore.
@@ -589,8 +673,24 @@ func (a *Adapter) Send(ctx context.Context, chatID string, p channel.Persona, te
 // SendIDs posts text as a persona and returns the ids of the messages it
 // became.
 func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona, text string) ([]string, error) {
+	return a.send(ctx, chatID, p, text, nil)
+}
+
+// SendActions posts text as a persona with an inline keyboard under its
+// last part. A press arrives as a callback query.
+func (a *Adapter) SendActions(ctx context.Context, chatID string, p channel.Persona, text string, actions []channel.Action) ([]string, error) {
+	row := make([]map[string]any, 0, len(actions))
+	for _, act := range actions {
+		row = append(row, map[string]any{"text": act.Label, "callback_data": act.ID})
+	}
+	return a.send(ctx, chatID, p, text, map[string]any{"inline_keyboard": [][]map[string]any{row}})
+}
+
+// send posts text in parts; markup (if any) goes on the last one.
+func (a *Adapter) send(ctx context.Context, chatID string, p channel.Persona, text string, markup any) ([]string, error) {
 	var ids []string
-	for i, part := range split(text, maxText) {
+	parts := split(text, maxText)
+	for i, part := range parts {
 		var sent struct {
 			MessageID int64 `json:"message_id"`
 		}
@@ -600,6 +700,10 @@ func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona,
 		}
 		params := map[string]any{"chat_id": chatID, "text": html, "parse_mode": "HTML",
 			"link_preview_options": map[string]any{"is_disabled": true}}
+		last := i == len(parts)-1
+		if last && markup != nil {
+			params["reply_markup"] = markup
+		}
 		err := a.callRetry(ctx, "sendMessage", params, &sent)
 		var ae *apiError
 		if errors.As(err, &ae) && ae.Code == 400 && strings.Contains(ae.Desc, "parse entities") {
@@ -608,7 +712,11 @@ func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona,
 			if i == 0 && p.Name != "" {
 				plain = p.Name + ":\n" + part
 			}
-			err = a.callRetry(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": plain}, &sent)
+			params = map[string]any{"chat_id": chatID, "text": plain}
+			if last && markup != nil {
+				params["reply_markup"] = markup
+			}
+			err = a.callRetry(ctx, "sendMessage", params, &sent)
 		}
 		if err != nil {
 			return ids, err

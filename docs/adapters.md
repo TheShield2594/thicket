@@ -40,8 +40,30 @@ Optional interfaces add features when the platform supports them:
 | `channel.Poster` (`SendIDs`) | the ids of what a send posted, so "delete that" and pins work on sprig replies |
 | `channel.DeleteWatcher` (`OnDelete`) | deleting a message in the app deletes it from Thicket's history |
 | `channel.ReactionWatcher` (`OnReaction`) | reactions as one-tap commands: 🧠, 📌 or ✍ on a message remembers it |
+| `channel.ActionSender` (`SendActions`, `OnPress`) | buttons on a message: approval prompts get **Approve** / **Deny** (see [Buttons](#buttons)) |
 | `channel.Identity` (`Bot`) | the bot's name and "add me" link, shown when it's connected in chat |
 | `channel.Checker` (`Check`) | test a token without connecting, so a bad one is refused before anything changes |
+
+### Buttons
+
+`SendActions` posts text with a few `channel.Action`s: a label, a style
+hint and an opaque id (under 64 bytes, Telegram's limit), on the last
+part if the text is split. When someone taps one, call the handler given
+to `OnPress` with a `channel.Press` (chat, message, who pressed, the id)
+and ignore bots. It answers quickly with a `PressReply`:
+
+- `Notice`: show it to the presser alone (Telegram's callback answer, a
+  Discord ephemeral follow-up), such as "This isn't yours to approve".
+- `Outcome`: settle the message, so it can't be pressed twice: remove
+  the buttons and show the outcome with it (Telegram edits the text,
+  Discord the embed footer).
+
+Acknowledge the platform first if it has a deadline (Discord allows
+three seconds). Discord only sends presses to the application that
+posted the message, so component messages go through the bot, or the
+persona webhook only when an application owns it. Without
+`ActionSender`, the text alone is sent and people reply by typing, as
+they always can.
 
 ### Normalising messages
 
@@ -118,7 +140,13 @@ lets tests check:
   `Incoming` flags, and bots' messages are dropped;
 - attachments arrive with working `Open`, and a too-large one is refused;
 - a send shows the persona and splits long text;
-- errors never contain the token (grep the error strings for it).
+- errors never contain the token (grep the error strings for it);
+- button presses: the keyboard, the private notice and the edit that
+  settles the message.
+
+For a library-based adapter, give the library's HTTP client a transport
+that sends every request to the fake: `internal/channel/discord/discord_test.go`
+does this with a real `discordgo.Session`.
 
 For an end-to-end test, `internal/app` tests run the whole engine with a
 `fakeChannel` and a `fakeModel` (`app_test.go`): pass your adapter in

@@ -556,13 +556,13 @@ func setup(t *testing.T) (*App, *fakeChannel, *fakeModel, context.Context) {
 	return a, fc, fm, ctx
 }
 
-func setupWith(t *testing.T, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
+func setupWith(t *testing.T, chans ...channel.Channel) (*App, *fakeModel, context.Context) {
 	t.Helper()
 	return setupLogged(t, io.Discard, chans...)
 }
 
 // setupLogged is setupWith, writing Thicket's log to logOut.
-func setupLogged(t *testing.T, logOut io.Writer, chans ...*fakeChannel) (*App, *fakeModel, context.Context) {
+func setupLogged(t *testing.T, logOut io.Writer, chans ...channel.Channel) (*App, *fakeModel, context.Context) {
 	t.Helper()
 	dir := t.TempDir()
 	os.Setenv("THICKET_DATA_DIR", dir)

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
@@ -80,22 +82,45 @@ func (e *Engine) DecideApproval(ctx context.Context, user *store.User, id int64,
 
 // decide records the answer, runs the action if approved, and lets the
 // sprig report. said is what the user typed ("" from the dashboard). It
-// returns false if the approval was no longer pending. Everything that can
-// fail before the action runs happens before the approval is claimed, so a
-// failure leaves it pending for another try.
+// returns false if the approval was no longer pending.
 func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval, approve bool, said string, isDM bool) (bool, error) {
+	ans, err := e.claim(ctx, user, a, approve, isDM)
+	if ans == nil {
+		return false, err
+	}
+	if said == "" {
+		ans.note = "The user answered a request from the dashboard."
+	}
+	return true, e.carryOut(ctx, ans, said)
+}
+
+// answer is an approval claimed with a yes or no, waiting to be carried
+// out.
+type answer struct {
+	a       *store.Approval
+	t       *turn
+	approve bool
+	gone    bool   // the sprig that asked no longer exists
+	note    string // event recorded when the user typed nothing
+}
+
+// claim moves an approval out of pending. Everything that can fail
+// before the action runs happens before it is claimed, so a failure
+// leaves it pending for another try. A nil answer means it was no longer
+// pending (or an error).
+func (e *Engine) claim(ctx context.Context, user *store.User, a *store.Approval, approve, isDM bool) (*answer, error) {
 	char, ok := e.Chars.Get(a.Character)
 	gone := !ok
 	if gone {
 		// The sprig that asked was removed: never act under another
 		// sprig's permissions. The host only reports it.
 		if char, ok = e.Chars.Host(); !ok {
-			return false, errors.New("no host character is loaded")
+			return nil, errors.New("no host character is loaded")
 		}
 	}
 	conv, err := e.DB.OpenConversation(ctx, user.ID, a.ChatRef, e.Cfg.IdleAfter)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	status := "approved"
 	switch {
@@ -105,14 +130,9 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 		status = "expired"
 	}
 	if ok, err := e.DB.DecideApproval(ctx, a.ID, status); err != nil || !ok {
-		return false, err
+		return nil, err
 	}
 	e.doneWaiting(a.Character)
-	if said != "" {
-		_ = e.DB.AddMessage(ctx, conv.ID, "user", "", said)
-	} else {
-		_ = e.DB.AddMessage(ctx, conv.ID, "event", "", "The user answered a request from the dashboard.")
-	}
 	detail := e.Secrets.Redact(a.Args)
 	if a.Tool == internalPrefix+"create_sprig" && privateProposal(a.Args) {
 		detail = "(a private sprig's files: not logged)" // admins read the activity log
@@ -125,20 +145,33 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	}
 	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), detail)
 	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM, approvedEstimate: a.EstimateID}
+	return &answer{a: a, t: t, approve: approve, gone: gone}, nil
+}
+
+// carryOut runs a claimed approval's action if it was approved and lets
+// the sprig report. said is what the user typed, if anything.
+func (e *Engine) carryOut(ctx context.Context, ans *answer, said string) error {
+	a, t, approve, gone := ans.a, ans.t, ans.approve, ans.gone
+	user, char, conv := t.user, t.char, t.conv
+	if said != "" {
+		_ = e.DB.AddMessage(ctx, conv.ID, "user", "", said)
+	} else if ans.note != "" {
+		_ = e.DB.AddMessage(ctx, conv.ID, "event", "", ans.note)
+	}
 	what := strings.TrimPrefix(a.Tool, internalPrefix)
 	switch {
 	case !approve:
-		return true, e.respond(ctx, t, fmt.Sprintf("The user said no to %s. Acknowledge briefly and don't try it again unless they ask.", what))
+		return e.respond(ctx, t, fmt.Sprintf("The user said no to %s. Acknowledge briefly and don't try it again unless they ask.", what))
 	case gone:
 		// Reported in code, not by a model turn: nothing here may run a
 		// tool or hand off.
 		_ = e.DB.SetApprovalResult(ctx, a.ID, "not run: the sprig that asked no longer exists")
 		msg := fmt.Sprintf("I didn't run %s: %s, who asked for it, isn't around any more.", what, a.Character)
 		if err := e.send(ctx, a.ChatRef, char, msg); err != nil {
-			return true, err
+			return err
 		}
 		_ = e.DB.AddMessage(ctx, conv.ID, "assistant", char.ID, msg)
-		return true, nil
+		return nil
 	}
 	var result string
 	if strings.HasPrefix(a.Tool, internalPrefix) {
@@ -152,7 +185,118 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 		result = e.runApproved(ctx, t, a.Tool, json.RawMessage(a.Args), false)
 	}
 	_ = e.DB.SetApprovalResult(ctx, a.ID, truncate(result, 2000))
-	return true, e.respond(ctx, t, fmt.Sprintf("The user approved %s. Result:\n%s\nTell them how it went, honestly.", what, result))
+	return e.respond(ctx, t, fmt.Sprintf("The user approved %s. Result:\n%s\nTell them how it went, honestly.", what, result))
+}
+
+// approvalAction prefixes the ids of an approval prompt's buttons:
+// "approval:<id>:approve" and "approval:<id>:deny".
+const approvalAction = "approval:"
+
+// approvalActions are the buttons under an approval prompt, labelled as
+// in the web app. Typing approve or deny still works everywhere.
+func approvalActions(id int64) []channel.Action {
+	return []channel.Action{
+		{ID: fmt.Sprintf("%s%d:approve", approvalAction, id), Label: "Approve", Style: channel.ActionPrimary},
+		{ID: fmt.Sprintf("%s%d:deny", approvalAction, id), Label: "Deny", Style: channel.ActionDanger},
+	}
+}
+
+// HandlePress answers a tap on a message's button in a chat app. It
+// returns quickly: slow work (running an approved action, the sprig's
+// reply) carries on after it.
+func (e *Engine) HandlePress(ctx context.Context, p channel.Press) (r channel.PressReply) {
+	defer func() {
+		if v := recover(); v != nil {
+			e.Log.Error("panic handling a button press", "panic", v)
+			r = channel.PressReply{Notice: "Something went wrong on my end. Try again, or reply instead."}
+		}
+	}()
+	if rest, ok := strings.CutPrefix(p.ActionID, approvalAction); ok {
+		return e.pressApproval(ctx, p, rest)
+	}
+	return channel.PressReply{Notice: "That button doesn't do anything any more."}
+}
+
+// pressApproval answers an Approve or Deny button. Only the person the
+// approval belongs to can press it, in the chat it was asked in; anyone
+// else is told privately. Presses come from people in a chat app, never
+// from an agent (the local API and MCP server have no buttons).
+func (e *Engine) pressApproval(ctx context.Context, p channel.Press, rest string) channel.PressReply {
+	idText, verb, _ := strings.Cut(rest, ":")
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || (verb != "approve" && verb != "deny") {
+		return channel.PressReply{Notice: "That button doesn't do anything any more."}
+	}
+	notYours := channel.PressReply{Notice: "This isn't yours to approve."}
+	oops := channel.PressReply{Notice: "Something went wrong on my end. Try again, or reply approve or deny."}
+	user, err := e.DB.UserByExternal(ctx, p.Channel, p.UserID)
+	if errors.Is(err, store.ErrNotFound) {
+		return notYours
+	}
+	if err != nil {
+		e.Log.Error("button press: look up user", "err", err)
+		return oops
+	}
+	a, err := e.DB.ApprovalByID(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return channel.PressReply{Notice: "That request no longer exists."}
+	}
+	if err != nil {
+		e.Log.Error("button press: look up approval", "err", err)
+		return oops
+	}
+	if a.UserID != user.ID || a.ChatRef != p.ChatRef() {
+		return notYours
+	}
+	if a.Status != "pending" || e.now().Sub(a.CreatedAt) > approvalMaxAge {
+		return channel.PressReply{Notice: "That request was already answered or has expired.", Outcome: settledLabel(a, e.now())}
+	}
+	// Claim it now, so the message settles at once; the action and the
+	// sprig's reply follow in turn with the chat.
+	approve := verb == "approve"
+	ans, err := e.claim(ctx, user, a, approve, p.IsDM)
+	if err != nil {
+		e.Log.Error("button press: decide approval", "err", err)
+		return oops
+	}
+	if ans == nil {
+		return channel.PressReply{Notice: "That request was already answered."}
+	}
+	word, outcome := "denied", "✖️ Denied"
+	switch {
+	case ans.gone:
+		word, outcome = "approved", "Not run: the sprig that asked is gone"
+	case approve:
+		word, outcome = "approved", "✅ Approved"
+	}
+	ans.note = fmt.Sprintf("The user %s the request with a button.", word)
+	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s with a button", a.ID, word), "")
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				e.Log.Error("panic carrying out an approval", "panic", v)
+			}
+		}()
+		unlock := e.lockChat(a.ChatRef)
+		defer unlock()
+		if err := e.carryOut(ctx, ans, ""); err != nil {
+			e.Log.Error("carry out approval", "err", err, "approval", a.ID)
+		}
+	}()
+	return channel.PressReply{Outcome: outcome}
+}
+
+// settledLabel says how an approval that's no longer waiting ended.
+func settledLabel(a *store.Approval, now time.Time) string {
+	switch {
+	case a.Status == "approved":
+		return "✅ Approved"
+	case a.Status == "denied":
+		return "✖️ Denied"
+	case a.Status == "pending" && now.Sub(a.CreatedAt) <= approvalMaxAge:
+		return ""
+	}
+	return "Expired"
 }
 
 // runApproved runs a tool a person said yes to. The level in force now

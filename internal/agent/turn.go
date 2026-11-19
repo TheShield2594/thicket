@@ -477,16 +477,24 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// deliverApproval shows the prompt and only then registers the approval.
-// An approval that exists is one the user has seen, so a stray "ok" can
-// never run an action whose details weren't shown, whatever failed.
+// deliverApproval shows the prompt and only then makes the approval
+// answerable. A pending approval is one the user has seen, so a stray
+// "ok" can never run an action whose details weren't shown, whatever
+// failed. The row is reserved first so the prompt's buttons can name it.
 func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a *store.Approval, msg string) error {
-	if err := e.send(ctx, a.ChatRef, c, msg); err != nil {
+	id, err := e.DB.ReserveApproval(ctx, *a)
+	if err != nil {
+		e.Log.Error("register approval", "err", err)
 		return err
 	}
-	// Register even if the caller's context ended right after delivery.
-	id, err := e.DB.CreateApproval(context.WithoutCancel(ctx), *a)
-	if err != nil {
+	if err := e.sendActions(ctx, a.ChatRef, c, msg, approvalActions(id)); err != nil {
+		if derr := e.DB.DropApproval(context.WithoutCancel(ctx), id); derr != nil {
+			e.Log.Error("drop undelivered approval", "err", derr)
+		}
+		return err
+	}
+	// Open it even if the caller's context ended right after delivery.
+	if err := e.DB.OpenApproval(context.WithoutCancel(ctx), id); err != nil {
 		e.Log.Error("register approval", "err", err)
 		_ = e.send(context.WithoutCancel(ctx), a.ChatRef, c, "Sorry, I couldn't register that request, so approving it won't do anything. Please ask me again.")
 		return err
