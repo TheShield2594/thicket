@@ -356,6 +356,13 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	u := strings.ToLower(last.Content)
 	switch {
+	case strings.HasPrefix(u, "invite my partner "):
+		// "invite my partner Robin on web": invite_person with own_sprig.
+		name, app, _ := strings.Cut(strings.TrimPrefix(lastUserText(req.Messages), "invite my partner "), " on ")
+		return toolCall("invite_person", map[string]any{"name": name, "app": app, "own_sprig": true}), nil
+	case strings.Contains(u, "bring on my own wren"):
+		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps Robin's secret reading list.",
+			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "private": true}), nil
 	case strings.Contains(u, "bring on wren"):
 		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps the reading list.",
 			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "tools": []string{"schedule"},

@@ -60,8 +60,8 @@ Replies arrive on the event stream (or poll the history).
 
 | | |
 |---|---|
-| `GET /api/v2/household` | members and their roles; sprigs and their tiers |
-| `POST /api/v2/household/invites` | admins: `{"name": "Ana", "role": "admin" \| "member" \| "kid"}` returns an invite link (7 days) |
+| `GET /api/v2/household` | members and their roles; sprigs and their tiers. Someone else's solo sprig is listed for admins only as `{"tier": "solo", "private": true, "belongs_to": 3}` |
+| `POST /api/v2/household/invites` | admins: `{"name": "Ana", "role": "admin" \| "member" \| "kid", "own_sprig": true}` returns an invite link (7 days). `own_sprig` (adults only): Juni helps them make a private sprig of their own when they arrive |
 | `PATCH /api/v2/household/members/{id}` | admins: `{"role": "kid"}` |
 | `POST /api/v2/kid-sprigs` | admins: `{"id": "bramble", "name": "Bramble", "role": "A friendly companion for Max.", "kids": [7], "parents": [1, 2]}` |
 | `GET /api/v2/kid-sprigs/{id}/chats?before=ID` | parents: the whole chat, newest first: `{"id", "role": "user" (the kid) or "assistant", "sprig", "kid_id", "content", "at"}` |

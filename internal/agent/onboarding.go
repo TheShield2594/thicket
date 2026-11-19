@@ -131,7 +131,11 @@ func (e *Engine) toolCreateCharacter(ctx context.Context, t *turn, args json.Raw
 	b, _ := json.Marshal(p)
 	ap := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: t.chatRef, Tool: internalPrefix + "create_sprig", Args: string(b)}
 	t.askAs(t.char, p.diffMessage(d.char.DisplayName()), ap)
-	e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed new sprig "+d.char.DisplayName(), "")
+	// A private sprig's proposal isn't logged: admins read the activity
+	// log, and even "one was proposed" is more than they may know.
+	if d.char.BelongsTo == 0 {
+		e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed new sprig "+d.char.DisplayName(), "")
+	}
 	return fmt.Sprintf("PENDING: the user is being shown every file %s will get, as a diff, and asked to approve. Tell them briefly to look it over; don't say it's created.", d.char.DisplayName()), nil
 }
 
@@ -244,4 +248,15 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		out += " Routines scheduled: " + strings.Join(made, ", ") + "."
 	}
 	return out, nil
+}
+
+// privateProposal reports whether a create_sprig proposal is for a
+// private sprig. Anything unreadable counts as private.
+func privateProposal(args string) bool {
+	var p sprigProposal
+	if json.Unmarshal([]byte(args), &p) != nil {
+		return true
+	}
+	c, err := character.Parse([]byte(p.Files[p.ID+".md"]))
+	return err != nil || c.BelongsTo != 0
 }

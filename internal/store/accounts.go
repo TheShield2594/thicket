@@ -85,6 +85,9 @@ type Invite struct {
 	Name      string
 	CreatedBy int64
 	ExpiresAt time.Time
+	// OwnSprig: help them make a private sprig of their own when they
+	// arrive (adults only).
+	OwnSprig bool
 }
 
 // CreateInvite stores an invite and returns its token.
@@ -95,14 +98,23 @@ func (s *Store) CreateInvite(ctx context.Context, inv Invite, ttl time.Duration)
 	token, hash := NewToken()
 	now := s.unix()
 	dbr, kid := dbRole(inv.Role)
-	_, err := s.db.ExecContext(ctx, "INSERT INTO invites (token_hash, user_id, role, kid, name, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		hash, nullInt(inv.UserID), dbr, kid, inv.Name, nullInt(inv.CreatedBy), now+int64(ttl.Seconds()), now)
+	own := 0
+	if inv.OwnSprig && inv.Role != RoleKid {
+		own = 1
+	}
+	_, err := s.db.ExecContext(ctx, "INSERT INTO invites (token_hash, user_id, role, kid, name, created_by, expires_at, created_at, own_sprig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		hash, nullInt(inv.UserID), dbr, kid, inv.Name, nullInt(inv.CreatedBy), now+int64(ttl.Seconds()), now, own)
 	return token, err
 }
 
 // InviteByToken returns a live (unused, unexpired) invite.
 func (s *Store) InviteByToken(ctx context.Context, token string) (*Invite, error) {
 	return s.inviteByHash(ctx, s.db, HashToken(token))
+}
+
+// InviteByHash is InviteByToken for a token's hash.
+func (s *Store) InviteByHash(ctx context.Context, hash string) (*Invite, error) {
+	return s.inviteByHash(ctx, s.db, hash)
 }
 
 type querier interface {
@@ -113,12 +125,13 @@ func (s *Store) inviteByHash(ctx context.Context, q querier, hash string) (*Invi
 	var inv Invite
 	var uid, by sql.NullInt64
 	var exp int64
-	var kid int
-	err := q.QueryRowContext(ctx, "SELECT user_id, role, kid, name, created_by, expires_at FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-		hash, s.unix()).Scan(&uid, &inv.Role, &kid, &inv.Name, &by, &exp)
+	var kid, own int
+	err := q.QueryRowContext(ctx, "SELECT user_id, role, kid, name, created_by, expires_at, own_sprig FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+		hash, s.unix()).Scan(&uid, &inv.Role, &kid, &inv.Name, &by, &exp, &own)
 	if kid == 1 {
 		inv.Role = RoleKid
 	}
+	inv.OwnSprig = own == 1
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -149,14 +162,7 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, username, hash stri
 	uid := inv.UserID
 	if uid == 0 {
 		ext, _ := NewToken()
-		dbr, kid := dbRole(inv.Role)
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at, timezone) VALUES ('web', ?, ?, ?, ?, ?, "+householdTimezone+")",
-			"w-"+ext[:16], inv.Name, dbr, kid, now)
-		if err != nil {
-			return nil, err
-		}
-		uid, _ = res.LastInsertId()
-		if _, err := tx.ExecContext(ctx, "INSERT INTO identities (user_id, channel, external_id, created_at) VALUES (?, 'web', ?, ?)", uid, "w-"+ext[:16], now); err != nil {
+		if uid, err = s.insertInvited(ctx, tx, inv, "web", "w-"+ext[:16], now); err != nil {
 			return nil, err
 		}
 	}
@@ -175,6 +181,66 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, username, hash stri
 		return nil, err
 	}
 	return s.UserByID(ctx, uid)
+}
+
+// insertInvited makes the user an invite is for, with one identity.
+func (s *Store) insertInvited(ctx context.Context, tx *sql.Tx, inv *Invite, channel, ext string, now int64) (int64, error) {
+	dbr, kid := dbRole(inv.Role)
+	own := 0
+	if inv.OwnSprig && kid == 0 {
+		own = 1
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at, timezone, own_sprig, invited_by) VALUES (?, ?, ?, ?, ?, ?, "+householdTimezone+", ?, ?)",
+		channel, ext, inv.Name, dbr, kid, now, own, nullInt(inv.CreatedBy))
+	if err != nil {
+		return 0, err
+	}
+	uid, _ := res.LastInsertId()
+	if _, err := tx.ExecContext(ctx, "INSERT INTO identities (user_id, channel, external_id, created_at) VALUES (?, ?, ?, ?)", uid, channel, ext, now); err != nil {
+		return 0, err
+	}
+	return uid, nil
+}
+
+// RedeemInviteChat uses an invite from a chat app: the account that sent
+// it (channel, ext) becomes the new person the invite is for. Invites that
+// give an existing person a login can't be used this way. ErrIdentityTaken
+// means that account already belongs to someone; the invite stays unused.
+func (s *Store) RedeemInviteChat(ctx context.Context, tokenHash, channel, ext string) (*User, *Invite, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	inv, err := s.inviteByHash(ctx, tx, tokenHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	if inv.UserID != 0 {
+		return nil, nil, ErrNotFound
+	}
+	var taken int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM identities WHERE channel = ? AND external_id = ?", channel, ext).Scan(&taken); err != nil {
+		return nil, nil, err
+	}
+	if taken > 0 {
+		return nil, nil, ErrIdentityTaken
+	}
+	now := s.unix()
+	if res, err := tx.ExecContext(ctx, "UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL", now, tokenHash); err != nil {
+		return nil, nil, err
+	} else if n, _ := res.RowsAffected(); n != 1 {
+		return nil, nil, ErrNotFound
+	}
+	uid, err := s.insertInvited(ctx, tx, inv, channel, ext, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	u, err := s.UserByID(ctx, uid)
+	return u, inv, err
 }
 
 // --- OpenID Connect ---

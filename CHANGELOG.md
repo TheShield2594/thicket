@@ -4,6 +4,40 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
+## Unreleased: adding people, private sprigs and a fuller tour (schema v18)
+
+- "Add my partner's sprig", in one flow. Ask Juni to add someone: she asks
+  their name and how they'll chat, and posts one invite link (7 days,
+  single use) for the web app, Telegram (the link opens a chat with the
+  bot) or Discord (they DM the bot a `join-…` code). New tool
+  `invite_person`; the app API's invites take `"own_sprig": true`. When
+  they arrive, Juni greets them, not you, and helps them make a sprig of
+  their own. See [Households](docs/household.md#adding-someone-start-to-finish).
+- Solo sprigs are private from admins too. The owner and admins see that
+  someone else's solo sprig exists, its state, whether it logged errors in
+  the last day, and its cost, labelled "Kim's private sprig". Its name,
+  role, tools, activity summaries and trail entries no longer appear in
+  the dashboard, the app API, the live states feed or Juni's reports, and
+  admins can't change its tools or levels. Juni tells the owner once,
+  plainly, that the database file still holds everything and Thicket
+  won't show it.
+- A short tour for adults who join later: their name, what's private and
+  what's shared, the family sprigs, the calendar, and an offer of a sprig
+  of their own. People who joined before this release don't get it.
+- Juni's first-run onboarding asks whether Thicket is just for you or for
+  a household, and for a household offers to invite the other adults,
+  add kids (and set up kid sprigs) and make a first family sprig. It
+  introduces the calendar when you mention your schedule (connect one in
+  the web app, never in chat), offers the sandbox computer when it's
+  connected and a task needs a computer (and later, while no sprig has
+  it), and mentions the desktop app once in the web app.
+- The Calendar screen offers **Connect your calendar** when nothing is
+  connected.
+- Background tasks are listed. `thicket jobs`, `GET /api/v1/jobs`
+  (`tasks`), `list_jobs` and the dashboard's Jobs section show recent
+  delegated tasks and how each ended, including those interrupted by a
+  restart.
+
 ## Unreleased: quiet hours, calendar removals and PDF limits (schema v17)
 
 - Quiet hours and a daily budget for everything a sprig starts itself.

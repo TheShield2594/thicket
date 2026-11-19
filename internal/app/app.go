@@ -259,6 +259,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Chars.OnLoad(a.Web.RosterChanged)
 	a.Web.Calendar = a.Calendar
 	a.Web.BaseURL = cfg.WebBaseURL()
+	a.Web.Joined = a.Engine.WebJoined
 	a.Web.MakeKidSprig = func(ctx context.Context, by *store.User, body json.RawMessage) (*character.Character, error) {
 		var spec agent.KidSprigSpec
 		if err := json.Unmarshal(body, &spec); err != nil {

@@ -170,6 +170,13 @@ func TestInviteAccountAndSessions(t *testing.T) {
 	if code, _ := e.client(t).do("POST", "/api/invite", map[string]string{"token": token, "username": "robin2", "password": "robins password ok"}, true); code != 401 {
 		t.Fatalf("invite used twice: %d", code)
 	}
+	// Juni greets Robin in their chat as soon as they've joined.
+	e.a.Engine.WaitTasks()
+	robinID := int64(me["user"].(map[string]any)["id"].(float64))
+	_, msgs := b1.do("GET", fmt.Sprintf("/api/chats/%d.juniper/messages", robinID), nil, false)
+	if got := fmt.Sprint(msgs["messages"]); !strings.Contains(got, "Lovely to meet you") {
+		t.Fatalf("no welcome in Robin's chat: %v", msgs)
+	}
 
 	// A second browser; both are listed.
 	b2 := e.client(t)
@@ -353,10 +360,14 @@ func TestDashboardSessionsAndInvites(t *testing.T) {
 	session, _ := e.a.DB.CreateWebSessionVia(e.ctx, e.owner.ID, "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Firefox/130.0", web.SessionTTL, "password")
 	other, _ := e.a.DB.CreateWebSessionVia(e.ctx, e.member.ID, "Mozilla/5.0 (iPhone) Safari/605", web.SessionTTL, "invite")
 	_, body := getDashboard(t, srv, session)
-	for _, want := range []string{`id="signin"`, "Firefox on macOS", "Safari on iPhone", "Make invite link", "Moss", "Fern", "Kim&#39;s"} {
+	for _, want := range []string{`id="signin"`, "Firefox on macOS", "Safari on iPhone", "Make invite link", "Moss", "Kim&#39;s private sprig"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
+	}
+	// Kim's solo sprig is private: the owner sees that it exists, not what it is.
+	if strings.Contains(body, "Fern") {
+		t.Error("the owner's dashboard names Kim's private sprig")
 	}
 	csrf := between(body, `name="csrf" value="`, `"`)
 	post := func(form url.Values) (int, string) {

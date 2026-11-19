@@ -2,11 +2,16 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/theshield2594/thicket/internal/web"
 )
 
 func withPip(t *testing.T, ctx context.Context, a *App) {
@@ -140,5 +145,40 @@ func TestStopDelegatedTask(t *testing.T) {
 	out := texts(fc.take())
 	if !strings.Contains(out, "stopped “Pip's task") || strings.Contains(out, "couldn't finish") {
 		t.Fatalf("stopping a background task:\n%s", out)
+	}
+}
+
+// Delegated tasks are listed with jobs: in the API (and so `thicket
+// jobs`), the dashboard and list_jobs.
+func TestDelegatedTasksAreListed(t *testing.T) {
+	a, fc, _, ctx, srv, token := setupAPI(t)
+	withPip(t, ctx, a)
+	a.Engine.HandleIncoming(ctx, dm("have pip look into flight prices for May"))
+	a.Engine.WaitTasks()
+	fc.take()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/v1/jobs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Tasks []struct {
+			Sprig, From, Task, Status, StartedAt, FinishedAt string
+		} `json:"tasks"`
+	}
+	json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if len(out.Tasks) != 1 || out.Tasks[0].Sprig != "pip" || out.Tasks[0].Status != "ok" || !strings.Contains(out.Tasks[0].Task, "flight prices") {
+		t.Fatalf("tasks in the API: %+v", out.Tasks)
+	}
+
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	dsrv := httptest.NewServer(a.Dashboard.Handler())
+	defer dsrv.Close()
+	session, _ := a.DB.CreateWebSession(ctx, owner.ID, "test", web.SessionTTL)
+	if _, body := getDashboard(t, dsrv, session); !strings.Contains(body, "Background tasks") || !strings.Contains(body, "flight prices for may") {
+		t.Fatal("the dashboard should list the task")
 	}
 }

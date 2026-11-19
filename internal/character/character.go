@@ -156,6 +156,15 @@ func (c *Character) UsableBy(p Person) bool {
 	return !p.Child()
 }
 
+// PrivateFrom reports whether this sprig is someone else's solo sprig, as
+// seen by userID: then, admin or not, they may know it exists, what it
+// costs and whether it's working, and nothing else (no name, role, tools,
+// activity, trail, memories or chats). userID 0 is nobody in particular,
+// so every solo sprig is private from it.
+func (c *Character) PrivateFrom(userID int64) bool {
+	return c.Tier() == TierSolo && c.BelongsTo != userID
+}
+
 // IsParent reports whether a user set up this kid sprig.
 func (c *Character) IsParent(userID int64) bool {
 	return c.IsKid() && slices.Contains(c.Parents, userID)

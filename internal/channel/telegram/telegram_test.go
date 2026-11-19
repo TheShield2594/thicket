@@ -107,6 +107,7 @@ func TestReceive(t *testing.T) {
 			map[string]any{"file_id": "small", "file_size": 10}, map[string]any{"file_id": "large", "file_size": 900}}}),
 		{"update_id": 6, "message": map[string]any{"message_id": 6, "from": map[string]any{"id": 7, "is_bot": true}, "chat": map[string]any{"id": 42, "type": "private"}, "text": "bot"}},
 		msg(7, -5, "group", "/help@thicket_bot", map[string]any{"entities": []any{map[string]any{"type": "bot_command", "offset": 0, "length": 17}}}),
+		msg(8, 42, "private", "/start join-AbC_def-123", nil), // from an invite link
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -124,6 +125,7 @@ func TestReceive(t *testing.T) {
 			return in.Text == "look 🌱" && len(in.Attachments) == 1 && in.Attachments[0].Size == 900 && in.Attachments[0].ContentType == "image/jpeg"
 		},
 		"7": func(in channel.Incoming) bool { return in.Mentioned && in.Text == "/help" },
+		"8": func(in channel.Incoming) bool { return in.IsDM && in.Text == "join-AbC_def-123" },
 	}
 	deadline := time.After(5 * time.Second)
 	for len(want) > 0 {

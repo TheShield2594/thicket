@@ -119,6 +119,9 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 		return ok && c.IsParent(by.ID)
 	}
 	switch {
+	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
+		// someone else's private sprig: theirs to change, not undo
+		return "", fmt.Errorf("no sprig %q", u.Character)
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "grant" || u.Type == "allow") && parentOf():
 		// a parent undoing a change to their kid's sprig
@@ -228,7 +231,7 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 		return errors.New("level must be read, draft, ask, act or empty")
 	}
 	if sprig != store.AllSprigs {
-		if _, ok := e.Chars.Get(sprig); !ok {
+		if c, ok := e.Chars.Get(sprig); !ok || c.PrivateFrom(by.ID) {
 			return fmt.Errorf("no sprig %q", sprig)
 		}
 	}

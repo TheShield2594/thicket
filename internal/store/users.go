@@ -20,6 +20,11 @@ type User struct {
 	CreatedAt   time.Time
 	// Email matches OIDC sign-ins to this user (verified emails only).
 	Email string
+	// OwnSprig: they were invited to make a private sprig of their own,
+	// and Juni helps them to it in their first chat. InvitedBy is who
+	// invited them, if anyone did.
+	OwnSprig  bool
+	InvitedBy int64
 }
 
 // Household roles. Owners and admins are household admins; members are
@@ -68,20 +73,21 @@ func (u *User) Location() *time.Location {
 	return time.UTC
 }
 
-const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at, email, kid"
+const userCols = "id, channel, external_id, name, role, timezone, onboarded_at, last_seen_at, created_at, email, kid, own_sprig, COALESCE(invited_by, 0)"
 
 func scanUser(r interface{ Scan(...any) error }) (*User, error) {
 	var u User
 	var onb, seen sql.NullInt64
 	var created int64
-	var kid int
-	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created, &u.Email, &kid); err != nil {
+	var kid, own int
+	if err := r.Scan(&u.ID, &u.Channel, &u.ExternalID, &u.Name, &u.Role, &u.Timezone, &onb, &seen, &created, &u.Email, &kid, &own, &u.InvitedBy); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	u.OnboardedAt, u.LastSeenAt, u.CreatedAt = timeOf(onb), timeOf(seen), time.Unix(created, 0)
+	u.OwnSprig = own == 1
 	if kid == 1 {
 		u.Role = RoleKid
 	}
@@ -255,7 +261,7 @@ func (s *Store) SetUserRole(ctx context.Context, id int64, role string) error {
 }
 
 func (s *Store) MarkOnboarded(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE users SET onboarded_at = COALESCE(onboarded_at, ?) WHERE id = ?", s.unix(), id)
+	_, err := s.db.ExecContext(ctx, "UPDATE users SET onboarded_at = COALESCE(onboarded_at, ?), own_sprig = 0 WHERE id = ?", s.unix(), id)
 	return err
 }
 

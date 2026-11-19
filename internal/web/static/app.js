@@ -1133,7 +1133,9 @@ function calendarSources() {
         c.mine && h('button.chip', { onclick: async () => {
           if (!confirm(`Disconnect ${c.name}? Thicket forgets its address and password.`)) return;
           try { await api('/api/calendars/' + c.id, { method: 'DELETE' }); toast('Disconnected'); load(); renderMain(); } catch (e) { toast(e.message); }
-        } }, 'Disconnect'))) : [h('p.d-empty', {}, 'No calendars connected yet.')]));
+        } }, 'Disconnect'))) : [h('div.cal-empty', {},
+          h('p.d-empty', {}, 'No calendars connected yet. Connect yours to see your days next to what your sprigs plan, and give a sprig the calendar to plan around them.'),
+          h('button.chip', { type: 'button', onclick: () => { add.open = true; name.focus(); } }, 'Connect your calendar'))]));
     } catch (e) { list.replaceChildren(h('p.d-empty', {}, 'Couldn’t load your calendars: ' + e.message)); }
   };
   load();
@@ -1157,8 +1159,8 @@ function calendarSources() {
   } }, nameL, h('label.field-label', {}, 'Kind', kind), urlL, dav,
   h('label.check', {}, shared, 'Share with the household'), err, btn,
   h('p.d-empty', {}, 'Read-only: Thicket never changes your calendars. The address and password are stored encrypted.'));
-  return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connected calendars')), list,
-    h('details.cal-add', {}, h('summary', {}, 'Connect a calendar'), form));
+  const add = h('details.cal-add', {}, h('summary', {}, 'Connect a calendar'), form);
+  return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connected calendars')), list, add);
 }
 
 // --- settings (owners and admins) ---

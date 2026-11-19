@@ -283,7 +283,19 @@ func (r *Registry) Get(id string) (*Character, bool) {
 	return c, ok
 }
 
-// All returns characters sorted with the host first, then by name.
+// PrivateFrom reports whether the sprig id is someone else's solo sprig,
+// as seen by userID (see Character.PrivateFrom). It fails closed: an id
+// the registry doesn't know (a sprig whose file was deleted or no longer
+// loads) counts as private, since it may have been someone's solo sprig.
+// "" (no sprig) isn't.
+func (r *Registry) PrivateFrom(id string, userID int64) bool {
+	if id == "" {
+		return false
+	}
+	c, ok := r.Get(id)
+	return !ok || c.PrivateFrom(userID)
+}
+
 // For returns the sprigs a person may talk to, host first.
 func (r *Registry) For(p Person) []*Character {
 	var out []*Character
@@ -295,6 +307,7 @@ func (r *Registry) For(p Person) []*Character {
 	return out
 }
 
+// All returns characters sorted with the host first, then by name.
 func (r *Registry) All() []*Character {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

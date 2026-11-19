@@ -51,10 +51,13 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>
 
 <section id="sprigs"><h2>Sprigs</h2><div class="roster">
-{{range .Sprigs}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}{{if .Only}} <span class="tag">{{.Only}}</span>{{end}}
+{{range .Sprigs}}{{if .Private}}<div class="sprigcard"><div><b>{{.Name}}</b> <span class="tag">private</span>
+<div class="state"><b>{{.State}}</b> · {{.Health}}</div>
+<div class="muted small">Private to its owner. Thicket shows you only that it exists, how it's doing and (under Costs) what it costs: not its chats, memories, tools or activity. Everything is in the database file on the server, which Thicket won't open for you.</div></div></div>
+{{else}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}{{if .Only}} <span class="tag">{{.Only}}</span>{{end}}
 <div class="state" id="st-{{.ID}}"><b>{{.State}}</b></div><div class="muted small">{{.Role}}</div>
 {{if .Proactive}}<div class="muted small">{{.Proactive}}</div>{{end}}
-<div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}
+<div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}{{end}}
 </div></section>
 
 <section id="inbox"><h2>Needs you</h2>
@@ -88,7 +91,9 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 {{range .Jobs}}<h3>#{{.ID}} {{.Name}} <span class="tag">{{.When}}</span><span class="tag">{{.Sprig}}</span>{{if not .Enabled}}<span class="tag warn">paused</span>{{end}}</h3>
 {{if .Runs}}<table><tr><th>Ran</th><th>Result</th><th>Cost</th></tr>{{range .Runs}}<tr><td>{{.At}}</td><td class="{{.Status}}">{{.Status}}{{if .Error}} <span class="muted small">{{.Error}}</span>{{end}}</td><td>{{.Cost}}</td></tr>{{end}}</table>
 {{else}}<p class="muted small">Not run yet.</p>{{end}}
-{{else}}<p class="muted">No jobs. Ask a sprig for one: "every weekday at 7:30, summarise my day".</p>{{end}}</section>
+{{else}}<p class="muted">No jobs. Ask a sprig for one: "every weekday at 7:30, summarise my day".</p>{{end}}
+{{if .Tasks}}<h3>Background tasks</h3><p class="muted small">Longer work one sprig gave another. A task cut short by a restart is marked interrupted and isn't run again: ask for it again if you still want it.</p>
+<table><tr><th>Started</th><th>Who</th><th>Task</th><th>Result</th></tr>{{range .Tasks}}<tr><td>{{.At}}</td><td>{{.Sprig}}{{if ne .Sprig .From}} <span class="muted small">from {{.From}}</span>{{end}}</td><td>{{.Task}}</td><td class="{{.Status}}">{{.Status}}{{if .Error}} <span class="muted small">{{.Error}}</span>{{end}}{{if .Ended}} <span class="muted small">{{.Ended}}</span>{{end}}</td></tr>{{end}}</table>{{end}}</section>
 
 <section id="skills"><h2>Skills</h2><ul class="plain">
 {{range .Skills}}<li><b>{{.Name}}</b> <span class="tag">{{.ID}} v{{.Version}}</span><br><span class="muted">{{.Description}}</span></li>{{else}}<li class="muted">None saved yet.</li>{{end}}

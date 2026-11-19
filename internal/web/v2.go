@@ -440,10 +440,14 @@ func (a *Adapter) v2Trail(w http.ResponseWriter, r *http.Request, u *store.User)
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if entries == nil {
-		entries = []store.TrailEntry{}
+	out := []store.TrailEntry{}
+	for _, e := range entries {
+		if a.Chars.PrivateFrom(e.Character, u.ID) {
+			continue // someone else's private sprig
+		}
+		out = append(out, e)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"trail": entries})
+	writeJSON(w, http.StatusOK, map[string]any{"trail": out})
 }
 
 func (a *Adapter) v2Undo(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -490,8 +494,13 @@ func (a *Adapter) v2Household(w http.ResponseWriter, r *http.Request, u *store.U
 	}
 	var sprigs []map[string]any
 	for _, c := range a.Chars.All() {
-		if c.Tier() == character.TierSolo && c.BelongsTo != u.ID {
-			continue // someone's solo sprig is theirs alone
+		if c.PrivateFrom(u.ID) {
+			// Someone's solo sprig is theirs alone: admins are told only
+			// that it exists, and whose it is.
+			if u.IsAdmin() {
+				sprigs = append(sprigs, map[string]any{"tier": character.TierSolo, "private": true, "belongs_to": c.BelongsTo})
+			}
+			continue
 		}
 		v := map[string]any{"id": c.ID, "name": c.DisplayName(), "tier": c.Tier(), "avatar": a.avatarURL(c)}
 		if c.IsKid() {
@@ -508,8 +517,9 @@ func (a *Adapter) v2Invite(w http.ResponseWriter, r *http.Request, u *store.User
 		return
 	}
 	var b struct {
-		Name string `json:"name"`
-		Role string `json:"role"`
+		Name     string `json:"name"`
+		Role     string `json:"role"`
+		OwnSprig bool   `json:"own_sprig"`
 	}
 	if !decodeBody(w, r, &b) {
 		return
@@ -518,12 +528,16 @@ func (a *Adapter) v2Invite(w http.ResponseWriter, r *http.Request, u *store.User
 		writeErr(w, http.StatusBadRequest, "role must be admin, member or kid")
 		return
 	}
-	token, err := a.DB.CreateInvite(r.Context(), store.Invite{Role: b.Role, Name: strings.TrimSpace(b.Name), CreatedBy: u.ID}, 7*24*time.Hour)
+	if b.OwnSprig && b.Role == store.RoleKid {
+		writeErr(w, http.StatusBadRequest, "own_sprig is for adults: kids get kid sprigs")
+		return
+	}
+	token, err := a.DB.CreateInvite(r.Context(), store.Invite{Role: b.Role, Name: strings.TrimSpace(b.Name), CreatedBy: u.ID, OwnSprig: b.OwnSprig}, 7*24*time.Hour)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"invite_url": strings.TrimRight(a.BaseURL, "/") + "/invite#" + token, "role": b.Role, "expires_in_days": 7})
+	writeJSON(w, http.StatusCreated, map[string]any{"invite_url": strings.TrimRight(a.BaseURL, "/") + "/invite#" + token, "role": b.Role, "own_sprig": b.OwnSprig, "expires_in_days": 7})
 }
 
 func (a *Adapter) v2SetRole(w http.ResponseWriter, r *http.Request, u *store.User) {

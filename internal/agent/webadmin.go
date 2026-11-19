@@ -87,7 +87,11 @@ func (e *Engine) integrationInfo(s store.MCPServer) IntegrationInfo {
 	for _, c := range e.Chars.All() {
 		for _, sc := range c.Tools {
 			if strings.HasPrefix(sc, "mcp:"+s.Name+"/") {
-				in.UsedBy = append(in.UsedBy, c.DisplayName())
+				// The Settings screen is for every admin: private sprigs
+				// aren't listed, so nobody learns what they use.
+				if !c.PrivateFrom(0) {
+					in.UsedBy = append(in.UsedBy, c.DisplayName())
+				}
 				break
 			}
 		}
