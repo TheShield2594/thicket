@@ -147,7 +147,7 @@ func (e *Engine) describe(ctx context.Context, t *turn, tool *Tool, args json.Ra
 			undoArgs[k] = val
 		}
 		for _, v := range undoArgs {
-			if s := fmt.Sprint(v); e.Secrets.Redact(s) != s {
+			if e.holdsSecret(v) {
 				return act // it would need a secret stored in the trail: not offered
 			}
 		}
@@ -275,7 +275,7 @@ func (e *Engine) recordAction(ctx context.Context, t *turn, tool *Tool, args jso
 	}
 	act := e.describe(ctx, t, tool, args, out)
 	act.said = e.Secrets.Redact(act.said) // whatever wrote it, no secret is stored or shown
-	detail := e.Secrets.Redact(truncate(string(args), 500))
+	detail := e.redactJSON(args, 500)
 	id := e.addTrail(ctx, t.user.ID, t.char.ID, store.TrailAction, act.said, detail, act.undo)
 	label := act.label
 	if act.undo == nil {
@@ -393,4 +393,74 @@ func argsMap(raw json.RawMessage) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	return m
+}
+
+// holdsSecret reports whether a value, or anything in it once read as
+// JSON (a whole {{result}} text, say), contains a known secret, however
+// the JSON spelled it.
+func (e *Engine) holdsSecret(v any) bool {
+	switch x := v.(type) {
+	case string:
+		if e.Secrets.Redact(x) != x {
+			return true
+		}
+		if t := strings.TrimSpace(x); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") || strings.HasPrefix(t, "\"") {
+			var inner any
+			if json.Unmarshal([]byte(t), &inner) == nil {
+				if _, isStr := inner.(string); !isStr || inner.(string) != x {
+					return e.holdsSecret(inner)
+				}
+			}
+		}
+	case map[string]any:
+		for k, y := range x {
+			if e.holdsSecret(k) || e.holdsSecret(y) {
+				return true
+			}
+		}
+	case []any:
+		for _, y := range x {
+			if e.holdsSecret(y) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// redactJSON returns call arguments for the trail with every known secret
+// redacted in the decoded values (so no JSON spelling of one survives), cut
+// to n bytes.
+func (e *Engine) redactJSON(raw json.RawMessage, n int) string {
+	var v any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if d.Decode(&v) != nil {
+		return e.Secrets.Redact(truncate(string(raw), n))
+	}
+	b, err := json.Marshal(e.redactValue(v))
+	if err != nil {
+		return e.Secrets.Redact(truncate(string(raw), n))
+	}
+	return truncate(string(b), n)
+}
+
+func (e *Engine) redactValue(v any) any {
+	switch x := v.(type) {
+	case string:
+		return e.Secrets.Redact(x)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, y := range x {
+			out[e.Secrets.Redact(k)] = e.redactValue(y)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, y := range x {
+			out[i] = e.redactValue(y)
+		}
+		return out
+	}
+	return v
 }

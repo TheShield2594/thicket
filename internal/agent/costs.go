@@ -353,7 +353,7 @@ func toolEstimate(t *turn, tool *Tool, who *character.Character, usd float64, wh
 func (e *Engine) approvedCost(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
 	t.toolEstimate = 0
 	usd, what, who := e.estimateTool(ctx, t, tool.Name, args)
-	if usd <= 0 {
+	if usd <= 0 && t.approvedEstimate == 0 {
 		return ""
 	}
 	est := toolEstimate(t, tool, who, usd, what)
@@ -650,7 +650,9 @@ func (e *Engine) unpublish(id string, existed bool) bool {
 		return false
 	}
 	if err := e.Chars.Load(); err != nil {
-		e.Log.Error("reload sprigs", "err", err)
+		// The old snapshot, with the sprig in it, may still be live.
+		e.Log.Error("reload sprigs after removing a half-created sprig; keeping its cap", "err", err)
+		return false
 	}
 	return true
 }
