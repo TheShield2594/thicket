@@ -94,6 +94,7 @@ type Service struct {
 type cached struct {
 	at       time.Time
 	from, to time.Time
+	loc      string // the zone it was read in
 	events   []Event
 }
 
@@ -223,7 +224,9 @@ func (s *Service) events(ctx context.Context, src store.CalendarSource, from, to
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
-	if c, ok := s.cache[src.ID]; ok && s.now().Sub(c.at) < ttl && !from.Before(c.from) && !to.After(c.to) {
+	// Floating and local times are read in the viewer's zone, so a cached
+	// copy is only for the same zone.
+	if c, ok := s.cache[src.ID]; ok && c.loc == loc.String() && s.now().Sub(c.at) < ttl && !from.Before(c.from) && !to.After(c.to) {
 		s.mu.Unlock()
 		return filterRange(c.events, from, to), nil
 	}
@@ -233,7 +236,7 @@ func (s *Service) events(ctx context.Context, src store.CalendarSource, from, to
 		return nil, err
 	}
 	s.mu.Lock()
-	s.cache[src.ID] = cached{at: s.now(), from: from, to: to, events: evs}
+	s.cache[src.ID] = cached{at: s.now(), from: from, to: to, loc: loc.String(), events: evs}
 	s.mu.Unlock()
 	return evs, nil
 }

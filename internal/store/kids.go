@@ -43,8 +43,9 @@ func (s *Store) SetKidReportMode(ctx context.Context, userID int64, mode string)
 
 // KidMessagesBetween lists a kid's messages to a kid sprig and its replies
 // in [from, to), oldest first. A kid's message counts for the sprig that
-// answered it (the next reply in that conversation).
-func (s *Store) KidMessagesBetween(ctx context.Context, kid int64, character string, from, to time.Time) ([]KidChatMessage, error) {
+// answered it (the next reply in that conversation). A reply skip reports
+// true for (a limit notice) is left out, with the messages it answered.
+func (s *Store) KidMessagesBetween(ctx context.Context, kid int64, character string, from, to time.Time, skip func(string) bool) ([]KidChatMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.conversation_id, m.role, m.character, m.content, m.created_at
 		FROM messages m JOIN conversations c ON c.id = m.conversation_id
 		WHERE c.user_id = ? AND m.role IN ('user', 'assistant') AND m.created_at >= ? AND m.created_at < ?
@@ -78,7 +79,7 @@ func (s *Store) KidMessagesBetween(ctx context.Context, kid int64, character str
 			pending = append(pending, m)
 			continue
 		}
-		if m.Character == character {
+		if m.Character == character && (skip == nil || !skip(m.Content)) {
 			out = append(out, pending...)
 			out = append(out, m)
 		}

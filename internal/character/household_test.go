@@ -151,7 +151,7 @@ func TestKidLimitsClosed(t *testing.T) {
 	if (KidLimits{}).Closed(at("2026-11-16", "03:00")) != "" {
 		t.Error("no limits closed something")
 	}
-	for _, bad := range []KidLimits{{Hours: "7-9"}, {Hours: "08:00-08:00"}, {SchoolNights: "25:00"}, {DailyMinutes: -1}, {DailyMessages: 5000}} {
+	for _, bad := range []KidLimits{{Hours: "7-9"}, {Hours: "08:00-08:00"}, {SchoolNights: "25:00"}, {SchoolNights: "05:00"}, {SchoolNights: "14:00"}, {DailyMinutes: -1}, {DailyMessages: 5000}} {
 		if len(bad.Problems()) == 0 {
 			t.Errorf("%+v accepted", bad)
 		}

@@ -27,6 +27,7 @@ const (
 	TrailPause   = "pause"   // everything, or one sprig, was paused or resumed
 	TrailCap     = "cap"     // a sprig's own spend cap changed
 	TrailAction  = "action"  // a sprig did something at act level (an integration, a job)
+	TrailLimit   = "limit"   // a kid sprig stopped at a time limit
 )
 
 type TrailEntry struct {

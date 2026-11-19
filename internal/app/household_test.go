@@ -470,6 +470,13 @@ func TestKidSprigInChat(t *testing.T) {
 		t.Fatalf("an adult listed as a kid: %q / %s", personas(out), lastToolResult(h.fm))
 	}
 
+	// Never in a group channel: the preview names the household's kids.
+	a.Engine.HandleIncoming(ctx, channel.Incoming{Channel: "discord", ChatID: "general", MessageID: "g1", UserID: "owner", UserName: "owner",
+		Text: "make a kid sprig clover for Max", Mentioned: true})
+	if out := h.fc.take(); strings.Contains(personas(out), "Clover") || !strings.Contains(lastToolResult(h.fm), "in a DM") {
+		t.Fatalf("set up in a group channel: %+v / %s", out, lastToolResult(h.fm))
+	}
+
 	// The preview says hello as it would to the kid.
 	out = h.ownerSay("make a kid sprig clover for Max with parents me,Kim")
 	if !strings.Contains(personas(out), "Clover (preview)") || !strings.Contains(sentText(out), "doodling") {
@@ -489,6 +496,16 @@ func TestKidSprigInChat(t *testing.T) {
 	if _, ok := a.Chars.Get("clover"); ok {
 		t.Fatal("clover created before approval")
 	}
+
+	// Only the cap the parent preview showed: if it changed, nothing is created.
+	capWas := a.Settings.String(ctx, "budget.kid_monthly_usd")
+	a.Settings.Set(ctx, "budget.kid_monthly_usd", "25")
+	h.ownerSay("approve")
+	if _, ok := a.Chars.Get("clover"); ok {
+		t.Fatal("created with a cap the preview didn't show")
+	}
+	a.Settings.Set(ctx, "budget.kid_monthly_usd", capWas)
+	h.ownerSay("create the kid sprig clover")
 
 	out = h.ownerSay("approve")
 	c, ok := a.Chars.Get("clover")

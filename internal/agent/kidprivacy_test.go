@@ -39,6 +39,9 @@ func TestPersonalDetails(t *testing.T) {
 			t.Errorf("%q not caught", leak)
 		}
 	}
+	if !carriesDetails(decoded("https://maps.example/?q=42%20Elm%20Street"), details) || !carriesDetails(decoded("q=Maple%2BGrove%2BElementary"), details) {
+		t.Error("a percent-encoded address got through")
+	}
 	for _, ok := range []string{"how do volcanoes work", "minecraft redstone tips", "what happened on 2026-11-19", "lego set 75192", "max level in zelda", "best park games"} {
 		if carriesDetails(ok, details) {
 			t.Errorf("%q flagged", ok)

@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -215,6 +217,14 @@ func (e *Engine) kidOutbound(ctx context.Context, t *turn, tool *Tool, args json
 				}
 			}
 		}
+		// Pinned messages stay in the model's context however old they are.
+		if pins, err := e.DB.PinnedMessages(ctx, t.conv.ID); err == nil {
+			for _, m := range pins {
+				if m.Role == "user" {
+					said = append(said, m.Content)
+				}
+			}
+		}
 	}
 	if mems, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID); err == nil {
 		for _, m := range mems {
@@ -222,39 +232,52 @@ func (e *Engine) kidOutbound(ctx context.Context, t *turn, tool *Tool, args json
 		}
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(t.user.Name), " ")
-	var flat strings.Builder
+	details := personalDetails(said, first)
+	var values []string
 	var v any
 	if json.Unmarshal(args, &v) == nil {
-		flattenStrings(v, &flat)
+		argValues(v, &values)
 	} else {
-		flat.Write(args)
+		values = []string{string(args)}
 	}
-	if !carriesDetails(flat.String(), personalDetails(said, first)) {
-		return ""
+	for _, val := range values {
+		// Each value on its own, so a match never spans two arguments, and
+		// decoded too, so "42%20Elm%20Street" is seen as what it is.
+		if carriesDetails(val, details) || carriesDetails(decoded(val), details) {
+			e.logActivity(ctx, "warn", "safety", t.char.ID, t.user.ID, "kept personal details in: refused "+tool.Name, "")
+			return "Error: NOT sent. It would have carried personal details the kid shared (like their name, where they live, their school or a phone number) outside Thicket, and kid sprigs never send those anywhere. Try again without them, or answer without it."
+		}
 	}
-	e.logActivity(ctx, "warn", "safety", t.char.ID, t.user.ID, "kept personal details in: refused "+tool.Name, "")
-	return "Error: NOT sent. It would have carried personal details the kid shared (like their name, where they live, their school or a phone number) outside Thicket, and kid sprigs never send those anywhere. Try again without them, or answer without it."
+	return ""
 }
 
-// flattenStrings writes every string and number in v, one per line.
-func flattenStrings(v any, b *strings.Builder) {
+// argValues collects every string, number and boolean in v.
+func argValues(v any, out *[]string) {
 	switch x := v.(type) {
 	case string:
-		b.WriteString(x + "\n")
+		*out = append(*out, x)
 	case float64, bool:
-		b.WriteString(strings.TrimSpace(strings.Trim(mustJSON(x), `"`)) + "\n")
+		*out = append(*out, fmt.Sprint(x))
 	case []any:
 		for _, it := range x {
-			flattenStrings(it, b)
+			argValues(it, out)
 		}
 	case map[string]any:
 		for _, it := range x {
-			flattenStrings(it, b)
+			argValues(it, out)
 		}
 	}
 }
 
-func mustJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+// decoded undoes URL escaping (percent-encoding, and + for spaces), as
+// many times as it changes something; s itself if it isn't escaped.
+func decoded(s string) string {
+	for range 3 {
+		d, err := url.QueryUnescape(s)
+		if err != nil || d == s {
+			break
+		}
+		s = d
+	}
+	return s
 }

@@ -197,14 +197,15 @@ change.
   [`TestKidLimitsClosed`](../internal/character/household_test.go)
 - **A spend cap only its parents can raise.**
   [`TestKidSprigMonthlyCap`](../internal/app/costs_test.go), [`TestNewKidSprigStartsCapped`](../internal/app/costs_test.go)
-- **Nothing a kid says gets out** (the containment test, below).
+- **Personal details a kid shares stay in** (the containment test, below,
+  and its limits).
   [`TestKidContainment`](../internal/app/kidsafety_test.go)
 
-### Nothing a kid says gets out
+### Personal details stay in
 
-What a kid tells their kid sprig stays with the kid, and with their
-parents, who can read the whole chat. `TestKidContainment` is the
-promise: Max tells Bramble his full name, his address, his school, a
+What a kid tells their kid sprig is meant to stay with the kid, and with
+their parents, who can read the whole chat. `TestKidContainment` checks
+it: Max tells Bramble his full name, his address, his school, a
 phone number and an email address, with every way out a parent can open
 switched on (the web, an integration tool, family memory). Bramble then
 tries to search the web for his school, open a map of his street and
@@ -231,7 +232,15 @@ number, a street address) and for the details the kid shared in the
 conversation or that the sprig remembers about them (their full name,
 where they live, their school). A call that carries one isn't sent, the
 sprig is told to try without it, and it's noted in the activity log
-(without the details). Calls without personal details go out as usual.
+(without the details). Each argument is checked on its own and also
+URL-decoded, and pinned messages count as things the kid said. Calls
+without personal details go out as usual.
+
+The check works on patterns. It catches the details it recognises, said
+the ways it knows ("I live in…", "my name is…", "I go to…", a street
+address, a school's name, a phone number or email address); a detail
+phrased some other way can get past it. The test proves the paths above
+for the details it uses, not that nothing could ever leak.
 [`TestPersonalDetails`](../internal/agent/kidprivacy_test.go)
 
 ## Parents
@@ -265,17 +274,28 @@ much, in the kid's timezone:
 - **Chat hours** (`hours: 07:00-20:00`): outside them the sprig says
   it's not chat time and when it'll be back.
 - **School nights** (`school_nights: 20:00`): no chatting from then
-  until morning on Sunday to Thursday evenings.
+  until morning on Sunday to Thursday evenings. An evening time (17:00
+  to 23:59), or one after midnight (00:00 to 04:59).
 - **A daily allowance:** `daily_minutes` (active minutes: from the first
   message of a sitting to the last, where a pause of more than five
   minutes starts a new sitting) or `daily_messages` (the kid's messages
   it answered), counted from midnight.
 
 At a limit the sprig says so kindly, in a fixed line ("That's all our
-chatting for today! See you tomorrow!"), and the model isn't called. The
-kid's message and that line are kept, so parents see them. A message
-about self-harm is always answered, and the safety check runs on every
-message either way.
+chatting for today! See you tomorrow!"), and no reply model is called.
+The kid's message and that line are kept, so parents see them; they
+don't count towards the allowance. Each stop is also noted in the trail
+(at most once an hour per kid and limit). A kid sprig past its limits
+doesn't pick up a handoff from another kid sprig either.
+
+The safety check runs on every message either way. A message about
+self-harm is always answered. A message with a warning word is screened
+before the limit line goes out: if the safety check flags it, or can't
+be reached, the kid gets a real answer instead. Attachments aren't read
+past a limit, except voice notes, which are still transcribed so the
+safety check hears what was said. If the day's count can't be read, the
+sprig says it can't check chat time right now rather than assuming
+there's time left.
 
 Parents set them by asking Juni ("no Bramble after 8 on school nights,
 and 30 minutes a day": `kid_limits`), on the kid sprig's page in the web
@@ -302,7 +322,8 @@ Each parent chooses how they hear about the kid sprigs they look after
 - **weekly** (the default): in the weekly digest, the kid sprig's
   section adds time spent and the topics of the week;
 - **daily**: a message from Juni each day at `digest.time`, per kid
-  sprig, for the day before: time spent, topics in a sentence or two,
+  sprig, for the calendar day before (midnight to midnight, in your
+  timezone): time spent, topics in a sentence or two,
   anything the safety check flagged, and what it cost. Nothing is sent
   for a day without chatting or alerts;
 - **off**: no report (safety alerts still come at the time).
@@ -310,7 +331,7 @@ Each parent chooses how they hear about the kid sprigs they look after
 Topics are written by the cheap model from the kid's messages, told to
 leave out names, schools, addresses and other personal details, and then
 anything personal the kid shared is taken out in code. The cost is the
-kid sprig's. {T('internal/app/kidsafety_test.go','TestKidReports')}
+kid sprig's. [`TestKidReports`](../internal/app/kidsafety_test.go)
 
 ## The weekly digest
 

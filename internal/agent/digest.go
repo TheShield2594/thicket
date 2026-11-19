@@ -228,7 +228,7 @@ func (e *Engine) BuildDigest(ctx context.Context, u *store.User, from, to time.T
 		switch t.Kind {
 		case store.TrailSafety:
 			d.Sprigs[i].Safety++
-		case store.TrailUndo, store.TrailUpdate:
+		case store.TrailUndo, store.TrailUpdate, store.TrailLimit:
 		default:
 			d.Sprigs[i].Changes = append(d.Sprigs[i].Changes, shorten(t.Summary, 90))
 		}

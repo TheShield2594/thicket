@@ -75,3 +75,37 @@ func TestParseMCPSource(t *testing.T) {
 		}
 	}
 }
+
+func TestMapEventsZonesAndRange(t *testing.T) {
+	// A Windows zone name (Microsoft Graph) is resolved, not ignored.
+	evs, err := MapEvents(`{"value":[{"subject":"Call","start":{"dateTime":"2026-11-20T09:00:00","timeZone":"Pacific Standard Time"}}]}`, FieldMap{}, time.UTC)
+	if err != nil || len(evs) != 1 || evs[0].Start.UTC().Format(time.RFC3339) != "2026-11-20T17:00:00Z" {
+		t.Fatalf("Pacific Standard Time: %v %v", evs, err)
+	}
+	// An explicit zone that can't be resolved is an error, not the viewer's zone.
+	if _, err := MapEvents(`[{"title":"x","start":{"dateTime":"2026-11-20T09:00:00","timeZone":"Mars Standard Time"}}]`, FieldMap{}, time.UTC); err == nil {
+		t.Fatal("an unknown zone was ignored")
+	}
+	// The range applies before the cap: old events never crowd out this week's.
+	var b strings.Builder
+	b.WriteString("[")
+	for i := 0; i < maxMCPEvents+10; i++ {
+		b.WriteString(`{"title":"old","start":"2020-01-01"},`)
+	}
+	b.WriteString(`{"title":"this week","start":"2026-11-20T10:00:00Z"}]`)
+	from, to := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	evs, err = mapEvents(b.String(), FieldMap{}, time.UTC, from, to)
+	if err != nil || len(evs) != 1 || evs[0].Title != "this week" {
+		t.Fatalf("range before cap: %d events, %v", len(evs), err)
+	}
+	// Too many in range is an error, never a shorter calendar.
+	b.Reset()
+	b.WriteString("[")
+	for i := 0; i <= maxMCPEvents; i++ {
+		b.WriteString(`{"title":"busy","start":"2026-11-20T10:00:00Z"},`)
+	}
+	b.WriteString(`{"title":"last","start":"2026-11-20T11:00:00Z"}]`)
+	if _, err := mapEvents(b.String(), FieldMap{}, time.UTC, from, to); err == nil {
+		t.Fatal("more events than the cap came back without an error")
+	}
+}

@@ -13,11 +13,14 @@ stated.
   a message about self-harm is still answered. Changes go in the trail
   and can be undone. A report for parents, daily or in the weekly
   digest as each chooses: time spent, topics in a sentence or two,
-  anything flagged, and what it cost. A containment test proves nothing
-  a kid says leaves the kid sandbox, and a guard keeps personal details
-  a kid shared out of a kid sprig's web searches, page fetches and
-  integration calls. `docs/household.md` links each enforced claim to
-  its test.
+  anything flagged, and what it cost. A containment test checks that
+  the personal details in a kid's conversation stay out of adults' and
+  family memory, adults' chats, jobs, the activity log and the
+  arguments of web searches, page fetches and integration calls. Those
+  calls go through a pattern-based guard that refuses ones carrying
+  details the kid shared; a detail phrased in a way it doesn't
+  recognise can get past it. `docs/household.md` links each enforced
+  claim to its test.
 - Calendars through an integration (schema v30): a calendar an MCP
   server reaches (Google Calendar, Composio, Outlook) can feed the
   household calendar's events layer, as a source of kind `mcp` naming

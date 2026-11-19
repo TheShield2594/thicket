@@ -454,8 +454,10 @@ func (l KidLimits) Problems() []string {
 		}
 	}
 	if l.SchoolNights != "" {
-		if _, err := ParseClock(l.SchoolNights); err != nil {
-			p = append(p, fmt.Sprintf("limits.school_nights %q must be a time like 20:00", l.SchoolNights))
+		// An evening time, or one after midnight before morning: a school
+		// night never reaches into the school day.
+		if at, err := ParseClock(l.SchoolNights); err != nil || at >= schoolNightsEnd && at < 17*60 {
+			p = append(p, fmt.Sprintf("limits.school_nights %q must be an evening time like 20:00 (17:00 to 04:59)", l.SchoolNights))
 		}
 	}
 	if l.DailyMinutes < 0 || l.DailyMinutes > 1440 {

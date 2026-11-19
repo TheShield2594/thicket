@@ -168,17 +168,23 @@ func (s *Service) fetchMCP(ctx context.Context, src *MCPSource, from, to time.Ti
 	if len(out) > maxCalendarBytes {
 		return nil, errors.New("the result is larger than 8 MB")
 	}
-	evs, err := MapEvents(out, src.Map, loc)
-	if err != nil {
-		return nil, err
-	}
-	return filterRange(evs, from, to), nil
+	return mapEvents(out, src.Map, loc, from, to)
 }
 
 // MapEvents turns a tool's JSON result into events, using m (unmapped
 // fields use common names). Events without a title or a readable start
 // are skipped.
 func MapEvents(result string, m FieldMap, loc *time.Location) ([]Event, error) {
+	return mapEvents(result, m, loc, time.Time{}, time.Time{})
+}
+
+// maxMCPEvents is how many events one call may put on the calendar.
+const maxMCPEvents = 5000
+
+// mapEvents is MapEvents keeping only events in [from, to) (all of them
+// when from is zero). The cap counts only those, and is an error when
+// reached, never a silently shorter calendar.
+func mapEvents(result string, m FieldMap, loc *time.Location, from, to time.Time) ([]Event, error) {
 	var root any
 	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(result)))
 	dec.UseNumber()
@@ -193,26 +199,34 @@ func MapEvents(result string, m FieldMap, loc *time.Location) ([]Event, error) {
 		}
 	}
 	var out []Event
+	readable := 0
 	for i, it := range items {
-		if len(out) >= 5000 {
-			break
+		ev, ok, err := mapEvent(it, m, loc)
+		if err != nil {
+			return nil, err
 		}
-		ev, ok := mapEvent(it, m, loc)
 		if !ok {
 			continue
+		}
+		readable++
+		if !from.IsZero() && len(filterRange([]Event{ev}, from, to)) == 0 {
+			continue
+		}
+		if len(out) >= maxMCPEvents {
+			return nil, fmt.Errorf("more than %d events in the range; pass the range to the tool (from_arg and to_arg) so it returns fewer", maxMCPEvents)
 		}
 		if ev.UID == "" {
 			ev.UID = fmt.Sprintf("item%d", i)
 		}
 		out = append(out, ev)
 	}
-	if len(items) > 0 && len(out) == 0 {
+	if len(items) > 0 && readable == 0 {
 		return nil, errors.New("none of the results had a title and a start time it could read; check the field mapping")
 	}
 	return out, nil
 }
 
-func mapEvent(it any, m FieldMap, loc *time.Location) (Event, bool) {
+func mapEvent(it any, m FieldMap, loc *time.Location) (Event, bool, error) {
 	str := func(path, def string) string {
 		v, _ := lookup(it, or(path, def))
 		switch x := v.(type) {
@@ -226,9 +240,12 @@ func mapEvent(it any, m FieldMap, loc *time.Location) (Event, bool) {
 	var ev Event
 	ev.Title = str(m.Title, defaultMap.Title)
 	startV, _ := lookup(it, or(m.Start, defaultMap.Start))
-	start, dateOnly, ok := parseWhen(startV, loc)
+	start, dateOnly, ok, err := parseWhen(startV, loc)
+	if err != nil {
+		return ev, false, err
+	}
 	if ev.Title == "" || !ok {
-		return ev, false
+		return ev, false, nil
 	}
 	ev.Start, ev.AllDay = start, dateOnly
 	if v, found := lookup(it, or(m.AllDay, defaultMap.AllDay)); found {
@@ -237,7 +254,11 @@ func mapEvent(it any, m FieldMap, loc *time.Location) (Event, bool) {
 		}
 	}
 	endV, _ := lookup(it, or(m.End, defaultMap.End))
-	if end, _, ok := parseWhen(endV, loc); ok && end.After(start) {
+	end, _, ok, err := parseWhen(endV, loc)
+	if err != nil {
+		return ev, false, err
+	}
+	if ok && end.After(start) {
 		ev.End = end
 	} else if ev.AllDay {
 		ev.End = start.AddDate(0, 0, 1)
@@ -249,41 +270,75 @@ func mapEvent(it any, m FieldMap, loc *time.Location) (Event, bool) {
 	}
 	ev.Title = truncateRunes(ev.Title, 300)
 	ev.Location = truncateRunes(ev.Location, 300)
-	return ev, true
+	return ev, true, nil
 }
 
 // parseWhen reads a time: a string (RFC 3339, a local date-time, or a
 // date for an all-day event), a Unix time, or an object like Google's
 // {"dateTime": …, "date": …, "timeZone": …}.
-func parseWhen(v any, loc *time.Location) (time.Time, bool, bool) {
+// An explicit time zone that can't be resolved is an error, never
+// silently the viewer's.
+func parseWhen(v any, loc *time.Location) (t time.Time, dateOnly, ok bool, err error) {
 	switch x := v.(type) {
 	case string:
-		return parseTimeString(x, loc)
+		t, dateOnly, ok = parseTimeString(x, loc)
+		return t, dateOnly, ok, nil
 	case json.Number:
 		n, err := x.Int64()
 		if err != nil || n <= 0 {
-			return time.Time{}, false, false
+			return time.Time{}, false, false, nil
 		}
 		if n > 1e12 { // milliseconds
 			n /= 1000
 		}
-		return time.Unix(n, 0).In(loc), false, true
+		return time.Unix(n, 0).In(loc), false, true, nil
 	case map[string]any:
-		if tz, ok := x["timeZone"].(string); ok && tz != "" {
-			if l, err := time.LoadLocation(tz); err == nil {
-				loc = l
+		if tz, isStr := x["timeZone"].(string); isStr && strings.TrimSpace(tz) != "" {
+			l, err := zoneNamed(tz)
+			if err != nil {
+				return time.Time{}, false, false, err
 			}
+			loc = l
 		}
-		for _, k := range []string{"dateTime", "date_time", "datetime"} {
-			if s, ok := x[k].(string); ok && s != "" {
-				return parseTimeString(s, loc)
+		for _, k := range []string{"dateTime", "date_time", "datetime", "date"} {
+			if s, isStr := x[k].(string); isStr && s != "" {
+				t, dateOnly, ok = parseTimeString(s, loc)
+				return t, dateOnly, ok, nil
 			}
-		}
-		if s, ok := x["date"].(string); ok && s != "" {
-			return parseTimeString(s, loc)
 		}
 	}
-	return time.Time{}, false, false
+	return time.Time{}, false, false, nil
+}
+
+// graphZones maps the Windows time zone names Microsoft Graph uses (lower
+// case) to IANA names: the common ones; others can be given as IANA names.
+var graphZones = map[string]string{
+	"utc": "UTC", "coordinated universal time": "UTC", "gmt standard time": "Europe/London", "greenwich standard time": "Atlantic/Reykjavik",
+	"w. europe standard time": "Europe/Berlin", "romance standard time": "Europe/Paris", "central europe standard time": "Europe/Budapest",
+	"central european standard time": "Europe/Warsaw", "e. europe standard time": "Europe/Chisinau", "fle standard time": "Europe/Kiev",
+	"gtb standard time": "Europe/Bucharest", "russian standard time": "Europe/Moscow", "turkey standard time": "Europe/Istanbul",
+	"israel standard time": "Asia/Jerusalem", "south africa standard time": "Africa/Johannesburg", "arabian standard time": "Asia/Dubai",
+	"india standard time": "Asia/Kolkata", "china standard time": "Asia/Shanghai", "singapore standard time": "Asia/Singapore",
+	"tokyo standard time": "Asia/Tokyo", "korea standard time": "Asia/Seoul", "aus eastern standard time": "Australia/Sydney",
+	"e. australia standard time": "Australia/Brisbane", "cen. australia standard time": "Australia/Adelaide", "w. australia standard time": "Australia/Perth",
+	"new zealand standard time": "Pacific/Auckland", "hawaiian standard time": "Pacific/Honolulu", "alaskan standard time": "America/Anchorage",
+	"pacific standard time": "America/Los_Angeles", "us mountain standard time": "America/Phoenix", "mountain standard time": "America/Denver",
+	"central standard time": "America/Chicago", "eastern standard time": "America/New_York", "atlantic standard time": "America/Halifax",
+	"newfoundland standard time": "America/St_Johns", "canada central standard time": "America/Regina", "sa pacific standard time": "America/Bogota",
+	"central standard time (mexico)": "America/Mexico_City", "e. south america standard time": "America/Sao_Paulo", "argentina standard time": "America/Buenos_Aires",
+}
+
+// zoneNamed resolves an IANA or a Windows time zone name.
+func zoneNamed(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if iana, ok := graphZones[strings.ToLower(name)]; ok {
+		name = iana
+	}
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("unknown time zone %q in the result", name)
+	}
+	return l, nil
 }
 
 func parseTimeString(s string, loc *time.Location) (time.Time, bool, bool) {

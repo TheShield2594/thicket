@@ -618,11 +618,17 @@ func (a *Adapter) v2KidChats(w http.ResponseWriter, r *http.Request, u *store.Us
 
 // v2KidLimits replaces a kid sprig's time limits (its parents only).
 func (a *Adapter) v2KidLimits(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var l character.KidLimits
+	// A pointer, so a JSON null is refused rather than read as "no limits";
+	// {} is how limits are cleared.
+	var l *character.KidLimits
 	if !decodeBody(w, r, &l) {
 		return
 	}
-	c, err := a.Household.SetKidLimits(r.Context(), u, r.PathValue("id"), l)
+	if l == nil {
+		writeErr(w, http.StatusBadRequest, "send the limits as an object; {} clears them")
+		return
+	}
+	c, err := a.Household.SetKidLimits(r.Context(), u, r.PathValue("id"), *l)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

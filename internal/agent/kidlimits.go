@@ -65,11 +65,27 @@ func usageOf(msgs []store.KidChatMessage) kidUsage {
 	return u
 }
 
-// kidUsageToday is a kid's chatting with c since midnight in their timezone.
+// What a kid hears at a limit: fixed lines, written in code. They're kept
+// in the chat for parents, and never count as chatting (isLimitNotice).
+const (
+	limitSchoolNight = "It's a school night, so that's all for today. Sleep well, and I'll be right here tomorrow! 🌙"
+	limitHours       = "It's not chat time right now. I'll be here from %s, see you then! 🌙"
+	limitAllowance   = "That's all our chatting for today! I had fun. See you tomorrow! 🌱"
+	limitUnchecked   = "I can't check our chat time right now, so let's try again in a little while! 🌱"
+)
+
+// isLimitNotice reports whether a sprig's message is one of the limit lines.
+func isLimitNotice(s string) bool {
+	hours, _, _ := strings.Cut(limitHours, "%s")
+	return s == limitSchoolNight || s == limitAllowance || s == limitUnchecked || strings.HasPrefix(s, hours)
+}
+
+// kidUsageToday is a kid's chatting with c since midnight in their
+// timezone. Limit notices, and the messages they answered, don't count.
 func (e *Engine) kidUsageToday(ctx context.Context, kid *store.User, c *character.Character) (kidUsage, error) {
 	now := e.now().In(kid.Location())
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	msgs, err := e.DB.KidMessagesBetween(ctx, kid.ID, c.ID, midnight, now.Add(time.Second))
+	msgs, err := e.DB.KidMessagesBetween(ctx, kid.ID, c.ID, midnight, now.Add(time.Second), isLimitNotice)
 	if err != nil {
 		return kidUsage{}, err
 	}
@@ -77,36 +93,70 @@ func (e *Engine) kidUsageToday(ctx context.Context, kid *store.User, c *characte
 }
 
 // kidLimitReply is what a kid hears instead of a reply when a limit is
-// reached, or "" to answer as usual.
+// reached, or "" to answer as usual. A message that must alert (self-harm)
+// is always answered; the caller decides for messages the classifier
+// screens (kidLimitApplies).
 func (e *Engine) kidLimitReply(ctx context.Context, kid *store.User, c *character.Character, text string) string {
-	l := c.Limits
-	if !kid.IsKid() || !c.IsKid() || !l.Any() || mustAlert.MatchString(text) {
+	if mustAlert.MatchString(text) {
 		return ""
 	}
-	why := l.Closed(e.now().In(kid.Location()))
-	if why == "" && (l.DailyMinutes > 0 || l.DailyMessages > 0) {
-		u, err := e.kidUsageToday(ctx, kid, c)
-		if err != nil {
-			e.Log.Warn("kid usage", "kid", kid.ID, "err", err)
-		}
-		if l.DailyMessages > 0 && u.Messages >= l.DailyMessages || l.DailyMinutes > 0 && u.Minutes >= l.DailyMinutes {
-			why = "allowance"
-		}
+	why, err := e.kidLimitReason(ctx, kid, c)
+	if err != nil {
+		// Never treat an unreadable count as zero.
+		e.Log.Warn("kid usage", "kid", kid.ID, "err", err)
+		e.logActivity(ctx, "warn", "safety", c.ID, kid.ID, "couldn't check the time limit", shortErr(err))
+		return limitUnchecked
 	}
 	if why == "" {
 		return ""
 	}
 	if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("kidlimit:%d:%s:%s", kid.ID, c.ID, why), time.Hour); ok {
+		label := map[string]string{"school_night": "school-night time", "hours": "chat hours", "allowance": "daily allowance"}[why]
 		e.logActivity(ctx, "info", "safety", c.ID, kid.ID, "time limit reached ("+why+")", "")
+		e.addTrail(ctx, kid.ID, c.ID, store.TrailLimit, fmt.Sprintf("%s stopped chatting with %s: %s", c.DisplayName(), userName(kid), label), "", nil)
 	}
 	switch why {
 	case "school_night":
-		return "It's a school night, so that's all for today. Sleep well, and I'll be right here tomorrow! 🌙"
+		return limitSchoolNight
 	case "hours":
-		start := strings.SplitN(l.Hours, "-", 2)[0]
-		return fmt.Sprintf("It's not chat time right now. I'll be here from %s, see you then! 🌙", start)
+		return fmt.Sprintf(limitHours, strings.SplitN(c.Limits.Hours, "-", 2)[0])
 	}
-	return "That's all our chatting for today! I had fun. See you tomorrow! 🌱"
+	return limitAllowance
+}
+
+// kidLimitReason says which limit rules chatting out now ("school_night",
+// "hours" or "allowance"; "" for none), recording nothing.
+func (e *Engine) kidLimitReason(ctx context.Context, kid *store.User, c *character.Character) (string, error) {
+	l := c.Limits
+	if !kid.IsKid() || !c.IsKid() || !l.Any() {
+		return "", nil
+	}
+	if why := l.Closed(e.now().In(kid.Location())); why != "" {
+		return why, nil
+	}
+	if l.DailyMinutes == 0 && l.DailyMessages == 0 {
+		return "", nil
+	}
+	u, err := e.kidUsageToday(ctx, kid, c)
+	if err != nil {
+		return "", err
+	}
+	if l.DailyMessages > 0 && u.Messages >= l.DailyMessages || l.DailyMinutes > 0 && u.Minutes >= l.DailyMinutes {
+		return "allowance", nil
+	}
+	return "", nil
+}
+
+// sayLimit posts a limit line as the kid sprig and keeps it in the chat
+// for parents.
+func (e *Engine) sayLimit(ctx context.Context, chatRef string, conv *store.Conversation, c *character.Character, msg string) error {
+	if err := e.send(ctx, chatRef, c, msg); err != nil {
+		return err
+	}
+	if conv == nil {
+		return nil
+	}
+	return e.DB.AddMessage(ctx, conv.ID, "assistant", c.ID, msg)
 }
 
 // describeLimits says a kid sprig's limits in a line.
@@ -133,6 +183,10 @@ func describeLimits(l character.KidLimits) string {
 // SetKidLimits changes a kid sprig's time limits. Only its parents may,
 // and every change goes in the trail and can be undone.
 func (e *Engine) SetKidLimits(ctx context.Context, parent *store.User, sprig string, l character.KidLimits) (*character.Character, error) {
+	// Read, change and write under one lock, so a parent's other change to
+	// this sprig (KidAccess, an undo) is never overwritten by a stale copy.
+	e.kidMu.Lock()
+	defer e.kidMu.Unlock()
 	c, ok := e.Chars.Get(sprig)
 	if !ok || !c.IsKid() {
 		return nil, fmt.Errorf("no kid sprig %q", sprig)
@@ -146,12 +200,34 @@ func (e *Engine) SetKidLimits(ctx context.Context, parent *store.User, sprig str
 	if l == c.Limits {
 		return c, nil
 	}
+	old, err := json.Marshal(c.Limits)
+	if err != nil {
+		return nil, err
+	}
+	set, err := json.Marshal(l)
+	if err != nil {
+		return nil, err
+	}
+	undo, err := json.Marshal(trailUndo{Type: "limits", Character: c.ID, Args: old, Set: string(set)})
+	if err != nil {
+		return nil, err
+	}
 	if err := e.writeLimits(ctx, c, l); err != nil {
 		return nil, err
 	}
-	old, _ := json.Marshal(c.Limits)
-	e.addTrail(ctx, parent.ID, c.ID, store.TrailGrant, fmt.Sprintf("%s's time limits: %s → %s", c.DisplayName(), describeLimits(c.Limits), describeLimits(l)), "",
-		&trailUndo{Type: "limits", Character: c.ID, Args: old})
+	// No change without its trail entry (and its undo): put it back if the
+	// entry can't be written.
+	if _, err := e.DB.AddTrailID(ctx, store.TrailEntry{UserID: parent.ID, Character: c.ID, Kind: store.TrailGrant,
+		Summary: fmt.Sprintf("%s's time limits: %s → %s", c.DisplayName(), describeLimits(c.Limits), describeLimits(l)), Undo: undo}); err != nil {
+		cur, _ := e.Chars.Get(sprig)
+		if cur == nil {
+			cur = c
+		}
+		if rerr := e.writeLimits(ctx, cur, c.Limits); rerr != nil {
+			return nil, fmt.Errorf("the limits changed but couldn't be recorded in the trail (%v), nor put back (%v): check %s's file", err, rerr, c.DisplayName())
+		}
+		return nil, fmt.Errorf("the change couldn't be recorded in the trail, so it was put back: %w", err)
+	}
 	got, _ := e.Chars.Get(sprig)
 	return got, nil
 }
@@ -230,29 +306,40 @@ func (e *Engine) toolKidLimits(ctx context.Context, t *turn, args json.RawMessag
 	var c *character.Character
 	switch want := strings.TrimSpace(a.Sprig); {
 	case want != "":
+		// An exact id first; then a name, which must be unambiguous.
+		var byName []*character.Character
 		for _, k := range mine {
-			if strings.EqualFold(k.ID, want) || strings.EqualFold(k.Name, want) || strings.EqualFold(k.DisplayName(), want) {
+			if strings.EqualFold(k.ID, want) {
 				c = k
+				break
+			}
+			if strings.EqualFold(k.Name, want) || strings.EqualFold(k.DisplayName(), want) {
+				byName = append(byName, k)
 			}
 		}
-		if c == nil {
+		switch {
+		case c != nil:
+		case len(byName) == 1:
+			c = byName[0]
+		case len(byName) > 1:
+			return "", fmt.Errorf("more than one kid sprig they look after is called %q: name it by id (%s)", want, kidSprigIDs(byName))
+		default:
 			return "", fmt.Errorf("%q isn't a kid sprig they look after (theirs: %s)", want, kidSprigNames(mine))
 		}
 	case len(mine) == 1:
 		c = mine[0]
 	}
-	var out []string
-	if a.Report != "" {
-		if err := e.SetKidReportFor(ctx, t.user, a.Report); err != nil {
-			return "", err
-		}
-		out = append(out, "Their kid report is now "+a.Report+".")
+	// Everything is checked before anything is saved.
+	setLimits := a.Hours != nil || a.SchoolNights != nil || a.DailyMinutes != nil || a.DailyMessages != nil
+	if setLimits && c == nil {
+		return "", fmt.Errorf("which kid sprig? They look after %s", kidSprigNames(mine))
 	}
-	if a.Hours != nil || a.SchoolNights != nil || a.DailyMinutes != nil || a.DailyMessages != nil {
-		if c == nil {
-			return "", fmt.Errorf("which kid sprig? They look after %s", kidSprigNames(mine))
-		}
-		l := c.Limits
+	if a.Report != "" && !store.ValidKidReport(a.Report) {
+		return "", fmt.Errorf("report is daily, weekly or off, not %q", a.Report)
+	}
+	var l character.KidLimits
+	if setLimits {
+		l = c.Limits
 		clock := func(s *string) string {
 			if v := strings.TrimSpace(*s); !strings.EqualFold(v, "off") && !strings.EqualFold(v, "none") {
 				return v
@@ -271,8 +358,23 @@ func (e *Engine) toolKidLimits(ctx context.Context, t *turn, args json.RawMessag
 		if a.DailyMessages != nil {
 			l.DailyMessages = *a.DailyMessages
 		}
+		if probs := l.Problems(); len(probs) > 0 {
+			return "", errors.New(strings.Join(probs, "; "))
+		}
+	}
+	var out []string
+	if a.Report != "" {
+		if err := e.SetKidReportFor(ctx, t.user, a.Report); err != nil {
+			return "", err
+		}
+		out = append(out, "Their kid report is now "+a.Report+".")
+	}
+	if setLimits {
 		got, err := e.SetKidLimits(ctx, t.user, c.ID, l)
 		if err != nil {
+			if len(out) > 0 {
+				return "", fmt.Errorf("%s But the limits weren't changed: %w", out[0], err)
+			}
 			return "", err
 		}
 		out = append(out, fmt.Sprintf("%s's limits are now: %s (in %s's timezone). It's in the trail and can be undone.", got.DisplayName(), describeLimits(got.Limits), e.kidNames(ctx, got.Kids)))
@@ -295,6 +397,14 @@ func (e *Engine) toolKidLimits(ctx context.Context, t *turn, args json.RawMessag
 	}
 	fmt.Fprintf(&b, "Their kid report: %s.", mode)
 	return b.String(), nil
+}
+
+func kidSprigIDs(cs []*character.Character) string {
+	var ids []string
+	for _, c := range cs {
+		ids = append(ids, c.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 func kidSprigNames(cs []*character.Character) string {
@@ -326,7 +436,7 @@ func (e *Engine) buildKidReport(ctx context.Context, c *character.Character, fro
 	r := &KidReport{ID: c.ID, Sprig: c.DisplayName(), Kids: e.kidNames(ctx, c.Kids), Limits: c.Limits, From: from, To: to}
 	var said []string
 	for _, id := range c.Kids {
-		msgs, err := e.DB.KidMessagesBetween(ctx, id, c.ID, from, to)
+		msgs, err := e.DB.KidMessagesBetween(ctx, id, c.ID, from, to, isLimitNotice)
 		if err != nil {
 			return nil, err
 		}
@@ -384,7 +494,7 @@ func (e *Engine) kidTopics(ctx context.Context, c *character.Character, said []s
 func (r *KidReport) Text(day bool) string {
 	when := "this week"
 	if day {
-		when = "today"
+		when = "on " + r.From.In(r.To.Location()).Format("Monday 2 January")
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s with %s, %s**\n", r.Sprig, r.Kids, when)
@@ -401,7 +511,7 @@ func (r *KidReport) Text(day bool) string {
 		b.WriteString("Topics: " + r.Topics + "\n")
 	}
 	if r.Safety > 0 {
-		b.WriteString("Flagged: " + countOf(r.Safety, "safety alert", "safety alerts") + " (sent to you at the time).\n")
+		b.WriteString("Flagged: " + countOf(r.Safety, "message", "messages") + " by the safety check (alerts came to you at the time, at most one an hour per concern).\n")
 	} else {
 		b.WriteString("Flagged: nothing.\n")
 	}
@@ -422,7 +532,7 @@ func minutesText(m int) string {
 
 // DailyKidReports sends parents who chose daily reports one per kid sprig
 // they look after, at the household digest time in their timezone, for
-// the day before it. Nothing goes out for a sprig with no chatting and no
+// the calendar day before. Nothing goes out for a sprig with no chatting and no
 // alerts. The initiative loop runs it every few minutes.
 func (e *Engine) DailyKidReports(ctx context.Context) {
 	host, ok := e.Chars.Host()
@@ -469,8 +579,13 @@ func (e *Engine) DailyKidReports(ctx context.Context) {
 			if claimed, err := e.DB.ClaimOnce(ctx, key); err != nil || !claimed {
 				continue
 			}
-			r, err := e.buildKidReport(ctx, c, due.AddDate(0, 0, -1), due, true)
+			// The calendar day before (midnight to midnight, in their
+			// timezone, whatever daylight saving does).
+			dayEnd := time.Date(due.Year(), due.Month(), due.Day(), 0, 0, 0, 0, loc)
+			r, err := e.buildKidReport(ctx, c, dayEnd.AddDate(0, 0, -1), dayEnd, true)
 			if err != nil {
+				// Nothing went out: let a later tick try again.
+				_ = e.DB.ReleaseNotice(ctx, key)
 				e.logActivity(ctx, "error", "initiative", host.ID, u.ID, "a kid report couldn't be put together", err.Error())
 				continue
 			}

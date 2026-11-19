@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,6 +85,7 @@ type Engine struct {
 	active    sync.Map   // chatRef -> character id
 	drafts    sync.Map   // user id -> *character.Character
 	kidDrafts sync.Map   // user id -> *kidDraft
+	kidMu     sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
@@ -323,6 +325,16 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 
 	query := strings.TrimSpace(typed + attachmentNotes(in.Attachments))
+	// A kid past a time limit gets no reply from the model, so their
+	// attachments aren't read either: except voice notes, which are
+	// transcribed so the safety check hears what they said.
+	if user.IsKid() && len(in.Attachments) > 0 {
+		if c, _ := e.replySprig(in, user, addressed); c != nil {
+			if why, _ := e.kidLimitReason(ctx, user, c); why != "" {
+				in.Attachments = slices.DeleteFunc(slices.Clone(in.Attachments), func(a channel.Attachment) bool { return classify(a) != kindAudio })
+			}
+		}
+	}
 	var media loaded
 	if len(in.Attachments) > 0 {
 		if ch := e.channelFor(in.Channel); ch != nil {
@@ -362,14 +374,24 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, pdfPages: media.pdfPages,
 		packages: media.packages, userMsgID: msgID, spokenTo: media.spoken}
 	if user.IsKid() {
-		// After the reply, so the kid isn't kept waiting; never blocks it.
-		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
-		// Past a time limit the kid hears so, kindly; no model is called.
-		if msg := e.kidLimitReply(ctx, user, char, in.Text); msg != "" {
-			if err := e.send(ctx, in.ChatRef(), char, msg); err != nil {
-				return err
+		// Past a time limit the kid hears so, kindly, and no reply model is
+		// called. A message the safety check screens is screened first: if
+		// it's flagged (or can't be screened), the kid gets a real answer.
+		msg := e.kidLimitReply(ctx, user, char, in.Text)
+		if msg != "" && maybeAlert.MatchString(in.Text) {
+			concern, summary, failed := e.screen(ctx, user, char, in.Text)
+			if concern != "" {
+				e.alertParents(context.WithoutCancel(ctx), user, char, concern, summary, strings.TrimSpace(in.Text))
 			}
-			return e.DB.AddMessage(ctx, conv.ID, "assistant", char.ID, msg)
+			if concern != "" || failed {
+				msg = ""
+			}
+		} else {
+			// After the reply, so the kid isn't kept waiting; never blocks it.
+			defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
+		}
+		if msg != "" {
+			return e.sayLimit(ctx, in.ChatRef(), conv, char, msg)
 		}
 	}
 	if err := e.respond(ctx, t, ""); err != nil {
@@ -515,6 +537,11 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		target, ok := e.Chars.Get(h.to)
 		if !ok || !target.UsableBy(t.user) {
 			return nil
+		}
+		// A kid sprig past its own time limit doesn't pick it up.
+		if msg := e.kidLimitReply(ctx, t.user, target, t.query); msg != "" && target.IsKid() {
+			e.active.Store(t.chatRef, target.ID)
+			return e.sayLimit(ctx, t.chatRef, t.conv, target, msg)
 		}
 		e.logActivity(ctx, "info", "handoff", t.char.ID, t.user.ID, fmt.Sprintf("%s handed off to %s", t.char.DisplayName(), target.DisplayName()), h.message)
 		e.active.Store(t.chatRef, target.ID)

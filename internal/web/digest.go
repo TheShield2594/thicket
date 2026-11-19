@@ -70,19 +70,29 @@ func (a *Adapter) setDigest(w http.ResponseWriter, r *http.Request, u *store.Use
 	if !decodeBody(w, r, &b) {
 		return
 	}
-	if b.Mode != "" {
-		mode := strings.ToLower(strings.TrimSpace(b.Mode))
-		if !store.ValidDigestMode(mode) {
-			writeErr(w, http.StatusBadRequest, "mode is always, skip_empty or off")
-			return
-		}
+	mode := strings.ToLower(strings.TrimSpace(b.Mode))
+	kids := strings.ToLower(strings.TrimSpace(b.Kids))
+	// Both checked before either is saved.
+	if mode == "" && kids == "" {
+		writeErr(w, http.StatusBadRequest, "give mode (always, skip_empty or off) or kids (daily, weekly or off)")
+		return
+	}
+	if mode != "" && !store.ValidDigestMode(mode) {
+		writeErr(w, http.StatusBadRequest, "mode is always, skip_empty or off")
+		return
+	}
+	if kids != "" && !store.ValidKidReport(kids) {
+		writeErr(w, http.StatusBadRequest, "kids is daily, weekly or off")
+		return
+	}
+	if mode != "" {
 		if err := a.Digest.SetDigestModeFor(r.Context(), u, mode); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
-	if b.Kids != "" {
-		if err := a.Digest.SetKidReportFor(r.Context(), u, strings.ToLower(strings.TrimSpace(b.Kids))); err != nil {
+	if kids != "" {
+		if err := a.Digest.SetKidReportFor(r.Context(), u, kids); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}

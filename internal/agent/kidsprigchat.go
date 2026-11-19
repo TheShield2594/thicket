@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,13 @@ import (
 // approval. Only the approved spec is created, through CreateKidSprig,
 // so the same checks, cap and trail apply as from the API. Afterwards the
 // parents hear what they can do, and the kid gets a first hello.
+
+// kidSprigApproval is what the admin approves: the spec, and the monthly
+// cap the parent preview showed.
+type kidSprigApproval struct {
+	Spec   KidSprigSpec `json:"spec"`
+	CapUSD float64      `json:"cap_usd"`
+}
 
 // kidDraft is an admin's latest kid sprig preview.
 type kidDraft struct {
@@ -57,6 +65,11 @@ func (e *Engine) toolCreateKidSprig(ctx context.Context, t *turn, args json.RawM
 	}
 	if t.user.IsKid() || !t.user.IsAdmin() {
 		return "", errors.New("only the owner or an admin can set up a kid sprig: ask them to")
+	}
+	// The preview and the parent preview name the household's kids and
+	// parents: never in a group channel.
+	if !t.isDM {
+		return "A kid sprig is set up in a DM, never in a group channel: ask them to continue in a DM (or the web app) and set it up there.", nil
 	}
 	if a.Action == "create" {
 		return e.proposeKidSprig(ctx, t, strings.ToLower(strings.TrimSpace(a.ID)))
@@ -142,7 +155,10 @@ func (e *Engine) proposeKidSprig(ctx context.Context, t *turn, id string) (strin
 	if err != nil {
 		return "", err
 	}
-	b, _ := json.Marshal(d.spec)
+	b, err := json.Marshal(kidSprigApproval{Spec: d.spec, CapUSD: e.Settings.Float(ctx, "budget.kid_monthly_usd")})
+	if err != nil {
+		return "", err
+	}
 	t.askAs(t.char, e.kidSprigPreview(ctx, c, d), &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: t.chatRef,
 		Tool: internalPrefix + "create_kid_sprig", Args: string(b)})
 	e.logActivity(ctx, "info", "character", t.char.ID, t.user.ID, "proposed kid sprig "+c.DisplayName(), "")
@@ -173,15 +189,23 @@ func (e *Engine) kidSprigPreview(ctx context.Context, c *character.Character, d 
 // createKidSprigApproved creates an approved kid sprig, exactly as shown,
 // then tells its parents what they can do and has it say hello to the kid.
 func (e *Engine) createKidSprigApproved(ctx context.Context, user *store.User, args json.RawMessage) (string, error) {
-	var spec KidSprigSpec
-	if err := json.Unmarshal(args, &spec); err != nil {
+	var ap kidSprigApproval
+	if err := json.Unmarshal(args, &ap); err != nil {
 		return "", err
+	}
+	spec := ap.Spec
+	// Only the cap the parent preview showed.
+	if now := e.Settings.Float(ctx, "budget.kid_monthly_usd"); now != ap.CapUSD {
+		return "", fmt.Errorf("the monthly cap for new kid sprigs changed since the preview (%s → %s), so nothing was created: preview it again and approve that", money(ap.CapUSD), money(now))
 	}
 	c, err := e.CreateKidSprig(ctx, user, spec)
 	if err != nil {
 		return "", err
 	}
-	e.kidDrafts.Delete(user.ID)
+	// Drop the draft only if it's still the one approved: a newer preview stays.
+	if v, ok := e.kidDrafts.Load(user.ID); ok && reflect.DeepEqual(v.(*kidDraft).spec, spec) {
+		e.kidDrafts.CompareAndDelete(user.ID, v)
+	}
 	bg := context.WithoutCancel(ctx)
 	var kidNames, parentNames []string
 	var kids []*store.User
@@ -201,17 +225,25 @@ func (e *Engine) createKidSprigApproved(ctx context.Context, user *store.User, a
 	// The other parents hear it from Juni; the one who approved it hears it
 	// in this reply.
 	host, _ := e.Chars.Host()
+	var unreached []string
 	for _, pid := range c.Parents {
 		if pid == user.ID {
 			continue
 		}
 		parent, err := e.DB.UserByID(bg, pid)
-		if err != nil || parent.IsKid() || host == nil {
+		if err != nil || parent.IsKid() {
+			unreached = append(unreached, fmt.Sprintf("user %d", pid))
 			continue
 		}
 		msg := fmt.Sprintf("🌱 %s set up %s, a kid sprig for %s, with you as one of its parents.\n%s", userName(user), c.DisplayName(), kidList, guide)
-		if err := e.sendNotice(bg, parent, host, msg); err != nil {
+		if host == nil {
+			err = errors.New("no host to send it")
+		} else {
+			err = e.sendNotice(bg, parent, host, msg)
+		}
+		if err != nil {
 			e.Log.Warn("tell a parent about a new kid sprig", "parent", pid, "err", err)
+			unreached = append(unreached, userName(parent))
 		}
 	}
 	hellos := 0
@@ -228,6 +260,13 @@ func (e *Engine) createKidSprigApproved(ctx context.Context, user *store.User, a
 	if !slices.Contains(c.Parents, user.ID) {
 		out = fmt.Sprintf("%s has been created for %s. Its parents (%s) have been told what they can do; the user approved it but isn't one of its parents, so they can't read its chats.",
 			c.DisplayName(), kidList, strings.Join(parentNames, " and "))
+		if len(unreached) > 0 {
+			out = fmt.Sprintf("%s has been created for %s, with %s as its parents; the user approved it but isn't one of them, so they can't read its chats.",
+				c.DisplayName(), kidList, strings.Join(parentNames, " and "))
+		}
+	}
+	if len(unreached) > 0 {
+		out += fmt.Sprintf("\nThe note telling %s what they can do couldn't be delivered: tell them, or ask them to look under Household in the web app.", strings.Join(unreached, " and "))
 	}
 	switch {
 	case hellos == len(kids) && hellos > 0:

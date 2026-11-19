@@ -220,19 +220,28 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		}
 		done = fmt.Sprintf("%s's tools are back to %s", c.DisplayName(), listOr(cp.Tools))
 	case "limits":
+		// Only while the limits are still what this change set: undoing an
+		// older change would overwrite a newer one.
+		e.kidMu.Lock()
+		defer e.kidMu.Unlock()
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {
 			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
 		}
-		var l character.KidLimits
+		var l, set character.KidLimits
 		if err := json.Unmarshal(u.Args, &l); err != nil {
 			return "", err
+		}
+		if err := json.Unmarshal([]byte(u.Set), &set); err != nil || set != c.Limits {
+			return "", fmt.Errorf("%s's time limits were changed again since (they're now %s): undo the latest change instead", c.DisplayName(), describeLimits(c.Limits))
 		}
 		if err := e.writeLimits(ctx, c, l); err != nil {
 			return "", err
 		}
 		done = fmt.Sprintf("%s's time limits are back to %s", c.DisplayName(), describeLimits(l))
 	case "allow":
+		e.kidMu.Lock()
+		defer e.kidMu.Unlock()
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {
 			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
