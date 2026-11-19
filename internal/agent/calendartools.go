@@ -247,6 +247,9 @@ func (e *Engine) RemoveSprigEvent(ctx context.Context, by *store.User, id int64)
 		return nil, 0, errors.New("kids can't change the calendar")
 	}
 	ev, err := e.DB.SprigEventByID(ctx, id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, 0, err
+	}
 	if err != nil || !ev.RemovableBy(by) {
 		return nil, 0, fmt.Errorf("no event %d on your calendar: %w", id, store.ErrNotFound)
 	}
@@ -268,11 +271,12 @@ func (e *Engine) RemoveSprigEvent(ctx context.Context, by *store.User, id int64)
 // takeOffCalendar removes a sprig output and records it in the trail with
 // what puts it back. who names whoever removed it (a sprig or a person).
 func (e *Engine) takeOffCalendar(ctx context.Context, userID int64, char, who, detail string, ev *store.SprigEvent) (int64, error) {
-	if err := e.DB.DeleteSprigEvent(ctx, ev.ID); err != nil {
+	undo, err := json.Marshal(trailUndo{Type: "restore_event", EventID: ev.ID})
+	if err != nil {
 		return 0, err
 	}
-	return e.addTrail(ctx, userID, char, store.TrailEvent, fmt.Sprintf("%s removed %q from the calendar", who, ev.Title), detail,
-		&trailUndo{Type: "restore_event", EventID: ev.ID}), nil
+	return e.DB.DeleteSprigEventWithTrail(ctx, ev.ID, store.TrailEntry{UserID: userID, Character: char, Kind: store.TrailEvent,
+		Summary: fmt.Sprintf("%s removed %q from the calendar", who, ev.Title), Detail: detail, Undo: undo})
 }
 
 // AddCalendar connects one of an adult's calendars, read-only, after

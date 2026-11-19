@@ -31,6 +31,10 @@ import (
 // heldMaxAge is how long a held message stays worth delivering.
 const heldMaxAge = 24 * time.Hour
 
+// heldClaimTimeout is how long a flush may hold a message it is
+// delivering before another flush may take it over (after a crash).
+const heldClaimTimeout = 10 * time.Minute
+
 // holdReason says why a message c starts itself for u must wait now:
 // store.HeldQuiet, store.HeldBudget, or "" when it may go out.
 func (e *Engine) holdReason(ctx context.Context, c *character.Character, u *store.User) string {
@@ -106,35 +110,58 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 				continue
 			}
 		}
-		if e.now().Sub(h.CreatedAt) > heldMaxAge {
-			if taken, _ := e.DB.TakeHeld(ctx, h.ID); !taken {
+		stale := e.now().Sub(h.CreatedAt) > heldMaxAge
+		if !stale {
+			if why := e.holdReason(ctx, char, user); why != "" {
+				if why != h.Reason {
+					_ = e.DB.SetHeldReason(ctx, h.ID, why)
+				}
 				continue
 			}
-			e.logActivity(ctx, "warn", "initiative", char.ID, user.ID, fmt.Sprintf("dropped held %s: it was more than a day old; it's in the inbox", h.Title), "")
-			e.deadLetter(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: h.Ref,
+		}
+		// Claimed, not removed: the message stays stored until it has
+		// reached the chat or the inbox, so a crash in between can't lose
+		// it (at worst it's sent twice).
+		if claimed, err := e.DB.ClaimHeld(ctx, h.ID, e.now(), e.now().Add(-heldClaimTimeout)); err != nil || !claimed {
+			continue
+		}
+		if stale {
+			err := e.deadLetterErr(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: h.Ref,
 				Title: fmt.Sprintf("%s was held too long to send (%s)", h.Title, holdLabel(h.Reason, char)), Detail: h.Text})
-			continue
-		}
-		if why := e.holdReason(ctx, char, user); why != "" {
-			if why != h.Reason {
-				_ = e.DB.SetHeldReason(ctx, h.ID, why)
+			if err != nil {
+				_ = e.DB.ReleaseHeld(ctx, h.ID)
+				continue
 			}
-			continue
-		}
-		if taken, _ := e.DB.TakeHeld(ctx, h.ID); !taken {
+			e.finishHeld(ctx, h.ID)
+			e.logActivity(ctx, "warn", "initiative", char.ID, user.ID, fmt.Sprintf("dropped held %s: it was more than a day old; it's in the inbox", h.Title), "")
 			continue
 		}
 		text := h.Text + "\n" + heldNote(h, user)
 		if err := e.sendProactive(ctx, user, char, text); err != nil {
 			e.Log.Error("deliver held message", "id", h.ID, "err", err)
-			e.deadLetter(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: h.Ref,
-				Title: fmt.Sprintf("%s was held, but couldn't be delivered", h.Title), Detail: h.Text})
+			// Not sent: keep it held (released for the next flush) unless the
+			// inbox takes it.
+			if e.deadLetterErr(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: h.Ref,
+				Title: fmt.Sprintf("%s was held, but couldn't be delivered", h.Title), Detail: h.Text}) != nil {
+				_ = e.DB.ReleaseHeld(ctx, h.ID)
+				continue
+			}
+			e.finishHeld(ctx, h.ID)
 			continue
 		}
+		e.finishHeld(ctx, h.ID)
 		e.logActivity(ctx, "info", "initiative", char.ID, user.ID, "delivered held "+h.Title, "")
 	}
 	if err := e.DB.PruneProactive(ctx, e.now().Add(-72*time.Hour)); err != nil {
 		e.Log.Warn("prune proactive counts", "err", err)
+	}
+}
+
+// finishHeld removes a delivered message. If that fails it stays claimed,
+// and is tried again once the claim goes stale.
+func (e *Engine) finishHeld(ctx context.Context, id int64) {
+	if err := e.DB.FinishHeld(context.WithoutCancel(ctx), id); err != nil {
+		e.Log.Error("remove delivered held message", "id", id, "err", err)
 	}
 }
 

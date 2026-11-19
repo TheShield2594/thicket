@@ -1063,6 +1063,11 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 	if !t.user.IsAdmin() && c.BelongsTo != t.user.ID {
 		return "", fmt.Errorf("%s is shared, so only an admin can change when it messages people", c.DisplayName())
 	}
+	// Start from the file as it is now: an earlier call in this turn may
+	// have changed the other setting.
+	if fresh, ok := e.Chars.Get(c.ID); ok {
+		c = fresh
+	}
 	cp := *c
 	if a.QuietHours != nil {
 		q := strings.TrimSpace(*a.QuietHours)

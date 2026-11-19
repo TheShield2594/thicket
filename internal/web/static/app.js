@@ -17,6 +17,7 @@ const S = {
   typing: new Map(),   // chat -> timestamp
   routines: new Map(), // sprig id -> routines
   proactive: new Map(), // sprig id -> {daily_messages, sent_today, held}
+  detailsAt: new Map(), // sprig id -> when its routines and proactive status were last fetched
   status: {},
   panes: [],           // open chat ids, left to right
   focus: 0,
@@ -608,9 +609,11 @@ async function loadChat(chat, opts = {}) {
 
 async function loadRoutines(id) {
   const session = S.session;
-  let routines = null, proactive = null;
-  try { ({ routines, proactive } = await api('/api/sprigs/' + encodeURIComponent(id))); } catch { /* shown as unavailable */ }
+  S.detailsAt.set(id, Date.now()); // also stops renderDetails asking again meanwhile
+  let routines = null, proactive = null, failed = false;
+  try { ({ routines, proactive } = await api('/api/sprigs/' + encodeURIComponent(id))); } catch { failed = true; }
   if (session !== S.session) return; // signed out meanwhile
+  if (failed && S.routines.get(id)) return; // a refresh failed: keep what's shown
   S.routines.set(id, routines);
   S.proactive.set(id, proactive || null);
   renderDetails();
@@ -737,7 +740,7 @@ function endSession() {
   S.session++;
   S.me = null;
   S.panes = []; S.focus = 0; S.details = false; S.filter = '';
-  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.proactive, S.drafts].forEach((m) => m.clear());
+  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.proactive, S.detailsAt, S.drafts].forEach((m) => m.clear());
   S.order = [];
   paneEls.clear();
   $sidebar = $main = null;
@@ -1674,7 +1677,10 @@ function renderDetails() {
   }
 
   const s = S.sprigs.get(sprigOf(chat));
+  // Routines and today's message count change on their own, so the cached
+  // copy is shown while a fresh one loads once it's a minute old.
   if (!S.routines.has(s.id)) { S.routines.set(s.id, undefined); loadRoutines(s.id); }
+  else if (Date.now() - (S.detailsAt.get(s.id) || 0) > 60000) loadRoutines(s.id);
   const routines = S.routines.get(s.id);
   const routineList = routines === undefined ? h('div.d-empty', {}, 'Loading…')
     : routines === null ? h('div.d-empty', {}, 'Couldn’t load routines.')

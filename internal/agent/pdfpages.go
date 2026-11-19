@@ -3,34 +3,52 @@ package agent
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"io"
 	"strconv"
 )
 
-// maxObjStmBytes bounds how much Thicket inflates while counting pages,
-// in total across a file's object streams, so a small PDF can't expand
-// into gigabytes.
-const maxObjStmBytes = 32 << 20
+const (
+	// maxObjStmBytes bounds how much Thicket inflates while counting
+	// pages, in total across a file's object streams, so a small PDF can't
+	// expand into gigabytes.
+	maxObjStmBytes = 32 << 20
+	// maxDictScan bounds how many bytes the dictionary searches may look
+	// at across one file, so a file full of /Type tokens can't make
+	// counting quadratic.
+	maxDictScan = 64 << 20
+	// maxDictReach is how far one search goes for a dictionary's ends.
+	maxDictReach = 64 << 10
+)
 
-// pdfPages estimates a PDF's page count, or 0 if it can't tell. It reads
-// both the page objects and the page tree's /Count, in the file itself
-// and in its compressed object streams (where modern tools keep them),
-// and returns the larger: an estimate that errs towards more pages.
-func pdfPages(b []byte) int {
-	pages, count := pdfPagesIn(b)
-	budget := maxObjStmBytes
-	for _, s := range objectStreams(b, &budget) {
-		p, c := pdfPagesIn(s)
+// pdfScan is the state of counting one file.
+type pdfScan struct {
+	work     int  // bytes the dictionary searches may still look at
+	complete bool // false once something couldn't be read
+}
+
+// pdfPages estimates a PDF's page count. It reads both the page objects
+// and the page tree's /Count, in the file itself and in its compressed
+// object streams (where modern tools keep them), and returns the larger:
+// an estimate that errs towards more pages. complete is false when part
+// of the file couldn't be read (an object stream cut off by the inflate
+// budget, damaged or in another compression, or the search budget ran
+// out): pages is then a lower bound.
+func pdfPages(b []byte) (pages int, complete bool) {
+	sc := &pdfScan{work: maxDictScan, complete: true}
+	pages, count := sc.pagesIn(b)
+	for _, s := range sc.objectStreams(b) {
+		p, c := sc.pagesIn(s)
 		pages += p
 		count = max(count, c)
 	}
-	return max(pages, count)
+	return max(pages, count), sc.complete
 }
 
-// pdfPagesIn reads one buffer of uncompressed PDF objects: the number of
+// pagesIn reads one buffer of uncompressed PDF objects: the number of
 // /Type /Page objects, and the largest /Count of a /Type /Pages node (the
 // root of the page tree counts every page).
-func pdfPagesIn(b []byte) (pages, count int) {
+func (sc *pdfScan) pagesIn(b []byte) (pages, count int) {
 	for i := 0; ; {
 		j := bytes.Index(b[i:], []byte("/Type"))
 		if j < 0 {
@@ -41,7 +59,9 @@ func pdfPagesIn(b []byte) (pages, count int) {
 		rest := bytes.TrimLeft(b[i:min(len(b), i+16)], " \t\r\n\f\x00")
 		switch {
 		case bytes.HasPrefix(rest, []byte("/Pages")) && !nameContinues(rest, len("/Pages")):
-			count = max(count, dictCount(b, at))
+			if lo, hi, ok := sc.dictAround(b, at); ok {
+				count = max(count, dictCount(b[lo:hi]))
+			}
 		case bytes.HasPrefix(rest, []byte("/Page")) && !nameContinues(rest, len("/Page")):
 			pages++
 		}
@@ -62,52 +82,80 @@ func nameContinues(rest []byte, n int) bool {
 	return true
 }
 
-// dictCount returns the /Count entry of the dictionary that contains
-// position at, or 0. Only the dictionary's own entries are read, not
-// those of dictionaries nested in it.
-func dictCount(b []byte, at int) int {
+// dictAround finds the dictionary that contains position at, nesting
+// aware: b[lo:hi] runs from its << to its >>. ok is false when it can't
+// be found within reach, or when the file's search budget is spent (which
+// marks the scan incomplete).
+func (sc *pdfScan) dictAround(b []byte, at int) (lo, hi int, ok bool) {
+	if sc.work <= 0 {
+		sc.complete = false
+		return 0, 0, false
+	}
 	// Back to the << that opens the enclosing dictionary.
 	depth, start := 0, -1
-	for i := at - 1; i > 0 && start < 0 && at-i < 64<<10; i-- {
+	i := at - 1
+	for ; i > 0 && start < 0 && at-i < maxDictReach; i-- {
 		switch {
 		case b[i] == '>' && b[i-1] == '>':
 			depth++
 			i--
 		case b[i] == '<' && b[i-1] == '<':
 			if depth == 0 {
-				start = i + 1
+				start = i - 1
 			} else {
 				depth--
 			}
 			i--
 		}
 	}
+	sc.work -= at - i
 	if start < 0 {
-		return 0
+		return 0, 0, false
 	}
-	// Forward through its entries at depth 1, up to the matching >>.
+	// Forward to the matching >>.
 	depth = 0
-	for i := start - 2; i+1 < len(b) && i-start < 64<<10; i++ {
+	j := start
+	for ; j+1 < len(b) && j-start < 2*maxDictReach; j++ {
 		switch {
-		case b[i] == '<' && b[i+1] == '<':
+		case b[j] == '<' && b[j+1] == '<':
+			depth++
+			j++
+		case b[j] == '>' && b[j+1] == '>':
+			depth--
+			j++
+			if depth == 0 {
+				sc.work -= j - start
+				return start, j + 1, true
+			}
+		}
+	}
+	sc.work -= j - start
+	return 0, 0, false
+}
+
+// dictCount returns the /Count entry of dictionary d (from << to >>), or
+// 0. Only its own entries are read, not those of dictionaries nested in
+// it.
+func dictCount(d []byte) int {
+	depth := 0
+	for i := 0; i+1 < len(d); i++ {
+		switch {
+		case d[i] == '<' && d[i+1] == '<':
 			depth++
 			i++
-		case b[i] == '>' && b[i+1] == '>':
+		case d[i] == '>' && d[i+1] == '>':
 			depth--
 			i++
-			if depth == 0 {
-				return 0
-			}
-		case depth == 1 && bytes.HasPrefix(b[i:], []byte("/Count")) && !nameContinues(b[i:], len("/Count")):
+		case depth == 1 && bytes.HasPrefix(d[i:], []byte("/Count")) && !nameContinues(d[i:], len("/Count")):
 			j := i + len("/Count")
-			for j < len(b) && (b[j] == ' ' || b[j] == '\t' || b[j] == '\r' || b[j] == '\n') {
+			for j < len(d) && (d[j] == ' ' || d[j] == '\t' || d[j] == '\r' || d[j] == '\n') {
 				j++
 			}
 			k := j
-			for k < len(b) && b[k] >= '0' && b[k] <= '9' && k-j < 9 {
+			for k < len(d) && d[k] >= '0' && d[k] <= '9' && k-j < 9 {
 				k++
 			}
-			n, err := strconv.Atoi(string(b[j:k]))
+			n, err := strconv.Atoi(string(d[j:k]))
 			if err != nil {
 				return 0
 			}
@@ -118,51 +166,64 @@ func dictCount(b []byte, at int) int {
 }
 
 // objectStreams inflates the file's Flate-compressed object streams
-// (/Type /ObjStm), spending at most *budget bytes of output in total.
-// Streams it can't read are skipped.
-func objectStreams(b []byte, budget *int) [][]byte {
+// (/Type /ObjStm) within the inflate budget. A stream it can't read in
+// full (another filter, damaged, or cut off by the budget) marks the scan
+// incomplete; what was read of it is still counted.
+func (sc *pdfScan) objectStreams(b []byte) [][]byte {
 	var out [][]byte
-	for i := 0; *budget > 0; {
+	budget := maxObjStmBytes
+	for i := 0; ; {
 		j := bytes.Index(b[i:], []byte("/ObjStm"))
 		if j < 0 {
 			return out
 		}
 		at := i + j
 		i = at + len("/ObjStm")
-		// The stream's dictionary ends before the stream keyword; it must
-		// ask for Flate, the only filter this reads.
-		k := bytes.Index(b[i:], []byte("stream"))
-		if k < 0 {
-			return out
-		}
-		dictEnd := i + k
-		if bytes.Contains(b[i:dictEnd], []byte("endstream")) {
+		lo, hi, ok := sc.dictAround(b, at)
+		if !ok {
+			sc.complete = false
 			continue
 		}
-		lo := bytes.LastIndex(b[max(0, at-4096):at], []byte("<<"))
-		if lo < 0 || !bytes.Contains(b[max(0, at-4096)+lo:dictEnd], []byte("/FlateDecode")) {
-			i = dictEnd
+		// The stream's data follows its dictionary and the stream keyword.
+		rest := bytes.TrimLeft(b[hi:], " \t\r\n\f\x00")
+		if !bytes.HasPrefix(rest, []byte("stream")) {
+			continue // a mention of /ObjStm that isn't a stream's type
+		}
+		if !bytes.Contains(b[lo:hi], []byte("/FlateDecode")) {
+			sc.complete = false
 			continue
 		}
-		data := dictEnd + len("stream")
+		data := len(b) - len(rest) + len("stream")
 		if data < len(b) && b[data] == '\r' {
 			data++
 		}
 		if data < len(b) && b[data] == '\n' {
 			data++
 		}
-		r, err := zlib.NewReader(bytes.NewReader(b[data:]))
-		if err != nil {
-			i = data
+		i = data
+		if budget <= 0 {
+			sc.complete = false
 			continue
 		}
-		s, _ := io.ReadAll(io.LimitReader(r, int64(*budget)))
+		r, err := zlib.NewReader(bytes.NewReader(b[data:]))
+		if err != nil {
+			sc.complete = false
+			continue
+		}
+		// One byte over the budget tells a cut-off stream from one that
+		// fits exactly.
+		s, err := io.ReadAll(io.LimitReader(r, int64(budget)+1))
 		r.Close()
-		*budget -= len(s)
+		if len(s) > budget {
+			s = s[:budget]
+			sc.complete = false
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			sc.complete = false
+		}
+		budget -= len(s)
 		if len(s) > 0 {
 			out = append(out, s)
 		}
-		i = data
 	}
-	return out
 }

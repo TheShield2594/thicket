@@ -92,13 +92,30 @@ func (s *Store) SetHeldReason(ctx context.Context, id int64, reason string) erro
 	return err
 }
 
-// TakeHeld removes a held message, reporting whether it was still there:
-// whoever takes it delivers (or drops) it, exactly once.
-func (s *Store) TakeHeld(ctx context.Context, id int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM held_messages WHERE id = ?", id)
+// ClaimHeld marks a held message as being delivered, reporting whether
+// this caller got it: only one flush delivers a message at a time. A claim
+// older than staleBefore (left by a crash mid-delivery) can be taken over.
+// The message stays stored until FinishHeld, so a crash can't lose it.
+func (s *Store) ClaimHeld(ctx context.Context, id int64, now, staleBefore time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE held_messages SET claimed_at = ? WHERE id = ? AND (claimed_at IS NULL OR claimed_at < ?)",
+		now.Unix(), id, staleBefore.Unix())
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// FinishHeld removes a claimed message once it was delivered (or stored
+// in the inbox).
+func (s *Store) FinishHeld(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM held_messages WHERE id = ?", id)
+	return err
+}
+
+// ReleaseHeld drops a claim after a failed delivery, so the next flush
+// tries again.
+func (s *Store) ReleaseHeld(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE held_messages SET claimed_at = NULL WHERE id = ?", id)
+	return err
 }

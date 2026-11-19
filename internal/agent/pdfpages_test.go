@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // plainPDF builds an uncompressed PDF with n page objects.
@@ -42,44 +43,59 @@ func compressedPDF(pages, count int) []byte {
 }
 
 func TestPDFPages(t *testing.T) {
+	// /DecodeParms is a nested dictionary between the stream dictionary's
+	// << and its /Filter: the filter must still be found.
+	parms := bytes.Replace(compressedPDF(1, 300), []byte("<< /Type /ObjStm"), []byte("<< /DecodeParms << /Predictor 1 >> /Type /ObjStm"), 1)
 	cases := []struct {
-		name string
-		pdf  []byte
-		want int
+		name     string
+		pdf      []byte
+		want     int
+		complete bool
 	}{
-		{"plain", plainPDF(3), 3},
-		{"plain, /Count larger than objects found", bytes.Replace(plainPDF(2), []byte("/Count 2"), []byte("/Count 80"), 1), 80},
-		{"compressed, counted by /Count", compressedPDF(1, 300), 300},
-		{"compressed, counted by objects", compressedPDF(60, 0), 60},
-		{"not a pdf at all", []byte("hello"), 0},
+		{"plain", plainPDF(3), 3, true},
+		{"plain, /Count larger than objects found", bytes.Replace(plainPDF(2), []byte("/Count 2"), []byte("/Count 80"), 1), 80, true},
+		{"compressed, counted by /Count", compressedPDF(1, 300), 300, true},
+		{"compressed, counted by objects", compressedPDF(60, 0), 60, true},
+		{"compressed, nested DecodeParms", parms, 300, true},
+		{"compressed, other filter", bytes.Replace(compressedPDF(1, 300), []byte("/FlateDecode"), []byte("/LZWDecode"), 1), 0, false},
+		{"compressed, cut off", compressedPDF(1, 300)[:200], 0, false},
+		{"not a pdf at all", []byte("hello"), 0, true},
 	}
 	for _, c := range cases {
-		if got := pdfPages(c.pdf); got != c.want {
-			t.Errorf("%s: got %d pages, want %d", c.name, got, c.want)
+		got, complete := pdfPages(c.pdf)
+		if got != c.want || complete != c.complete {
+			t.Errorf("%s: got %d pages (complete %v), want %d (complete %v)", c.name, got, complete, c.want, c.complete)
 		}
 	}
 }
 
 func TestPDFPagesInflateIsBounded(t *testing.T) {
 	// 64 MB of zeros compresses to a few tens of KB; counting must stop at
-	// the inflate budget instead of expanding all of it.
+	// the inflate budget instead of expanding all of it, and say the count
+	// is incomplete.
 	var z bytes.Buffer
 	w := zlib.NewWriter(&z)
 	w.Write(make([]byte, 64<<20))
 	w.Close()
 	pdf := append([]byte("%PDF-1.7\n4 0 obj\n<< /Type /ObjStm /Filter /FlateDecode >>\nstream\n"), z.Bytes()...)
 	pdf = append(pdf, []byte("\nendstream\nendobj\n")...)
-	budget := maxObjStmBytes
-	got := objectStreams(pdf, &budget)
-	if len(got) != 1 || len(got[0]) != maxObjStmBytes || budget != 0 {
-		t.Fatalf("inflated %d streams, budget left %d", len(got), budget)
+	sc := &pdfScan{work: maxDictScan, complete: true}
+	got := sc.objectStreams(pdf)
+	if len(got) != 1 || len(got[0]) != maxObjStmBytes || sc.complete {
+		t.Fatalf("inflated %d streams, complete %v", len(got), sc.complete)
 	}
 }
 
-func TestPDFPagesSkipsOtherFilters(t *testing.T) {
-	pdf := []byte("%PDF-1.7\n4 0 obj\n<< /Type /ObjStm /Filter /LZWDecode >>\nstream\nxxxx\nendstream\nendobj\n")
-	budget := maxObjStmBytes
-	if got := objectStreams(pdf, &budget); len(got) != 0 {
-		t.Fatalf("read %d streams with a filter it doesn't support", len(got))
+func TestPDFPagesSearchIsBounded(t *testing.T) {
+	// Many /Type /Pages tokens with no dictionary around them: each search
+	// gives up within reach, and the file-wide budget stops the rest.
+	pdf := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte("/Type /Pages "), 8<<20/13)...)
+	start := time.Now()
+	_, complete := pdfPages(pdf)
+	if complete {
+		t.Error("an exhausted search budget should make the count incomplete")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("counting took %v", d)
 	}
 }

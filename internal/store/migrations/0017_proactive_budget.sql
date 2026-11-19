@@ -22,6 +22,9 @@ CREATE TABLE held_messages (
     title      TEXT    NOT NULL DEFAULT '', -- what it is, for the dashboard
     reason     TEXT    NOT NULL CHECK (reason IN ('quiet', 'budget')),
     text       TEXT    NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- Set while a flush is delivering it; cleared if that fails. A claim
+    -- left by a crash goes stale and the message is tried again.
+    claimed_at INTEGER
 );
 CREATE INDEX held_messages_user ON held_messages (user_id, character);

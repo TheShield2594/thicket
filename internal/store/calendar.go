@@ -79,6 +79,35 @@ func (s *Store) DeleteSprigEvent(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteSprigEventWithTrail takes an event off the calendar and records t
+// (which says how to put it back) in one transaction: either both happen
+// or neither. It returns the trail entry's id.
+func (s *Store) DeleteSprigEventWithTrail(ctx context.Context, id int64, t TrailEntry) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := s.unix()
+	res, err := tx.ExecContext(ctx, "UPDATE sprig_events SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", now, id)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, ErrNotFound
+	}
+	res, err = tx.ExecContext(ctx, "INSERT INTO trail (at, user_id, character, kind, summary, detail, undo) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		now, nullInt(t.UserID), t.Character, t.Kind, s.clean(t.Summary), s.clean(t.Detail), string(t.Undo))
+	if err != nil {
+		return 0, err
+	}
+	trailID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return trailID, tx.Commit()
+}
+
 // SprigEventAny returns an event, removed or not.
 func (s *Store) SprigEventAny(ctx context.Context, id int64) (*SprigEvent, error) {
 	return scanSprigEvent(s.db.QueryRowContext(ctx, "SELECT "+sprigEventCols+" FROM sprig_events WHERE id = ?", id))

@@ -216,10 +216,10 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 				err = fmt.Errorf("not a PDF")
 			}
 			if err == nil {
-				switch n := pdfPages(body); {
+				switch n, complete := pdfPages(body); {
 				case n > maxPDFPages:
 					err = fmt.Errorf("%d pages, limit %d", n, maxPDFPages)
-				case n == 0 && len(body) > maxUnknownPDFBytes:
+				case (n == 0 || !complete) && len(body) > maxUnknownPDFBytes:
 					// Without a page count, size is the only bound left.
 					err = fmt.Errorf("couldn't count its pages, and it's over %d MB", maxUnknownPDFBytes>>20)
 				}

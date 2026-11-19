@@ -164,10 +164,18 @@ func (e *Engine) ReportInterruptedRun(ctx context.Context, j store.Job) error {
 // deadLetter puts something that needs a person in the inbox. If even that
 // fails, the log is the last resort.
 func (e *Engine) deadLetter(ctx context.Context, it store.InboxItem) {
+	_ = e.deadLetterErr(ctx, it)
+}
+
+// deadLetterErr is deadLetter for callers that keep the item elsewhere
+// when the inbox can't take it.
+func (e *Engine) deadLetterErr(ctx context.Context, it store.InboxItem) error {
 	it.Detail = e.Secrets.Redact(truncate(it.Detail, 4000))
 	if _, err := e.DB.AddInbox(context.WithoutCancel(ctx), it); err != nil {
 		e.Log.Error("dead-letter to inbox failed", "title", it.Title, "err", err)
+		return err
 	}
+	return nil
 }
 
 // --- light initiative: follow-ups and check-ins ---
