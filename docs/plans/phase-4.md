@@ -1,8 +1,16 @@
 # Phase 4 plan: new abilities
 
 Status: **planned, not started.** This file is the plan; the work is tracked
-in GitHub issues labelled `phase-4`, one per section below (the tracking
-issue links them all).
+in GitHub issues labelled `phase-4`, under the tracking issue #77.
+
+| Area | Issues |
+|---|---|
+| Foundations | #78 plugin model, #79 level floors, #80 sprig-owned skills and runs |
+| Gallery | #81 signed packages, #82 index, #83 Juni suggests |
+| Voice | #84 local speech plugin, #85 push-to-talk, #86 voice.yaml and drift, #87 Discord voice (later) |
+| Email | #88 JMAP plugin, #89 IMAP/SMTP, #90 dashboard mailbox |
+| Browser | #91 plugin and allowlist, #92 walls, #93 live view and takeover, #94 screenshot trail |
+| Teach | #95 recording, #96 draft skill and first runs |
 
 ## Gate
 
