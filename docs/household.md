@@ -122,7 +122,7 @@ household: kid
 kids: [7]        # Max's user id
 parents: [1, 2]  # who set it up
 tools: ["mcp:fortnite/player_stats"]   # tools a parent approved, one by one
-allow: []        # family_memory and/or calendar, if a parent allows
+allow: []        # family_memory, calendar and/or voice, if a parent allows
 personality:
   traits: [playful, kind]
 voice:
@@ -150,6 +150,8 @@ cover each one.
 - **No adult data** (calendars, email, family memory) unless a parent
   allows it in `allow`. With `calendar` allowed they see only shared
   household events, never a parent's own calendar.
+- **No talking out loud** unless a parent allows `voice`: then the kid
+  sprig answers a voice message with one, like any sprig.
 - **Kids talk only to their kid sprigs.** Naming Juni or a family sprig
   doesn't reach it, and adults can't chat with a kid sprig.
 

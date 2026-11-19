@@ -4,6 +4,7 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -257,6 +258,46 @@ func (a *Adapter) SendIDs(ctx context.Context, chatID string, p channel.Persona,
 		ids = append(ids, m.ID)
 	}
 	return ids, nil
+}
+
+// SpeechFormat asks for MP3, which every Discord client plays inline.
+func (a *Adapter) SpeechFormat() string { return "mp3" }
+
+// SendVoice posts a spoken reply as an audio attachment: through the
+// sprig's webhook in server channels (its name and avatar), else as a bot
+// message naming the sprig.
+func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) error {
+	if a.s == nil {
+		return fmt.Errorf("discord is not connected")
+	}
+	format := v.Format
+	if format == "" {
+		format = "mp3"
+	}
+	file := func() []*discordgo.File {
+		return []*discordgo.File{{Name: "voice." + format, ContentType: channel.VoiceContentType(format), Reader: bytes.NewReader(v.Audio)}}
+	}
+	ch := a.channel(chatID)
+	if ch != nil && ch.Type != discordgo.ChannelTypeDM && ch.Type != discordgo.ChannelTypeGroupDM {
+		parent, thread := ch.ID, ""
+		if ch.IsThread() {
+			parent, thread = ch.ParentID, ch.ID
+		}
+		if hook, err := a.webhook(parent); err == nil {
+			params := &discordgo.WebhookParams{Username: p.Name, AvatarURL: p.AvatarURL, Files: file(), AllowedMentions: allowedMentions}
+			if thread != "" {
+				_, err = a.s.WebhookThreadExecute(hook.ID, hook.Token, true, thread, params)
+			} else {
+				_, err = a.s.WebhookExecute(hook.ID, hook.Token, true, params)
+			}
+			if err == nil {
+				return nil
+			}
+			a.log.Warn("webhook voice send failed, falling back to bot message", "channel", chatID, "err", err)
+		}
+	}
+	_, err := a.s.ChannelMessageSendComplex(chatID, &discordgo.MessageSend{Content: "**" + p.Name + "**", Files: file(), AllowedMentions: allowedMentions})
+	return err
 }
 
 func (a *Adapter) channel(id string) *discordgo.Channel {

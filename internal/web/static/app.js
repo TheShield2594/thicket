@@ -491,7 +491,16 @@ function connect() {
     else if (ev.type === 'typing') onTyping(ev.chat);
     else if (ev.type === 'deleted') onDeleted(ev.chat, ev.id);
     else if (ev.type === 'sprigs') onRoster();
+    else if (ev.type === 'audio') onAudio(ev.chat, ev.id);
   };
+}
+
+// A spoken reply arrived for a message already shown: add its player.
+function onAudio(chat, id) {
+  const m = S.chats.get(chat)?.messages.find((x) => x.id === id);
+  if (!m) return;
+  m.audio = true;
+  renderFeed(chat);
 }
 
 // A sprig was created, changed or removed: reload the roster so it shows
@@ -1340,7 +1349,7 @@ function kidAccess(kid) {
       h('form.kid-add', { onsubmit: (e) => { e.preventDefault(); if (toolInput.value.trim()) change({ add_tools: [toolInput.value.trim()] }); } },
         toolInput, h('button.chip.primary', { type: 'submit' }, 'Approve tool')),
       h('div.kid-allow', {},
-        [['family_memory', 'Family memory', 'what family sprigs know about the household'], ['calendar', 'Calendar', 'shared household events only']].map(([k, label, hint]) => {
+        [['family_memory', 'Family memory', 'what family sprigs know about the household'], ['calendar', 'Calendar', 'shared household events only'], ['voice', 'Voice', 'it may answer out loud']].map(([k, label, hint]) => {
           const on = allow.includes(k);
           return h('label.check', {}, h('input', { type: 'checkbox', checked: on, onchange: () => change(on ? { remove_allow: [k] } : { add_allow: [k] }) }),
             h('span', {}, h('b', {}, label), ' ', h('small', {}, hint)));
@@ -1484,9 +1493,32 @@ function messageEl(m, cont, animate) {
   const s = S.sprigs.get(m.character) || { name: m.name || m.character || 'Thicket', color: '#7c8cff' };
   const el = h('div.msg' + (cont ? '.cont' : '') + (m.pinned ? '.pinned' : ''), { style: { '--c': s.color } },
     orb(s, 30),
-    h('div.stack', {}, h('span.who', {}, s.name), h('div.bubble', { html: md(m.content) }), h('span.stamp', {}, clock(m.at), pinMark, actions)));
+    h('div.stack', {}, h('span.who', {}, s.name), h('div.bubble', { html: md(m.content) }),
+      m.audio && voicePlayer(m, s),
+      h('span.stamp', {}, clock(m.at), pinMark, actions)));
   if (!animate) el.style.animation = 'none';
   return el;
+}
+
+// Players are kept by message id, so a new message re-rendering the feed
+// doesn't cut off one that's playing.
+const players = new Map();
+function voicePlayer(m, s) {
+  let el = players.get(m.id);
+  if (!el) {
+    el = h('audio.voice', { controls: true, preload: 'none', 'aria-label': `${s.name}, spoken`, src: `/api/chats/${encodeURIComponent(m.chat)}/messages/${m.id}/audio` });
+    players.set(m.id, el);
+  }
+  return el;
+}
+
+async function setVoiceMode(s, mode) {
+  try {
+    const r = await api(`/api/sprigs/${encodeURIComponent(s.id)}/voice`, { method: 'PUT', body: { mode } });
+    s.voice_mode = r.voice_mode;
+    renderDetails();
+    toast({ full: `${s.name} will read replies out in full`, brief: `${s.name} will say a short version; the full text comes too`, off: `${s.name} will only write` }[mode]);
+  } catch (e) { toast('Couldn’t change that: ' + e.message); }
 }
 
 async function togglePin(m) {
@@ -1730,6 +1762,10 @@ function renderDetails() {
     s.traits.length > 0 && h('div.d-section', {}, h('h4', {}, 'Personality'), h('div.tags', {}, s.traits.map((t) => h('span.tag.c', { style: { '--c': s.color } }, t)))),
     h('div.d-section', {}, h('h4', {}, 'Routines'), routineList),
     initiative.length > 0 && h('div.d-section', {}, h('h4', {}, 'Initiative'), h('div.d-list', {}, initiative.map((t) => h('div.d-item', {}, h('span.ico.idle', {}, icon('clock')), h('div.txt', {}, h('small', { style: { color: 'var(--text-2)', 'font-size': '13px' } }, t)))))),
+    s.speaks && s.speaks !== 'never' && h('div.d-section', {}, h('h4', {}, 'Voice'),
+      h('p.d-empty', {}, s.speaks === 'always' ? `${s.name} answers out loud, with the text too.` : `Send ${s.name} a voice message and you get one back, with the text too.`),
+      h('div.chips', { role: 'group', 'aria-label': 'How it speaks to you' }, [['full', 'Read it all'], ['brief', 'Short version'], ['off', 'Text only']].map(([k, label]) =>
+        h('button.chip' + (s.voice_mode === k ? '.primary' : ''), { 'aria-pressed': s.voice_mode === k ? 'true' : 'false', onclick: () => setVoiceMode(s, k) }, label)))),
     s.abilities.length > 0 && h('div.d-section', {}, h('h4', {}, 'Abilities'), h('div.tags', {}, s.abilities.map((t) => h('span.tag', {}, t)))),
     h('div.d-section', {}, h('h4', {}, 'Tip'), h('p.d-empty', {}, `Ask ${s.name} “what do you remember about me?” or say “forget that” any time.`))));
 }

@@ -91,6 +91,17 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 		do = func() (string, error) { return e.forgetReplied(ctx, in, user) }
 	case !reply && deleteLastRe.MatchString(text):
 		do = func() (string, error) { return e.deleteLast(ctx, in, user, addressed) }
+	case voiceCmdRe.MatchString(text):
+		// For the sprig spoken to: by name, by its web thread, or the
+		// one talking in this chat.
+		if c, ok := e.Chars.Get(in.Character); addressed == nil && ok && c.UsableBy(user) {
+			addressed = c
+		}
+		target := addressed
+		if target == nil {
+			target = e.chatSprig(in.ChatRef())
+		}
+		do = func() (string, error) { return e.voiceCommand(ctx, user, text, target) }
 	default:
 		return false, nil
 	}
