@@ -74,6 +74,15 @@ stated.
   [Extending Thicket](docs/adapters.md) (chat adapters and integrations);
   the architecture tour covers ownership, sandboxing, pause, rate limits
   and the trail.
+- Avatar moods: `pleased` and `unsure` states. The personality check now
+  also reads each reply's mood in the same cheap-model call, and the
+  verdict is kept per sprig per conversation (in memory): pleased after a
+  reply that landed, unsure after a rewrite for drift, a refusal or hedge,
+  or while an approval waits. The mood's face replaces the expression and
+  fades back after five minutes. Served at `/avatars/<id>.svg` (live or
+  `?state=pleased|unsure`) and on the dashboard; Discord uses
+  `<avatar>.pleased.<ext>` / `<avatar>.unsure.<ext>` pictures when they
+  exist. No schema change.
 
 ## Unreleased: sprig packages and untrusted content
 
@@ -260,15 +269,6 @@ stated.
 - Composio documented as an optional MCP adapter for quick connectors;
   direct MCP servers, OAuth and CalDAV remain for privacy-sensitive
   services.
-- Avatar moods: `pleased` and `unsure` states. The personality check now
-  also reads each reply's mood in the same cheap-model call, and the
-  verdict is kept per sprig per conversation (in memory): pleased after a
-  reply that landed, unsure after a rewrite for drift, a refusal or hedge,
-  or while an approval waits. The mood's face replaces the expression and
-  fades back after five minutes. Served at `/avatars/<id>.svg` (live or
-  `?state=pleased|unsure`) and on the dashboard; Discord uses
-  `<avatar>.pleased.<ext>` / `<avatar>.unsure.<ext>` pictures when they
-  exist. No schema change.
 
 ## Earlier unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
