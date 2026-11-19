@@ -472,3 +472,100 @@ func TestStarterInstallIsAllOrNothing(t *testing.T) {
 		t.Fatalf("bill tracker's level = %q, want read", lv)
 	}
 }
+
+// Starters suggest check-in presets but never turn them on by themselves:
+// they're on only when the person says yes as it's added, and a shared
+// sprig's only when an admin does (as with set_initiative).
+func TestStarterCheckInsAreOptIn(t *testing.T) {
+	f, kim, mia := starterFixture(t)
+	ctx := context.Background()
+	f.char = &character.Character{ID: "juniper", Name: "Juniper", Host: true, Tools: []string{"characters"}}
+	all, err := StarterSprigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	suggests := 0
+	for _, s := range all {
+		if hasPresets(s.Char) {
+			t.Errorf("%s's packaged character has check-ins on", s.ID)
+		}
+		if s.CheckIns.Any() {
+			suggests++
+		}
+	}
+	if suggests == 0 {
+		t.Fatal("no starter suggests check-ins")
+	}
+
+	// Without check_ins: shown as off, added off, offered afterwards.
+	tr := f.turn("the meal planner please")
+	if _, err := f.e.toolStarterSprigs(ctx, tr, json.RawMessage(`{"action":"add","starter":"meal-planner"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tr.afterReply[0].text, "Suggested check-ins, **off**") {
+		t.Fatalf("preview:\n%s", tr.afterReply[0].text)
+	}
+	res, err := f.e.internalAction(ctx, f.user, tr.afterReply[0].approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if basil, _ := f.e.Chars.Get("basil"); basil == nil || hasPresets(basil) || !strings.Contains(res, "set_initiative") {
+		t.Fatalf("basil %+v: %s", basil, res)
+	}
+
+	// With check_ins, from an admin: on, exactly as suggested.
+	tr = f.turn("the chore chart, with the morning brief")
+	if _, err := f.e.toolStarterSprigs(ctx, tr, json.RawMessage(`{"action":"add","starter":"chore-chart","check_ins":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tr.afterReply[0].text, "Check-ins, **on**: a morning brief at 07:30") {
+		t.Fatalf("preview:\n%s", tr.afterReply[0].text)
+	}
+	if _, err := f.e.internalAction(ctx, f.user, tr.afterReply[0].approval); err != nil {
+		t.Fatal(err)
+	}
+	thyme, _ := f.e.Chars.Get("thyme")
+	if thyme == nil || thyme.Initiative.MorningBrief != "07:30" || !thyme.Initiative.DueReminders {
+		t.Fatalf("thyme's check-ins: %+v", thyme)
+	}
+
+	// A member can turn on their own solo sprig's, not a family sprig's.
+	member := &turn{user: kim, char: f.char, chatRef: "web:2", isDM: true, userText: "a bill tracker with reminders"}
+	if _, err := f.e.toolStarterSprigs(ctx, member, json.RawMessage(`{"action":"add","starter":"bill-tracker","check_ins":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.e.internalAction(ctx, kim, member.afterReply[0].approval); err != nil {
+		t.Fatal(err)
+	}
+	if clover, _ := f.e.Chars.Get("clover"); clover == nil || !clover.Initiative.DueReminders || clover.BelongsTo != kim.ID {
+		t.Fatalf("clover: %+v", clover)
+	}
+	member = &turn{user: kim, char: f.char, chatRef: "web:2", isDM: true, userText: "another chore chart"}
+	if _, err := f.e.toolStarterSprigs(ctx, member, json.RawMessage(`{"action":"add","starter":"chore-chart","id":"sorrel","name":"Sorrel","check_ins":true}`)); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("a member turned on a family sprig's check-ins: %v", err)
+	}
+
+	// Kid starters have none to turn on.
+	hh, _ := FindStarterSprig("homework-helper")
+	if _, err := PrepareStarter(ctx, f.e.DB, f.e.Chars.Dir(), f.e.sprigNameTaken, hh,
+		StarterOptions{Owner: f.user.ID, Kids: []int64{mia.ID}, Parents: []int64{f.user.ID}, CheckIns: true}); err == nil {
+		t.Fatal("a kid starter took check-ins")
+	}
+}
+
+func TestStarterCheckInsMetaChecks(t *testing.T) {
+	ok := starterMeta{Summary: "s", Offer: "o", Tiers: []string{character.TierFamily}, DailyUSD: 0.5,
+		CheckIns: StarterCheckIns{MorningBrief: "07:30", EventReminders: 30, DueReminders: true}}
+	if err := ok.check(); err != nil {
+		t.Fatal(err)
+	}
+	for name, m := range map[string]starterMeta{
+		"kid":       {Summary: "s", Offer: "o", Tiers: []string{character.TierKid}, DailyUSD: 0.5, CheckIns: StarterCheckIns{DueReminders: true}},
+		"bad time":  {Summary: "s", Offer: "o", Tiers: []string{character.TierFamily}, DailyUSD: 0.5, CheckIns: StarterCheckIns{MorningBrief: "breakfast"}},
+		"too short": {Summary: "s", Offer: "o", Tiers: []string{character.TierFamily}, DailyUSD: 0.5, CheckIns: StarterCheckIns{EventReminders: 1}},
+	} {
+		if err := m.check(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

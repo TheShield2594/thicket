@@ -53,7 +53,11 @@ stated.
   on. `thicket sprig starter` lists and adds them (`--kid` for the kid
   ones, `--export DIR` writes them as `.sprig` files), and Juni offers
   the one that fits in chat ("you said you have a 9-year-old: want a
-  reading buddy?"), showing everything first. Kid starters are added
+  reading buddy?"), showing everything first. Starters suggest
+  check-ins (Basil and Clover: due reminders; Thyme: a 07:30 morning
+  brief and due reminders); they stay off unless you say yes as it's
+  added (`--check-ins`, or tell Juni), and only an admin turns on a
+  family sprig's. Kid starters are added
   only by an owner or admin, who becomes the kid sprig's parent and sees
   the parent preview before it exists. Worked examples in
   [Writing a sprig](docs/authoring.md#starter-sprigs).

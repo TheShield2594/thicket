@@ -71,6 +71,19 @@ func TestSprigStarterCLI(t *testing.T) {
 		t.Fatalf("routines should arrive paused: %+v", jobs)
 	}
 
+	// Suggested check-ins are listed, stay off by default (Basil above)
+	// and go on with --check-ins.
+	if b, _ := os.ReadFile(filepath.Join(cfg.CharactersDir, "basil.md")); strings.Contains(string(b), "due_reminders") {
+		t.Fatalf("basil's check-ins are on without --check-ins:\n%s", b)
+	}
+	out.Reset()
+	if err := sprigCmd(cfg, []string{"starter", "chore-chart", "--check-ins", "--yes"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cfg.CharactersDir, "thyme.md")); !strings.Contains(string(b), "morning_brief: \"07:30\"") && !strings.Contains(string(b), "morning_brief: 07:30") {
+		t.Fatalf("thyme's check-ins aren't on:\n%s", b)
+	}
+
 	// Each starter is also a package any Thicket can import.
 	dir := filepath.Join(t.TempDir(), "pkgs")
 	out.Reset()

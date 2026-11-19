@@ -11,3 +11,6 @@ levels:
   "*": read
   schedule_job: ask
   update_job: ask
+# Suggested, off until accepted: a nudge when a bill noted as due is close.
+check_ins:
+  due_reminders: true
