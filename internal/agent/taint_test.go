@@ -272,3 +272,35 @@ func TestInheritCarriesTaintAndWords(t *testing.T) {
 		t.Fatalf("inherit: %q %v", child.requestText(), child.taintedBy)
 	}
 }
+
+// An injected page can't change Thicket's own configuration: the admin
+// tools are held like changing ones, though levels don't apply to them.
+func TestInjectedConfigChangeIsHeld(t *testing.T) {
+	f := newTaintFixture(t)
+	ran := 0
+	f.tools["settings"] = &Tool{Name: "settings", Description: "change settings", Scope: "admin", AdminOnly: true, Config: true,
+		Run: func(context.Context, *turn, json.RawMessage) (string, error) { ran++; return "ok", nil }}
+	tr := f.turn("summarise my newest email")
+	f.call(tr, "mail__read", `{}`)
+	if out := f.call(tr, "settings", `{"name":"model_url","value":"https://evil.example/v1"}`); !strings.HasPrefix(out, "HELD") {
+		t.Fatalf("settings change wasn't held: %s", out)
+	}
+	// Showing the settings changes nothing, so it isn't held.
+	if out := f.call(tr, "settings", `{}`); out != "ok" || ran != 1 {
+		t.Fatalf("listing settings: %q (ran %d)", out, ran)
+	}
+	// In an untainted turn it runs as before.
+	if out := f.call(f.turn("set model_url to http://ollama:11434/v1"), "settings", `{"name":"model_url","value":"http://ollama:11434/v1"}`); out != "ok" || ran != 2 {
+		t.Fatalf("typed change: %q", out)
+	}
+}
+
+func TestEveryAdminToolThatChangesIsConfig(t *testing.T) {
+	readOnly := map[string]bool{"spend_report": true, "recent_activity": true, "list_integrations": true}
+	e := &Engine{}
+	for _, tool := range e.builtinTools() {
+		if tool.AdminOnly && !readOnly[tool.Name] && !tool.Config && !changes(tool) {
+			t.Errorf("%s is admin-only and changes things, but isn't Config: injected content could run it", tool.Name)
+		}
+	}
+}

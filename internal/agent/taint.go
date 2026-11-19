@@ -98,8 +98,11 @@ func (t *turn) requestText() string {
 // holdTainted reports whether a tool call at act must be held because
 // outside content entered the turn and the person didn't ask for it.
 func (e *Engine) holdTainted(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) bool {
-	if !t.tainted() || !changes(tool) {
+	if !t.tainted() || !(changes(tool) || tool.Config) {
 		return false
+	}
+	if !changes(tool) && noArgs(args) {
+		return false // a config tool called with nothing only shows the current state
 	}
 	key := tool.Name + "\x00" + string(args)
 	if v, ok := t.askedCache[key]; ok {
@@ -222,4 +225,13 @@ func (e *Engine) holdAction(ctx context.Context, t *turn, tool *Tool, args json.
 	e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "held "+tool.Name+": it followed untrusted content", "sources: "+sources+"; "+redacted)
 	return "HELD: this was NOT done. Outside content (" + sources + ") entered this conversation, and the user didn't ask for this action themselves, " +
 		"so it was saved to their inbox for them to check. Tell them briefly what you wanted to do and why, and that it's waiting in their inbox. Don't say it's done."
+}
+
+// noArgs reports whether a call has no arguments ("{}", "null" or "").
+func noArgs(args json.RawMessage) bool {
+	var m map[string]any
+	if s := strings.TrimSpace(string(args)); s == "" || s == "null" {
+		return true
+	}
+	return json.Unmarshal(args, &m) == nil && len(m) == 0
 }
