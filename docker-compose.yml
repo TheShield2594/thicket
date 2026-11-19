@@ -83,6 +83,12 @@ services:
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
     ports:
       - "127.0.0.1:8080:8080"
+    # Thicket needs no Linux capabilities (it runs as a non-root user on
+    # port 8080) and never gains any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     # secrets:
     #   - thicket_secret_key
 

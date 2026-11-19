@@ -22,6 +22,10 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: unit and smoke tests
         run: go test -race -count=1 ./...
+      # Known vulnerabilities in the code paths Thicket uses, in its
+      # modules and the Go standard library it's built with.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: build
         run: CGO_ENABLED=0 go build -o thicket ./cmd/thicket
       - name: binary smoke test

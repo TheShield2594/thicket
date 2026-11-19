@@ -1,0 +1,19 @@
+# Weekly update PRs for the things Thicket is built from. Go's own
+# security releases come through the `toolchain` line in go.mod.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /sandbox
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule: { interval: weekly }
