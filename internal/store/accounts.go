@@ -57,8 +57,8 @@ func (s *Store) ChangePassword(ctx context.Context, userID int64, username, hash
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, "DELETE FROM api_tokens WHERE user_id = ? AND substr(name, 1, ?) = ? AND hash != ?",
-		userID, len(AppTokenPrefix), AppTokenPrefix, keepToken)
+	res, err := tx.ExecContext(ctx, "DELETE FROM api_tokens WHERE user_id = ? AND kind = ? AND hash != ?",
+		userID, TokenApp, keepToken)
 	if err != nil {
 		return 0, err
 	}

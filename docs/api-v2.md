@@ -17,7 +17,7 @@ or `{"link": "<a one-time sign-in link or its token>", "device": "…"}`, return
 `Authorization: Bearer thk_api_…` on every call. Wrong passwords lock a
 username for 15 minutes after five tries, as in the web app.
 
-`POST /api/v2/auth/logout` revokes the token. Admins see and revoke tokens
+`POST /api/v2/auth/logout` revokes the token. `cli` tokens work here too; an agent's `mcp` token doesn't ([kinds](api.md#tokens)). Admins see and revoke tokens
 with `thicket api-token list` / `revoke`.
 
 ## Chat

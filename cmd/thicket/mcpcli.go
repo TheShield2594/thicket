@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/theshield2594/thicket/internal/api"
+	"github.com/theshield2594/thicket/internal/store"
 )
 
 // `thicket mcp` is an MCP server on stdin/stdout, so an agent such as
@@ -63,6 +64,14 @@ func mcpCmd() error {
 	c, err := newClient()
 	if err != nil {
 		return err
+	}
+	// A cli token works, but the server only keeps an agent from
+	// approving, undoing and administering with an mcp one.
+	if c.do(http.MethodGet, "/api/v1/sprigs", nil, nil) == nil {
+		if k, _ := c.kind.Load().(string); k != "" && k != store.TokenMCP {
+			fmt.Fprintln(os.Stderr, "thicket mcp: this is a "+k+" token, which can do more than an agent should. "+
+				"Make one for the agent with: thicket api-token create NAME --kind mcp")
+		}
 	}
 	return serveMCP(os.Stdin, os.Stdout, c)
 }

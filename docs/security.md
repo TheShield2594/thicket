@@ -53,7 +53,8 @@ provider seeing what it's sent.
   it; otherwise it's held in their inbox. Whether they asked is judged
   by the cheap model, shown only their own words and the call: code
   enforces its answer, but the answer is a model's judgment, so a request
-  worded to look like the person's could get through. Levels (`read`, `draft`,
+  worded to look like the person's could get through. An agent's
+  messages (an `mcp` API token) never count as asking. Levels (`read`, `draft`,
   `ask`, `act`) and approvals sit on top. See `docs/architecture.md`,
   "Untrusted content and act".
 - **Outbound requests**: `fetch_page` and web search check the address
@@ -84,7 +85,7 @@ provider seeing what it's sent.
 | Area | Checked | Result |
 |---|---|---|
 | Sessions and sign-in | token entropy, expiry, single use, storage; cookie flags; session lifetime and fixation; logout and password change; OIDC state, nonce, PKCE, issuer, audience, algorithms; redirects | fine, except: throttling (fixed), app tokens after a password change (fixed) |
-| Authorization | admin-only routes and tools, IDOR on chats, sprigs, jobs, approvals; private sprigs in dashboard and trail; kid role | fine, except: admin tools under prompt injection (fixed), unscoped API tokens (open) |
+| Authorization | admin-only routes and tools, IDOR on chats, sprigs, jobs, approvals; private sprigs in dashboard and trail; kid role | fine, except: admin tools under prompt injection (fixed), unscoped API tokens (fixed) |
 | CSRF and headers | `X-Thicket` header, no CORS, dashboard HMAC tokens; CSP, frame-ancestors, nosniff, Referrer-Policy | fine; HSTS added |
 | SSRF | `fetch_page`, web search, SearXNG, model and speech servers, attachments, Telegram files, OIDC, MCP HTTP and OAuth, calendars, avatars, imports | `fetch_page` well guarded; calendars and MCP OAuth discovery fixed |
 | Injection | SQL (all parameterised; dynamic parts are allowlisted columns); `html/template` in the dashboard; the web app's markdown; Telegram HTML escaping; Discord mentions (`AllowedMentions` users only) | markdown link rendering fixed |
@@ -122,14 +123,14 @@ provider seeing what it's sent.
   model server's address on `/health`; dashboard invites up to 30 days.
 - 39 standard-library advisories (go1.26.0) and one in
   gorilla/websocket.
+- API tokens had no scope, so the token an AI agent holds for
+  `thicket mcp` could answer approvals or run the household through
+  `/api/v2` directly. Tokens now have a kind (`cli`, `mcp`, `app`) the
+  server enforces; an agent's messages count as outside content, and the
+  changes it asks for are held for its person.
 
 ## Open
 
-- **API token scopes.** CLI, MCP and app tokens share one table with no
-  scope. `thicket mcp` asks the server not to let an agent answer
-  approvals, but that's a request field, so an agent holding the token
-  itself could call `/api/v2` directly. Tokens should carry a kind
-  (`cli`, `mcp`, `app`) that the server enforces.
 - **The sandbox's network.** It shares the compose network with Thicket
   and has unrestricted outbound access, so an approved command can reach
   Thicket's port, the Docker host and the LAN. Approval per command is

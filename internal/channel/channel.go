@@ -44,7 +44,9 @@ type Incoming struct {
 	Attachments []Attachment
 	// NoApprovals: this message comes from an agent acting for the user
 	// (the MCP server), so it can't answer an approval prompt. The person
-	// answers on the dashboard or in a chat app instead.
+	// answers on the dashboard or in a chat app instead. Its words aren't
+	// the person's own either: what it asks a sprig to change is held for
+	// them (see agent.agentSource).
 	NoApprovals bool
 	// ReplyTo is the platform id of the message this one replies to, if
 	// any ("forget this", "pin this" in reply to a message).

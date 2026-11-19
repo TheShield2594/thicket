@@ -7,16 +7,30 @@ import (
 	"time"
 )
 
+// What a token is for (api_tokens.kind), enforced by the server.
+const (
+	TokenCLI = "cli" // scripts and the local API: thicket api-token create
+	TokenMCP = "mcp" // an AI agent through thicket mcp: no approvals, no admin
+	TokenApp = "app" // signed in through POST /api/v2/auth/login
+)
+
 type APIToken struct {
 	ID         int64
 	UserID     int64
 	Name       string
+	Kind       string
 	CreatedAt  time.Time
 	LastUsedAt time.Time
 }
 
+// CreateAPIToken makes a cli token.
 func (s *Store) CreateAPIToken(ctx context.Context, userID int64, name, hash string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO api_tokens (user_id, name, hash, created_at) VALUES (?, ?, ?, ?)", userID, name, hash, s.unix())
+	return s.CreateTokenOfKind(ctx, userID, name, TokenCLI, hash)
+}
+
+// CreateTokenOfKind makes a token of kind TokenCLI, TokenMCP or TokenApp.
+func (s *Store) CreateTokenOfKind(ctx context.Context, userID int64, name, kind, hash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO api_tokens (user_id, name, kind, hash, created_at) VALUES (?, ?, ?, ?, ?)", userID, name, kind, hash, s.unix())
 	if err != nil {
 		return 0, err
 	}
@@ -28,8 +42,8 @@ func (s *Store) APITokenByHash(ctx context.Context, hash string) (*APIToken, err
 	var t APIToken
 	var created int64
 	var used sql.NullInt64
-	err := s.db.QueryRowContext(ctx, "SELECT id, user_id, name, created_at, last_used_at FROM api_tokens WHERE hash = ?", hash).
-		Scan(&t.ID, &t.UserID, &t.Name, &created, &used)
+	err := s.db.QueryRowContext(ctx, "SELECT id, user_id, name, kind, created_at, last_used_at FROM api_tokens WHERE hash = ?", hash).
+		Scan(&t.ID, &t.UserID, &t.Name, &t.Kind, &created, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -42,7 +56,7 @@ func (s *Store) APITokenByHash(ctx context.Context, hash string) (*APIToken, err
 }
 
 func (s *Store) ListAPITokens(ctx context.Context) ([]APIToken, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, user_id, name, created_at, last_used_at FROM api_tokens ORDER BY id")
+	rows, err := s.db.QueryContext(ctx, "SELECT id, user_id, name, kind, created_at, last_used_at FROM api_tokens ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +66,7 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]APIToken, error) {
 		var t APIToken
 		var created int64
 		var used sql.NullInt64
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &created, &used); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.Kind, &created, &used); err != nil {
 			return nil, err
 		}
 		t.CreatedAt, t.LastUsedAt = time.Unix(created, 0), timeOf(used)
@@ -72,18 +86,5 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id int64) error {
 	return nil
 }
 
-// AppTokenPrefix starts the name of a token the apps get at sign-in
-// (POST /api/v2/auth/login), as opposed to one made with the CLI.
+// AppTokenPrefix starts the name of a token the apps get at sign-in.
 const AppTokenPrefix = "app: "
-
-// RevokeAppTokens deletes a user's app sign-in tokens except the one
-// with hash keep (if given), returning how many were deleted. Tokens made
-// with the CLI (for scripts and MCP) are left alone.
-func (s *Store) RevokeAppTokens(ctx context.Context, userID int64, keep string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM api_tokens WHERE user_id = ? AND substr(name, 1, ?) = ? AND hash != ?",
-		userID, len(AppTokenPrefix), AppTokenPrefix, keep)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}

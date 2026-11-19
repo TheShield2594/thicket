@@ -23,6 +23,16 @@ thicket api-token list
 thicket api-token revoke 3
 ```
 
+Each token has a kind, which the server enforces:
+
+| Kind | Made by | Reaches |
+|---|---|---|
+| `cli` (the default) | `thicket api-token create NAME` | `/api/v1` and `/api/v2`, everything its person can do |
+| `mcp` | `thicket api-token create NAME --kind mcp` | `/api/v1` only: messages, sprigs, jobs, stop. It can't answer approvals (whatever the request says), pause, resume or undo, and what it asks a sprig to change is held in its person's inbox. For [`thicket mcp`](mcp-server.md). |
+| `app` | signing in to an app (`POST /api/v2/auth/login`) | `/api/v2` only. Ends when its person changes their password. |
+
+Tokens made before kinds existed are `cli`, or `app` if an app made them.
+
 ## From the command line
 
 The `ask`, `jobs` and `run-job` commands talk to the running Thicket, so

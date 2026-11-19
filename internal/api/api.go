@@ -132,9 +132,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{id}/run", a.auth(a.runJob))
 	mux.HandleFunc("POST /api/v1/stop", a.auth(a.stop))
 	mux.HandleFunc("GET /api/v1/pause", a.auth(a.getPauses))
-	mux.HandleFunc("POST /api/v1/pause", a.auth(a.pause))
-	mux.HandleFunc("POST /api/v1/resume", a.auth(a.resume))
-	mux.HandleFunc("POST /api/v1/trail/{id}/undo", a.auth(a.undoTrail))
+	// An agent (mcp token) doesn't flip the kill switch or undo things.
+	mux.HandleFunc("POST /api/v1/pause", a.auth(notAgent(a.pause)))
+	mux.HandleFunc("POST /api/v1/resume", a.auth(notAgent(a.resume)))
+	mux.HandleFunc("POST /api/v1/trail/{id}/undo", a.auth(notAgent(a.undoTrail)))
 	return mux
 }
 
@@ -161,12 +162,29 @@ func (a *API) auth(next func(http.ResponseWriter, *http.Request, caller)) http.H
 			fail(w, http.StatusUnauthorized, "unknown or revoked token")
 			return
 		}
+		if t.Kind == store.TokenApp {
+			fail(w, http.StatusForbidden, "this is an app sign-in token: it works with /api/v2; make a token for scripts with thicket api-token create")
+			return
+		}
 		u, err := a.DB.UserByID(r.Context(), t.UserID)
 		if err != nil {
 			fail(w, http.StatusUnauthorized, "the token's user no longer exists")
 			return
 		}
+		// Tells thicket mcp what kind of token it was given.
+		w.Header().Set("X-Thicket-Token-Kind", t.Kind)
 		next(w, r, caller{t, u})
+	}
+}
+
+// notAgent refuses an agent's (mcp) token.
+func notAgent(next func(http.ResponseWriter, *http.Request, caller)) func(http.ResponseWriter, *http.Request, caller) {
+	return func(w http.ResponseWriter, r *http.Request, c caller) {
+		if c.token.Kind == store.TokenMCP {
+			fail(w, http.StatusForbidden, "an agent's (mcp) token can't do this; the person does it in the web app or a chat app")
+			return
+		}
+		next(w, r, c)
 	}
 }
 
@@ -239,7 +257,8 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request, c caller) {
 	err := a.Engine.Handle(ctx, channel.Incoming{
 		Channel: "api", ChatID: chatID, MessageID: "api-" + strconv.FormatInt(a.seq.Add(1), 10),
 		UserID: strconv.FormatInt(c.user.ID, 10), UserName: c.user.Name, Text: text, IsDM: true, UserRef: c.user.ID,
-		NoApprovals: req.NoApprovals,
+		// An agent's token never answers approvals, whatever it asks.
+		NoApprovals: req.NoApprovals || c.token.Kind == store.TokenMCP,
 	})
 	a.mu.Lock()
 	out := append([]Reply{}, replies...)

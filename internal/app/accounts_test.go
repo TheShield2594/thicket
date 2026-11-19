@@ -191,7 +191,7 @@ func TestInviteAccountAndSessions(t *testing.T) {
 	// An app signed in too (POST /api/v2/auth/login names its token so),
 	// and a CLI token exists for scripts.
 	appToken, appHash, _ := api.NewToken()
-	if _, err := e.a.DB.CreateAPIToken(context.Background(), robinID, store.AppTokenPrefix+"phone", appHash); err != nil {
+	if _, err := e.a.DB.CreateTokenOfKind(context.Background(), robinID, store.AppTokenPrefix+"phone", store.TokenApp, appHash); err != nil {
 		t.Fatal(err)
 	}
 	cliToken, cliHash, _ := api.NewToken()

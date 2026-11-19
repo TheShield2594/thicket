@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/api"
@@ -23,7 +24,7 @@ import (
 
 func apiTokenCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: thicket api-token create NAME [--user APP:ID] | list | revoke ID")
+		return errors.New("usage: thicket api-token create NAME [--user APP:ID] [--kind cli|mcp] | list | revoke ID")
 	}
 	cfg := loadConfig()
 	db, err := openStore(cfg)
@@ -36,12 +37,16 @@ func apiTokenCmd(args []string) error {
 	case "create":
 		fs := flag.NewFlagSet("api-token create", flag.ContinueOnError)
 		who := fs.String("user", "", "who the token acts as, as discord:ID or telegram:ID (default: the owner)")
+		kind := fs.String("kind", store.TokenCLI, "cli (scripts, the local API and /api/v2) or mcp (an AI agent through thicket mcp: it can't answer approvals, undo, pause or use /api/v2)")
 		pos, err := parseFlags(fs, args[1:])
 		if err != nil {
 			return err
 		}
 		if len(pos) != 1 || strings.TrimSpace(pos[0]) == "" {
-			return errors.New("usage: thicket api-token create NAME [--user APP:ID]")
+			return errors.New("usage: thicket api-token create NAME [--user APP:ID] [--kind cli|mcp]")
+		}
+		if *kind != store.TokenCLI && *kind != store.TokenMCP {
+			return errors.New("--kind must be cli or mcp (app tokens come from signing in to an app)")
 		}
 		var u *store.User
 		if *who == "" {
@@ -66,7 +71,7 @@ func apiTokenCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		id, err := db.CreateAPIToken(ctx, u.ID, pos[0], hash)
+		id, err := db.CreateTokenOfKind(ctx, u.ID, pos[0], *kind, hash)
 		if err != nil {
 			return err
 		}
@@ -74,7 +79,7 @@ func apiTokenCmd(args []string) error {
 		if name == "" {
 			name = u.Channel + ":" + u.ExternalID
 		}
-		fmt.Fprintf(os.Stderr, "Token %d %q created, acting as %s (%s). It is shown only now; keep it like a password.\n", id, pos[0], name, u.Role)
+		fmt.Fprintf(os.Stderr, "Token %d %q (%s) created, acting as %s (%s). It is shown only now; keep it like a password.\n", id, pos[0], *kind, name, u.Role)
 		fmt.Println(token)
 		return nil
 	case "list":
@@ -90,7 +95,7 @@ func apiTokenCmd(args []string) error {
 			if !t.LastUsedAt.IsZero() {
 				used = "last used " + t.LastUsedAt.Format("2006-01-02 15:04")
 			}
-			fmt.Printf("%4d  %-20s user=%d  created %s  %s\n", t.ID, t.Name, t.UserID, t.CreatedAt.Format("2006-01-02"), used)
+			fmt.Printf("%4d  %-20s %-3s  user=%d  created %s  %s\n", t.ID, t.Name, t.Kind, t.UserID, t.CreatedAt.Format("2006-01-02"), used)
 		}
 		return nil
 	case "revoke":
@@ -117,6 +122,9 @@ func apiTokenCmd(args []string) error {
 type client struct {
 	url, token string
 	http       *http.Client
+	// kind is what the server said the token is (X-Thicket-Token-Kind),
+	// once a request has gone through.
+	kind atomic.Value
 }
 
 func newClient() (*client, error) {
@@ -164,6 +172,9 @@ func (c *client) do(method, path string, body any, out any) error {
 		return fmt.Errorf("couldn't reach Thicket at %s (is it running? set THICKET_API_URL if it's elsewhere): %w", c.url, err)
 	}
 	defer resp.Body.Close()
+	if k := resp.Header.Get("X-Thicket-Token-Kind"); k != "" {
+		c.kind.Store(k)
+	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode/100 != 2 {
 		var e struct {
