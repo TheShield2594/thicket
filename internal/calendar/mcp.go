@@ -27,6 +27,12 @@ type MCPSource struct {
 	// filtered to it after the call.
 	FromArg string `json:"from_arg,omitempty"`
 	ToArg   string `json:"to_arg,omitempty"`
+	// NextPath is where a result says there are more pages (a token, like
+	// Google's nextPageToken), and PageArg the argument that asks for the
+	// next one. With NextPath set and no PageArg, more pages are an error:
+	// a calendar is never shown with events missing.
+	NextPath string `json:"next_path,omitempty"`
+	PageArg  string `json:"page_arg,omitempty"`
 	// Preset fills in the arguments and mapping for a known server shape
 	// ("google": Google Calendar's events.list). Fields set here win.
 	Preset string   `json:"preset,omitempty"`
@@ -67,9 +73,10 @@ var mcpPresets = map[string]MCPSource{
 	// Google Calendar's events.list (what Google Calendar MCP servers and
 	// Composio's Google Calendar tools return).
 	"google": {FromArg: "timeMin", ToArg: "timeMax", Args: map[string]any{"singleEvents": true, "orderBy": "startTime"},
+		NextPath: "nextPageToken|data.nextPageToken", PageArg: "pageToken",
 		Map: FieldMap{Items: "items|events|data.items|data.events", ID: "id", Title: "summary", Start: "start", End: "end", Location: "location", Link: "htmlLink"}},
 	// Microsoft Graph's calendarView (Outlook servers).
-	"outlook": {FromArg: "startDateTime", ToArg: "endDateTime",
+	"outlook": {FromArg: "startDateTime", ToArg: "endDateTime", NextPath: "@odata.nextLink|data.@odata.nextLink",
 		Map: FieldMap{Items: "value|events|data.value", ID: "id|iCalUId", Title: "subject", Start: "start", End: "end", AllDay: "isAllDay", Location: "location.displayName", Link: "webLink"}},
 }
 
@@ -101,7 +108,7 @@ func (m *MCPSource) check() error {
 	if _, ok := mcpPresets[m.Preset]; m.Preset != "" && !ok {
 		return fmt.Errorf("unknown preset %q (known: %s; or leave it out and map the fields)", m.Preset, strings.Join(MCPPresets(), ", "))
 	}
-	for _, a := range []string{m.FromArg, m.ToArg} {
+	for _, a := range []string{m.FromArg, m.ToArg, m.PageArg} {
 		if a != "" && !namePattern.MatchString(a) {
 			return fmt.Errorf("argument name %q isn't valid", a)
 		}
@@ -125,6 +132,8 @@ func (m MCPSource) withPreset() *MCPSource {
 	m.Args = args
 	m.FromArg = or(m.FromArg, p.FromArg)
 	m.ToArg = or(m.ToArg, p.ToArg)
+	m.NextPath = or(m.NextPath, p.NextPath)
+	m.PageArg = or(m.PageArg, p.PageArg)
 	pm := p.Map
 	m.Map = FieldMap{Items: or(m.Map.Items, pm.Items), ID: or(m.Map.ID, pm.ID), Title: or(m.Map.Title, pm.Title), Start: or(m.Map.Start, pm.Start),
 		End: or(m.Map.End, pm.End), AllDay: or(m.Map.AllDay, pm.AllDay), Location: or(m.Map.Location, pm.Location), Link: or(m.Map.Link, pm.Link)}
@@ -157,18 +166,57 @@ func (s *Service) fetchMCP(ctx context.Context, src *MCPSource, from, to time.Ti
 	if src.ToArg != "" {
 		args[src.ToArg] = to.UTC().Format(time.RFC3339)
 	}
-	b, err := json.Marshal(args)
-	if err != nil {
-		return nil, err
+	var all []Event
+	for page := 0; ; page++ {
+		b, err := json.Marshal(args)
+		if err != nil {
+			return nil, err
+		}
+		out, err := s.MCP(ctx, src.Integration, src.Tool, b)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) > maxCalendarBytes {
+			return nil, errors.New("the result is larger than 8 MB")
+		}
+		evs, err := mapEvents(out, src.Map, loc, from, to)
+		if err != nil {
+			return nil, err
+		}
+		if all = append(all, evs...); len(all) > maxMCPEvents {
+			return nil, fmt.Errorf("more than %d events in the range; pass the range to the tool (from_arg and to_arg) so it returns fewer", maxMCPEvents)
+		}
+		next := nextPage(out, src.NextPath)
+		switch {
+		case next == "":
+			return all, nil
+		case src.PageArg == "":
+			return nil, errors.New("the tool returned only the first page of events and can't be asked for the next; set page_arg, or have it return all of them")
+		case page+1 >= maxMCPPages:
+			return nil, fmt.Errorf("more than %d pages of events in the range; not shown, so none go missing", maxMCPPages)
+		}
+		args[src.PageArg] = next
 	}
-	out, err := s.MCP(ctx, src.Integration, src.Tool, b)
-	if err != nil {
-		return nil, err
+}
+
+// maxMCPPages is how many pages one range may take.
+const maxMCPPages = 20
+
+// nextPage is the token (or link) at path in a result, or "" for none.
+func nextPage(result, path string) string {
+	if path == "" {
+		return ""
 	}
-	if len(out) > maxCalendarBytes {
-		return nil, errors.New("the result is larger than 8 MB")
+	var root any
+	if json.Unmarshal([]byte(strings.TrimSpace(result)), &root) != nil {
+		return ""
 	}
-	return mapEvents(out, src.Map, loc, from, to)
+	if v, ok := lookup(root, path); ok {
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 // MapEvents turns a tool's JSON result into events, using m (unmapped
@@ -363,6 +411,11 @@ func lookup(v any, paths string) (any, bool) {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
+		}
+		if obj, isObj := v.(map[string]any); isObj {
+			if cur, ok := obj[p]; ok && cur != nil { // a key with dots in it
+				return cur, true
+			}
 		}
 		cur, ok := v, true
 		for _, key := range strings.Split(p, ".") {

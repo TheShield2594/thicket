@@ -70,6 +70,12 @@ The tool's result must be JSON. How it maps to events:
 - `from_arg`, `to_arg`: the arguments that take the start and end of the
   range (RFC 3339). Without them the range isn't passed, and events are
   filtered after the call.
+- `next_path`, `page_arg`: where a result says there are more pages, and
+  the argument that asks for the next one. The `google` preset follows
+  `nextPageToken` with `pageToken`, up to 20 pages. A result that says
+  there are more pages Thicket can't ask for (Outlook's
+  `@odata.nextLink`), or more than 20 pages or 5000 events in the range,
+  is reported as an error rather than shown with events missing.
 - `map`: where each field is, as a dotted path, or several separated by
   `|` (the first that's there wins): `items` (the list of events),
   `title`, `start`, `end`, `all_day`, `location`, `link`, `id`. Fields

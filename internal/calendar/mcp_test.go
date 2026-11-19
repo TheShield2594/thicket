@@ -1,6 +1,8 @@
 package calendar
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -107,5 +109,46 @@ func TestMapEventsZonesAndRange(t *testing.T) {
 	b.WriteString(`{"title":"last","start":"2026-11-20T11:00:00Z"}]`)
 	if _, err := mapEvents(b.String(), FieldMap{}, time.UTC, from, to); err == nil {
 		t.Fatal("more events than the cap came back without an error")
+	}
+}
+
+func TestFetchMCPPages(t *testing.T) {
+	from, to := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	src, err := ParseMCPSource(`{"integration":"gcal","tool":"list_events","preset":"google"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tokens []string
+	s := &Service{MCP: func(ctx context.Context, integration, tool string, args json.RawMessage) (string, error) {
+		var a map[string]any
+		json.Unmarshal(args, &a)
+		tok, _ := a["pageToken"].(string)
+		tokens = append(tokens, tok)
+		switch tok {
+		case "":
+			return `{"items":[{"summary":"one","start":{"dateTime":"2026-11-17T10:00:00Z"}}],"nextPageToken":"p2"}`, nil
+		case "p2":
+			return `{"items":[{"summary":"two","start":{"dateTime":"2026-11-18T10:00:00Z"}}]}`, nil
+		}
+		return "", nil
+	}}
+	evs, err := s.fetchMCP(context.Background(), src, from, to, time.UTC)
+	if err != nil || len(evs) != 2 || evs[1].Title != "two" || strings.Join(tokens, ",") != ",p2" {
+		t.Fatalf("pages: %v %v (tokens %q)", evs, err, tokens)
+	}
+	// Endless pages: an error, not a partial calendar.
+	s.MCP = func(ctx context.Context, integration, tool string, args json.RawMessage) (string, error) {
+		return `{"items":[],"nextPageToken":"again"}`, nil
+	}
+	if _, err := s.fetchMCP(context.Background(), src, from, to, time.UTC); err == nil {
+		t.Fatal("endless pages came back without an error")
+	}
+	// A next page it can't ask for (Outlook's nextLink): an error too.
+	out, _ := ParseMCPSource(`{"integration":"o","tool":"list","preset":"outlook"}`)
+	s.MCP = func(ctx context.Context, integration, tool string, args json.RawMessage) (string, error) {
+		return `{"value":[{"subject":"x","start":{"dateTime":"2026-11-17T10:00:00","timeZone":"UTC"}}],"@odata.nextLink":"https://graph.example/next"}`, nil
+	}
+	if _, err := s.fetchMCP(context.Background(), out, from, to, time.UTC); err == nil {
+		t.Fatal("a missing page was ignored")
 	}
 }
