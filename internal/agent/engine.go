@@ -588,8 +588,12 @@ func (e *Engine) persona(c *character.Character) channel.Persona {
 	case strings.HasPrefix(c.Avatar, "https://") || strings.HasPrefix(c.Avatar, "http://"):
 		p.AvatarURL = c.Avatar
 	case c.Avatar != "" && e.Cfg.PublicURL != "":
-		if _, err := os.Stat(filepath.Join(e.Chars.Dir(), filepath.Base(c.Avatar))); err == nil {
-			p.AvatarURL = e.Cfg.PublicURL + "/avatars/" + filepath.Base(c.Avatar)
+		file := filepath.Base(c.Avatar)
+		if _, err := os.Stat(filepath.Join(e.Chars.Dir(), file)); err == nil {
+			if m := e.moodAvatar(c.ID, file); m != "" {
+				file = m // its pleased or unsure picture, while the mood lasts
+			}
+			p.AvatarURL = e.Cfg.PublicURL + "/avatars/" + file
 		}
 	}
 	return p

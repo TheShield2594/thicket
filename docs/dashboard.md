@@ -6,8 +6,10 @@ and pause.
 
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
-  or stuck when it has failed work in your inbox from the last day). The
-  page checks every 5 seconds. Each card also shows how many of the
+  or stuck when it has failed work in your inbox from the last day), or
+  how its last reply went for a few minutes after (pleased, or unsure
+  after a rewrite, a refusal or while it waits on your OK). The page
+  checks every 5 seconds. Each card also shows how many of the
   sprig's daily unprompted messages you've had today, how many are held
   for later (quiet hours or the daily limit), and its quiet hours.
 - **Needs you**: requests waiting for your OK (approve or deny), drafts a
@@ -68,4 +70,6 @@ file publishes only to the host itself. Either:
 - It can't be embedded in other sites and is never cached.
 
 Avatars are also served on their own: `/avatars/<id>.svg` (live state) or
-`/avatars/<id>.svg?state=thinking`.
+`/avatars/<id>.svg?state=thinking`. The states are idle, thinking,
+working, sleeping, stuck, pleased and unsure (the last two follow how a
+sprig's last reply went: see [Avatars](characters.md#avatars)).

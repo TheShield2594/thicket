@@ -106,6 +106,7 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	if ok, err := e.DB.DecideApproval(ctx, a.ID, status); err != nil || !ok {
 		return false, err
 	}
+	e.doneWaiting(a.Character)
 	if said != "" {
 		_ = e.DB.AddMessage(ctx, conv.ID, "user", "", said)
 	} else {

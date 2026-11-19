@@ -212,7 +212,8 @@ cookies (`Secure` over HTTPS).
   they can ask for more, with their track record attached
   ([details](docs/characters.md#bringing-on-a-new-sprig)).
 - Every sprig has a drawn, animated avatar that shows what it's doing
-  (idle, thinking, working, sleeping, stuck).
+  (idle, thinking, working, sleeping, stuck) and how its last reply went
+  (pleased, unsure).
 - Send voice messages (in Discord, Telegram or the web app): they're transcribed (by the `transcribe_model`
   setting, a model that hears audio) and the sprig answers what you said.
   Needs OpenRouter.

@@ -314,8 +314,25 @@ Each sprig is drawn from parts, no image generation involved:
 They live in `<id>/avatar.json`; anything missing is picked from the
 sprig's id, so every sprig has a look. The avatar animates for idle,
 thinking, working, sleeping and stuck, on the dashboard and at
-`/avatars/<id>.svg`. Discord and Telegram still use the `avatar` image
-field, since they can't show SVG.
+`/avatars/<id>.svg`.
+
+It also shows how the sprig's last reply went, read by the personality
+check (`consistency_check`) in the same cheap-model call, so it costs
+nothing extra. **Pleased** (arched eyes, a wide smile, a little heart)
+follows a reply that landed in character; **unsure** (a raised brow, a
+wobbly mouth, a question mark) follows one rewritten for drifting out of
+character, a refusal or hedge, or an approval the sprig is waiting on.
+Either face replaces the `expression` for the moment, and fades back
+after five minutes (an approval's unsure lasts until it's answered, up to
+the same five minutes). With the check off, replies count as pleased
+unless they used a banned phrase.
+
+Discord and Telegram use the `avatar` image field, since they can't show
+SVG. Discord shows a mood when there's a picture for it next to the
+avatar: with `avatar: pip.png`, `pip.pleased.png` and `pip.unsure.png`
+are used while the mood lasts (served at `/avatars/` like the avatar, so
+`THICKET_PUBLIC_URL` must be set). Telegram has no per-message pictures,
+so it can't show moods.
 
 ## Voice tests
 

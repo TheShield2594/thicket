@@ -12,11 +12,18 @@ import (
 )
 
 // What each sprig is doing right now, for its avatar: working (running a
-// tool), thinking (waiting on the model), stuck (failed or interrupted
-// work in the inbox from the last day), sleeping (its quiet hours, in the
-// owner's timezone), else idle.
+// tool), thinking (waiting on the model), pleased or unsure (how its last
+// reply went, for a few minutes: see mood.go), stuck (failed or
+// interrupted work in the inbox from the last day), sleeping (its quiet
+// hours, in the owner's timezone), else idle.
 
-type busy struct{ thinking, working atomic.Int32 }
+type busy struct {
+	thinking, working atomic.Int32
+
+	mu       sync.Mutex
+	verdicts map[int64]Verdict // conversation id -> last reply's verdict
+	waiting  time.Time         // when it last asked for an approval still unanswered
+}
 
 func (e *Engine) busyFor(id string) *busy {
 	v, _ := e.activity.LoadOrStore(id, &busy{})
@@ -58,6 +65,9 @@ func (e *Engine) sprigState(ctx context.Context, c *character.Character, loc *ti
 		return "working"
 	case b.thinking.Load() > 0:
 		return "thinking"
+	}
+	if m := e.sprigMood(c.ID); m != "" {
+		return m
 	}
 	if n, err := e.DB.OpenInboxFor(ctx, c.ID, e.now().Add(-24*time.Hour)); err == nil && n > 0 {
 		return "stuck"
