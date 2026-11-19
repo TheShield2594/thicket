@@ -91,6 +91,14 @@ type Relationships struct {
 	Characters map[string]string `yaml:"characters,omitempty"`
 }
 
+// Actions is how a sprig reports what it does.
+type Actions struct {
+	// Quiet keeps routine built-in work (scheduling jobs, webhooks and
+	// triggers) to the trail, without a line in the chat. What it does
+	// through integrations is always said.
+	Quiet bool `yaml:"quiet,omitempty"`
+}
+
 type Initiative struct {
 	CheckIns   bool   `yaml:"check_ins"`
 	FollowUps  bool   `yaml:"follow_ups"`
@@ -130,6 +138,7 @@ type Character struct {
 	Relationships Relationships `yaml:"relationships,omitempty"`
 	Tools         []string      `yaml:"tools,omitempty"`
 	Initiative    Initiative    `yaml:"initiative,omitempty"`
+	Actions       Actions       `yaml:"actions,omitempty"`
 	Model         string        `yaml:"model,omitempty"`
 	CreatedBy     string        `yaml:"created_by,omitempty"`
 	// BelongsTo makes a sprig one person's (their Thicket user id): only

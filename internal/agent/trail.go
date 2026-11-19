@@ -14,9 +14,10 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-// Every permission change and every sprig-created event goes in the trail
-// with what undoes it. Undo is one call (UndoTrail), from the dashboard,
-// the API or `thicket trail undo`.
+// Every permission change, every sprig-created event and every act-level
+// action (actions.go) goes in the trail with what undoes it, if anything
+// does. Undo is one call (UndoTrail): from the dashboard, the API,
+// `thicket trail undo ID`, or "undo" in the chat.
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
@@ -28,6 +29,9 @@ type trailUndo struct {
 	EventID   int64    `json:"event_id,omitempty"`
 	UserID    int64    `json:"user_id,omitempty"`
 	Role      string   `json:"role,omitempty"`
+	// An integration action's undo (Type mcp): the call that reverses it.
+	Server string          `json:"server,omitempty"`
+	Args   json.RawMessage `json:"args,omitempty"`
 }
 
 func (e *Engine) addTrail(ctx context.Context, userID int64, char, kind, summary, detail string, undo *trailUndo) int64 {
@@ -129,6 +133,10 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 		if e.Chars.PrivateFrom(u.Character, by.ID) {
 			return "", fmt.Errorf("no sprig %q", u.Character)
 		}
+	case (u.Type == "mcp" || u.Type == "job") && e.Chars.PrivateFrom(u.Character, by.ID):
+		return "", fmt.Errorf("no sprig %q", u.Character)
+	case (u.Type == "mcp" || u.Type == "job") && t.UserID == by.ID:
+		// the person it was done for
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
@@ -213,6 +221,8 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		done = fmt.Sprintf("the invite for user %d is withdrawn", u.UserID)
 	case "exec", "path":
 		return e.undoAccess(ctx, by, u)
+	case "mcp", "job":
+		return e.undoAction(ctx, by, u)
 	case "cap":
 		usd, _ := strconv.ParseFloat(u.Level, 64)
 		s, err := e.SetSprigCap(ctx, by, u.Character, u.Tool, usd)

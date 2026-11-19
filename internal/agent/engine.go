@@ -437,9 +437,22 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		if p.as != nil {
 			who = p.as
 		}
-		if p.approval != nil {
+		switch {
+		case p.approval != nil:
 			err = e.deliverApproval(ctx, who, p.approval, p.text)
-		} else {
+		case p.trailID != 0:
+			// What a sprig did: its ids are kept so "undo" in reply finds it.
+			var ids []string
+			if ids, err = e.sendIDs(ctx, t.chatRef, who, p.text); err == nil {
+				_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, ids...)
+				if len(ids) == 0 {
+					_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, fmt.Sprintf("trail-%d", p.trailID))
+				}
+				if t.conv != nil {
+					_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", who.ID, p.text)
+				}
+			}
+		default:
 			err = e.send(ctx, t.chatRef, who, p.text)
 		}
 		if err != nil {

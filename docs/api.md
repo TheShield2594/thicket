@@ -95,6 +95,14 @@ shared one). Each answers with the pauses in force, like the `GET`:
 Refused requests get `403` and are recorded in the trail. See
 [Pausing](operations.md#pausing-the-kill-switch).
 
+### `POST /api/v1/trail/{id}/undo`
+
+Undoes one [trail](household.md#the-trail) entry as the token's user, by
+the same rules as the dashboard and "undo" in chat: `{"result": "Undone: …"}`,
+or `400` with why not. Command line: `thicket trail` lists the trail (from
+the database, so it works while Thicket is down) and
+`thicket trail undo ID` calls this.
+
 ### `GET /api/v1/sprigs`
 
 `{"sprigs": [{"id": "juniper", "name": "Juni", "role": "…", "host": true}]}`

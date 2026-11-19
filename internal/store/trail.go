@@ -26,6 +26,7 @@ const (
 	TrailRefused = "refused" // someone tried to change a sprig that isn't theirs to change
 	TrailPause   = "pause"   // everything, or one sprig, was paused or resumed
 	TrailCap     = "cap"     // a sprig's own spend cap changed
+	TrailAction  = "action"  // a sprig did something at act level (an integration, a job)
 )
 
 type TrailEntry struct {
@@ -120,4 +121,42 @@ func (s *Store) MarkTrailUndone(ctx context.Context, id, by int64) (bool, error)
 func (s *Store) ClearTrailUndone(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE trail SET undone_at = NULL, undone_by = NULL WHERE id = ?", id)
 	return err
+}
+
+// AddTrailAcks records the chat app's ids for the line that said what a
+// sprig did, so "undo" in reply to it finds the entry.
+func (s *Store) AddTrailAcks(ctx context.Context, chatRef string, trailID, userID int64, platformIDs ...string) error {
+	for _, pid := range platformIDs {
+		if pid == "" {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, "INSERT OR REPLACE INTO trail_acks (chat_ref, platform_id, trail_id, user_id, created_at) VALUES (?, ?, ?, ?, ?)",
+			chatRef, pid, trailID, userID, s.unix()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TrailAck is the trail entry a line in a chat said, and whose it is.
+func (s *Store) TrailAck(ctx context.Context, chatRef, platformID string) (trailID, userID int64, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT trail_id, user_id FROM trail_acks WHERE chat_ref = ? AND platform_id = ?", chatRef, platformID).
+		Scan(&trailID, &userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
+	return trailID, userID, err
+}
+
+// LatestTrailAck is the newest action said to this person in this chat
+// since t that can still be undone.
+func (s *Store) LatestTrailAck(ctx context.Context, chatRef string, userID int64, since time.Time) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT a.trail_id FROM trail_acks a JOIN trail t ON t.id = a.trail_id
+		WHERE a.chat_ref = ? AND a.user_id = ? AND a.created_at >= ? AND t.undone_at IS NULL AND t.undo != ''
+		ORDER BY a.created_at DESC, a.trail_id DESC LIMIT 1`, chatRef, userID, since.Unix()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }

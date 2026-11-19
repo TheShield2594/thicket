@@ -65,7 +65,7 @@ func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMes
 	case lv == store.LevelAct:
 		return "", true
 	case lv == store.LevelAsk:
-		return e.requestApproval(ctx, t, tool, args), false
+		return e.requestApprovalNote(ctx, t, tool, args, e.undoNote(ctx, tool)), false
 	case !changes(tool):
 		return "", true // read and draft both allow reading
 	case lv == store.LevelRead:

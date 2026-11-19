@@ -185,6 +185,9 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 	}
 	// Redact before anything else sees it: the model, the DB, the chat.
 	out = e.Secrets.Redact(out)
+	if err == nil {
+		e.recordAction(ctx, t, tool, args, out)
+	}
 	if tool.Untrusted {
 		return wrapUntrusted(name, out)
 	}

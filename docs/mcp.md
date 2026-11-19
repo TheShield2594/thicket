@@ -221,6 +221,37 @@ expire after 30 minutes).
   `set_tool_approval` carry over (`always` became `ask`, `never` became
   `act`, for every sprig).
 
+## Saying what was done, and undo
+
+Every action a sprig takes that changes something (an integration tool
+that isn't read-only, scheduling a job, making a webhook or trigger) goes
+in the [trail](household.md#the-trail) with one plain sentence written by
+Thicket, not the model, and that sentence is posted in the chat right after
+the reply:
+
+> I added milk to groceries. Reply **undo** to remove it.
+
+Reply **undo** to that line (or just say "undo" for the newest one in the
+chat) and Thicket reverses it in code. Undo is also on the dashboard's
+**Changes** list, in `POST /api/v2/trail/{id}/undo`, and
+`thicket trail undo ID`.
+
+An integration says how to reverse each of its tools when it's added (ask
+Juni, or pass `undo` to `add_integration`):
+
+```json
+{"add_item": {"tool": "delete_item", "args": {"id": "{{result.id}}"},
+              "said": "I added {{args.item}} to {{args.list}}", "label": "remove it"}}
+```
+
+`{{args.NAME}}` is what the tool was called with, `{{result.NAME}}` a field
+of its JSON result (`{{result}}` the whole text). A tool with no undo (an
+email sent, a message posted) is recorded as not undoable, and the sprig
+says so plainly: in the approval prompt before it runs, at `ask` level,
+and after it ran ("This can't be undone from here."). Read-only work is
+never posted; a sprig with `actions.quiet: true` also keeps routine work
+(scheduling, its webhooks and triggers) to the trail.
+
 ## Untrusted content
 
 Anything that comes back from an integration (an email body, a web page, a

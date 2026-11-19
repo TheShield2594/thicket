@@ -134,6 +134,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/pause", a.auth(a.getPauses))
 	mux.HandleFunc("POST /api/v1/pause", a.auth(a.pause))
 	mux.HandleFunc("POST /api/v1/resume", a.auth(a.resume))
+	mux.HandleFunc("POST /api/v1/trail/{id}/undo", a.auth(a.undoTrail))
 	return mux
 }
 
@@ -449,4 +450,24 @@ func (a *API) setPause(w http.ResponseWriter, r *http.Request, c caller, on bool
 		return
 	}
 	a.getPauses(w, r, c)
+}
+
+// undoTrail undoes one trail entry as the token's user, by the same rules
+// as the dashboard and "undo" in chat.
+func (a *API) undoTrail(w http.ResponseWriter, r *http.Request, c caller) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(w, http.StatusBadRequest, "the trail id must be a number")
+		return
+	}
+	msg, err := a.Engine.UndoTrail(r.Context(), c.user, id)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			code = http.StatusNotFound
+		}
+		fail(w, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": msg})
 }

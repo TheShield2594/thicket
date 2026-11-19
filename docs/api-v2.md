@@ -46,7 +46,7 @@ Replies arrive on the event stream (or poll the history). Each sprig in
 |---|---|
 | `GET /api/v2/approvals` | what's waiting for this person's OK |
 | `POST /api/v2/approvals/{id}` | `{"approve": true}` or `false` |
-| `GET /api/v2/trail` | permission changes and sprig calendar entries (admins: all) |
+| `GET /api/v2/trail` | permission changes, sprig calendar entries and what sprigs did (admins: all) |
 | `POST /api/v2/trail/{id}/undo` | undo one |
 | `PUT /api/v2/levels` | admins: `{"sprig": "hal", "tool": "mcp_ha__turn_on", "level": "ask"}` (`""` resets) |
 

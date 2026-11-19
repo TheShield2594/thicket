@@ -4,8 +4,18 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v26)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v27)
 
+- Show your work (schema v27): every act-level action, through an
+  integration or a built-in tool like scheduling a job, goes in the trail
+  with one plain sentence written by Thicket ("I added milk to
+  groceries."), posted in the chat right after the reply with how to undo
+  it. Reply **undo** to that line, or just say "undo", and it's reversed
+  in code. Integrations declare the call that reverses each tool
+  (`undo` on `add_integration`); tools without one are said to be not
+  undoable, before the action at `ask` level and after it. A sprig with
+  `actions.quiet: true` keeps routine work to the trail. New
+  `thicket trail [list | undo ID]` and `POST /api/v1/trail/{id}/undo`.
 - Per-sprig monthly caps and estimates before costly actions (schema
   v26). `budget.character.<id>.monthly_usd` sits beside the daily one,
   and both show on the dashboard's Costs section and in `thicket costs`.

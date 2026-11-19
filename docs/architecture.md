@@ -432,11 +432,16 @@ to the owner's inbox under one `ref` per limit.
 ## The trail
 
 `trail` rows record every permission change (levels, grants, exec and
-paths, roles), sprig-created calendar entries, held actions, pauses and
-refusals, each with an optional JSON undo (`trailUndo`). `UndoTrail`
-checks who may undo (admins for shared sprigs, a solo sprig's person for
-theirs, anyone for their own calendar entries), claims the row, runs the
-undo and records that too. It is never pruned.
+paths, roles, sprig caps), sprig-created calendar entries, act-level
+actions (`agent/actions.go`), held actions, pauses and refusals, each with
+an optional JSON undo (`trailUndo`). `UndoTrail` checks who may undo
+(admins for shared sprigs, a solo sprig's person for theirs, anyone for
+their own calendar entries and the actions done for them, only a kid
+sprig's parents to raise its cap), claims the row, runs the undo and
+records that too. It is never pruned. An action's sentence is written in
+code from the tool call and the integration's declared inverse
+(`mcp_servers.undo`); the chat app's ids for the line saying it are kept
+in `trail_acks`, so "undo" in reply finds it.
 
 ## Heartbeats, tasks and the inbox
 

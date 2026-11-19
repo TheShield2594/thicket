@@ -39,7 +39,13 @@ type Tool struct {
 	// Exec: the tool can run commands or programs. Offered only to sprigs
 	// whose owner turned exec on (see sandboxing.go).
 	Exec bool
-	Run  func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
+	// Trailed: the tool records itself in the trail (calendar entries),
+	// so a finished call isn't recorded again (actions.go).
+	Trailed bool
+	// Remote is an integration tool's own name (Name is the model-facing
+	// mcp_<server>__<tool>).
+	Remote string
+	Run    func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
 }
 
 // Label is shown in approval prompts.
@@ -119,6 +125,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Description: fmt.Sprintf("[%s integration] %s", st.Server, desc),
 				Params:      params,
 				Scope:       "mcp:" + st.Server,
+				Remote:      st.Tool.Name,
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
 				Exec:        st.Exec,
@@ -460,9 +467,11 @@ func (e *Engine) builtinTools() []*Tool {
 			Name: "add_integration",
 			Description: "Connect an MCP server. transport 'http' (target = URL, e.g. Home Assistant's http://homeassistant.local:8123/api/mcp with header Authorization: 'Bearer {{secret:ha_token}}') or 'stdio' (target = command). Use request_secret first for any token. " +
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
-				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
+				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools. " +
+				"undo declares, per tool that changes something, the call that reverses it (e.g. create_item → delete_item with id {{result.id}}), so sprigs can offer \"reply undo\" after using it; tools without one are said to be not undoable. To add undo to a connected integration, call this again with the same settings plus undo.",
 			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
 				`"exec":{"type":"boolean","description":"true if it can run commands or programs (a shell, a code runner): its tools are then offered only to sprigs with exec turned on (set_sprig_access)"},` +
+				`"undo":{"type":"object","description":"per tool name: the call that reverses it","additionalProperties":{"type":"object","properties":{"tool":{"type":"string","description":"the integration's tool that reverses it"},"args":{"type":"object","additionalProperties":{"type":"string"},"description":"its arguments; may use {{args.NAME}} (the original call's) and {{result.NAME}} (a field of its JSON result) or {{result}}"},"said":{"type":"string","description":"how to say what was done, e.g. 'I added {{args.item}} to {{args.list}}'"},"label":{"type":"string","description":"what undo does, e.g. 'remove it'"}},"required":["tool"]}},` +
 				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
 			Scope:     "admin",
 			AdminOnly: true,

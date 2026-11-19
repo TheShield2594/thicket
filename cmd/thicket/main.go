@@ -111,6 +111,8 @@ Usage:
                                       and run nothing until resumed; works while the server runs
   thicket pause status                what's paused
   thicket resume [--sprig ID]         lift a pause
+  thicket trail [list] [--limit N]    what changed and what sprigs did, newest first, with undo ids
+  thicket trail undo ID               undo one entry (through the running server: needs THICKET_API_TOKEN)
   thicket mcp                         an MCP server on stdin/stdout, so Claude Desktop, Cursor and
                                       other agents can talk to your sprigs (needs THICKET_API_TOKEN)
   thicket changelog [VERSION]         what changed in this build, or in one released version
@@ -183,6 +185,8 @@ func main() {
 		err = pauseCmd(loadConfig(), args, os.Stdout, true)
 	case "resume":
 		err = pauseCmd(loadConfig(), args, os.Stdout, false)
+	case "trail":
+		err = trailCmd(loadConfig(), args, os.Stdout)
 	case "mcp":
 		err = mcpCmd()
 	case "changelog":

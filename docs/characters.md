@@ -82,6 +82,7 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `initiative.follow_ups` | | Follows up on things you mentioned ("how did the interview go?"). |
 | `initiative.quiet_hours` | | `"22:00-08:00"` in your timezone: no proactive messages then. Job and trigger results that finish during quiet hours are held and delivered when they end. |
 | `initiative.daily_messages` | | How many messages the sprig may start itself (job and trigger results, check-ins, follow-ups) per person per day, in that person's timezone: 1-50, default 3. Once it's used up, results wait for the next day. Replies never count. Ask the sprig ("message me at most 5 times a day") to change it, or its quiet hours, in chat. |
+| `actions.quiet` | | `true` keeps routine built-in work (scheduling jobs, making webhooks and triggers) to the trail, without a line in the chat. What it does through integrations is always said, with undo where there is one. See [Saying what was done](mcp.md#saying-what-was-done-and-undo). |
 | `model` | | Override the chat model for this sprig (an OpenRouter model id). |
 | `created_by` | | Informational. |
 | `belongs_to` | | A Thicket user id (`thicket user list`): the sprig is that person's own, and only they can talk to it, see it in the web app or its dashboard card, or hand work to it. Leave it off (the default) for a sprig everyone shares. The host is always shared. Ask Juni for a "private" sprig and she sets it to you. |

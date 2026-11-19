@@ -410,6 +410,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("create_trigger", map[string]any{"name": "Bad", "task": "x", "integration": "ha", "tool": "turn_on", "owner": "hal"}), nil
 	case strings.Contains(u, "on your computer"):
 		return toolCall("mcp_sandbox__run_command", map[string]any{"command": "echo built > out.txt && cat out.txt"}), nil
+	case strings.HasPrefix(u, "add ") && strings.Contains(u, " to "):
+		// "add ITEM to LIST": the to-do integration.
+		item, list, _ := strings.Cut(strings.TrimPrefix(u, "add "), " to ")
+		return toolCall("mcp_todo__add_item", map[string]any{"item": item, "list": list}), nil
 	case strings.Contains(u, "turn on the light"):
 		return toolCall("mcp_ha__turn_on", map[string]any{"entity": "light.kitchen"}), nil
 	case strings.Contains(u, "check the light"):

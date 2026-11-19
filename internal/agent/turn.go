@@ -83,6 +83,7 @@ type turn struct {
 
 type post struct {
 	text     string
+	trailID  int64                // the trail entry it says (its ids are kept for "undo")
 	approval *store.Approval      // registered only once the prompt is delivered
 	as       *character.Character // who posts it (default: the turn's sprig)
 }
@@ -427,6 +428,9 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	e.logActivity(ctx, level, "tool", t.char.ID, t.user.ID, summary, detail)
 	// Tool output goes back to the model: no secret values in it.
 	out = e.Secrets.Redact(out)
+	if err == nil {
+		e.recordAction(ctx, t, tool, args, out)
+	}
 	if tool.Untrusted {
 		t.addTaint(tool.Label())
 		return wrapUntrusted(name, out)

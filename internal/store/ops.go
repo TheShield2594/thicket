@@ -273,12 +273,34 @@ type MCPServer struct {
 	// Exec marks a server that can run commands or programs: its tools
 	// are offered only to sprigs with exec turned on.
 	Exec bool `json:"exec,omitempty"`
+	// Undo declares, per tool, the call that reverses it. A tool with no
+	// entry is recorded in the trail as not undoable.
+	Undo map[string]InverseCall `json:"undo,omitempty"`
+}
+
+// InverseCall is the call that undoes one of an integration's tools.
+// Values in Args and Said may use {{args.NAME}} (what the tool was called
+// with) and {{result.NAME}} (a field of its JSON result, or {{result}} for
+// the whole text).
+type InverseCall struct {
+	Tool string            `json:"tool"`
+	Args map[string]string `json:"args,omitempty"`
+	// Said is how Thicket says what was done ("I added {{args.item}} to
+	// {{args.list}}"); Label what undo does ("remove it").
+	Said  string `json:"said,omitempty"`
+	Label string `json:"label,omitempty"`
 }
 
 func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	args, _ := json.Marshal(nonNilSlice(m.Args))
 	env, _ := json.Marshal(nonNilMap(m.Env))
 	hdr, _ := json.Marshal(nonNilMap(m.Headers))
+	// No Undo map keeps what's stored (re-adding an integration doesn't
+	// forget how to undo its tools); an empty one clears it.
+	undo, _ := json.Marshal(m.Undo)
+	if m.Undo == nil {
+		undo = nil
+	}
 	en, ex := 0, 0
 	if m.Enabled {
 		en = 1
@@ -286,15 +308,19 @@ func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	if m.Exec {
 		ex = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, undo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET transport = excluded.transport, target = excluded.target, args = excluded.args,
-		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec`,
-		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, s.unix())
+		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec,
+		undo = CASE WHEN excluded.undo = '' THEN mcp_servers.undo ELSE excluded.undo END`,
+		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, string(undo), s.unix())
+	if err == nil && undo == nil {
+		_, err = s.db.ExecContext(ctx, "UPDATE mcp_servers SET undo = '{}' WHERE name = ? AND undo = ''", m.Name)
+	}
 	return err
 }
 
 func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled, exec FROM mcp_servers ORDER BY name")
+	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled, exec, undo FROM mcp_servers ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -302,14 +328,15 @@ func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
 	var out []MCPServer
 	for rows.Next() {
 		var m MCPServer
-		var args, env, hdr string
+		var args, env, hdr, undo string
 		var en, ex int
-		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en, &ex); err != nil {
+		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en, &ex, &undo); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(args), &m.Args)
 		_ = json.Unmarshal([]byte(env), &m.Env)
 		_ = json.Unmarshal([]byte(hdr), &m.Headers)
+		_ = json.Unmarshal([]byte(undo), &m.Undo)
 		m.Enabled = en == 1
 		m.Exec = ex == 1
 		out = append(out, m)

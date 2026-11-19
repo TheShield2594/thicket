@@ -39,9 +39,10 @@ func (e *Engine) calendarTools() []*Tool {
 				"start is local time: YYYY-MM-DD HH:MM, or YYYY-MM-DD for all day. Family sprigs add to the shared household calendar by default; others to the user's own. It can be undone from the trail.",
 			Params: `{"type":"object","properties":{"title":{"type":"string"},"start":{"type":"string"},"end":{"type":"string"},"kind":{"type":"string","description":"e.g. dinner, release, reminder"},` +
 				`"details":{"type":"string"},"source_label":{"type":"string","description":"where it came from, e.g. Mealie"},"source_url":{"type":"string"},"shared":{"type":"boolean"}},"required":["title","start"]}`,
-			Scope:  character.ScopeCalendar,
-			Writes: true,
-			Run:    e.toolAddToCalendar,
+			Scope:   character.ScopeCalendar,
+			Writes:  true,
+			Trailed: true,
+			Run:     e.toolAddToCalendar,
 		},
 		{
 			Name:        "remove_from_calendar",
@@ -49,6 +50,7 @@ func (e *Engine) calendarTools() []*Tool {
 			Params:      `{"type":"object","properties":{"event_id":{"type":"integer"}},"required":["event_id"]}`,
 			Scope:       character.ScopeCalendar,
 			Writes:      true,
+			Trailed:     true,
 			Run:         e.toolRemoveFromCalendar,
 		},
 	}
