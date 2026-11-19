@@ -68,6 +68,8 @@ type Dashboard struct {
 	BaseURL string
 	// Device describes a browser from its user agent.
 	Device func(ua string) string
+	// Memories is the memory screen's engine side.
+	Memories MemoryKeeper
 }
 
 func (d *Dashboard) now() time.Time {
@@ -137,6 +139,14 @@ func flashFor(code string) string {
 		return "Cleared from your inbox."
 	case "revoked":
 		return "Signed out. That browser needs to sign in again."
+	case "memory-saved":
+		return "Saved. Sprigs use it from their next reply; Undo puts it back."
+	case "memory-added":
+		return "Added. Sprigs use it from their next reply."
+	case "memory-deleted":
+		return "Forgotten for good."
+	case "memory-undone":
+		return "Undone."
 	}
 	return ""
 }
@@ -237,6 +247,9 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 	case kind == "trail" && action == "undo" && d.Undo != nil:
 		_, err = d.Undo(ctx, u, id)
 		ok, anchor = "undone", "changes"
+	case kind == "memory" && d.Memories != nil:
+		ok, err = d.memoryAct(ctx, u, action, id, r)
+		anchor = "memories"
 	case kind == "inbox" && action == "run" && d.RunDraft != nil:
 		err, ok = d.RunDraft(ctx, u, id), "done"
 	case kind == "inbox" && action == "resolve":
@@ -299,8 +312,9 @@ type pageData struct {
 	Now            string
 	Model          string
 	Sprigs         []sprigView
-	MemGroup       []memGroup
+	MemBlocks      []memBlock
 	MemCount       int
+	MemKinds       []string
 	Jobs           []jobView
 	Tasks          []taskView
 	Skills         []store.Skill
@@ -391,16 +405,6 @@ type inboxView struct {
 
 type costRow struct {
 	Label, Heartbeat, Task, Total, Calls string
-}
-
-type memGroup struct {
-	Title    string
-	Memories []memView
-}
-
-type memView struct {
-	Kind, Content, Due string
-	Locked             bool
 }
 
 type jobView struct {
@@ -545,35 +549,8 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		return id
 	}
 
-	mems, err := d.DB.AllMemories(ctx, u.ID)
-	if err != nil {
+	if err := d.memories(ctx, u, p); err != nil {
 		return nil, err
-	}
-	groups := map[string][]memView{}
-	for _, m := range mems {
-		if !m.ExpiresAt.IsZero() && m.ExpiresAt.Before(d.now()) {
-			continue
-		}
-		v := memView{Kind: m.Kind, Content: m.Content, Locked: m.Locked}
-		if !m.DueAt.IsZero() {
-			v.Due = m.DueAt.In(loc).Format("Mon 2 Jan")
-		}
-		key := "Shared with every sprig"
-		if m.Character != "" {
-			key = "Just with " + name(m.Character)
-		}
-		groups[key] = append(groups[key], v)
-		p.MemCount++
-	}
-	keys := make([]string, 0, len(groups))
-	for k := range groups {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { // shared first
-		return keys[i] == "Shared with every sprig" || (keys[j] != "Shared with every sprig" && keys[i] < keys[j])
-	})
-	for _, k := range keys {
-		p.MemGroup = append(p.MemGroup, memGroup{Title: k, Memories: groups[k]})
 	}
 
 	jobs, err := d.DB.UserJobs(ctx, u.ID)

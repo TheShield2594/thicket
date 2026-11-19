@@ -23,7 +23,9 @@ type Alert struct {
 // Guard wraps a model client: it refuses calls past a cap, records usage
 // for every call, and raises alerts.
 type Guard struct {
-	Next     llm.Client
+	Next llm.Client
+	// Voice makes spoken replies; Speak meters it like Next.
+	Voice    llm.Speaker
 	DB       *store.Store
 	Settings *settings.Settings
 	Log      *slog.Logger
@@ -150,8 +152,9 @@ func (g *Guard) capAlert(ctx context.Context, c capCheck, spent float64) {
 	})
 }
 
-func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	m := llm.MetaFrom(ctx)
+// admit refuses a call while paused, past a cap, or while usage can't be
+// recorded. It returns the caps it checked, for record.
+func (g *Guard) admit(ctx context.Context, m llm.Meta) ([]capCheck, error) {
 	if g.Paused != nil {
 		if err := g.Paused(ctx, m.Character); err != nil {
 			return nil, err
@@ -172,6 +175,43 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 			return nil, &llm.BudgetError{Reason: fmt.Sprintf("%s cap $%.2f reached", c.name, c.limit)}
 		}
 	}
+	return cs, nil
+}
+
+// Speak makes a spoken reply, under the same caps as model calls. The
+// speech endpoint reports no cost, so speech from OpenRouter is priced by
+// the speech_usd_per_1k_chars setting; a local speech server is free.
+func (g *Guard) Speak(ctx context.Context, req llm.SpeechRequest) (*llm.Speech, error) {
+	if g.Voice == nil {
+		return nil, fmt.Errorf("spoken replies aren't set up")
+	}
+	m := llm.MetaFrom(ctx)
+	cs, err := g.admit(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	// The rate is read first: once the audio is made, a cancelled ctx
+	// would make this read fall back to the default rate.
+	rate := g.Settings.Float(ctx, "speech_usd_per_1k_chars")
+	sp, err := g.Voice.Speak(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	cost := 0.0
+	if sp.Hosted {
+		cost = rate * float64(len([]rune(req.Input))) / 1000
+	}
+	g.record(ctx, cs, store.Usage{UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
+		Origin: llm.OriginOf(m), Model: sp.Model, CostUSD: cost})
+	return sp, nil
+}
+
+func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	m := llm.MetaFrom(ctx)
+	cs, err := g.admit(ctx, m)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := g.Next.Chat(ctx, req)
 	if err != nil {
 		return nil, err
@@ -185,6 +225,13 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		u.HistoryChars = min(req.Mix.HistoryChars, u.PromptChars)
 		u.DocumentChars = min(req.Mix.DocumentChars, u.PromptChars-u.HistoryChars)
 	}
+	g.record(ctx, cs, u)
+	return resp, nil
+}
+
+// record stores a paid call's usage and raises the 80% and 100% alerts it
+// crossed.
+func (g *Guard) record(ctx context.Context, cs []capCheck, u store.Usage) {
 	// The call is paid for even if the caller has gone away: record it
 	// regardless of cancellation, and keep it for retry if the write fails.
 	if rerr := g.DB.RecordUsage(context.WithoutCancel(ctx), u); rerr != nil {
@@ -194,7 +241,7 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		g.mu.Unlock()
 	}
 	for _, c := range cs {
-		after := c.spent + resp.Usage.Cost
+		after := c.spent + u.CostUSD
 		if c.limit > 0 && after >= c.limit && c.spent < c.limit {
 			g.capAlert(ctx, c, after) // this call crossed the cap
 			continue
@@ -207,7 +254,6 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 			})
 		}
 	}
-	return resp, nil
 }
 
 func (g *Guard) alert(ctx context.Context, a Alert) {

@@ -52,9 +52,19 @@ Telegram's formatting (bold, code, links, headings); if Telegram refuses
 a message's formatting, it's sent as plain text.
 
 Photos, PDFs and text files work as on Discord. Telegram limits bots to
-downloading files up to 20 MB. Voice messages, audio and video arrive by
-name only. Each photo in an album arrives as its own message, so the sprig
-may reply once per photo.
+downloading files up to 20 MB. Voice messages and audio are transcribed
+(`transcribe_model`); video arrives by name only. The photos of an album
+are gathered into one message.
+
+A voice message gets a voice note back, after the text reply, in the
+sprig's own voice (see [Speaking out loud](characters.md#speaking-out-loud)).
+Thicket asks the speech server for Ogg Opus, which Telegram shows as a
+voice note (OpenRouter only makes MP3, so with it you get an audio file
+Telegram plays inline). If a server sends another format, or you've
+blocked voice messages from bots in Telegram's privacy settings, it
+arrives as a file instead. "Delete that" deletes the spoken copy along
+with the text. Send `/voice brief`, `/voice full` or `/voice off` to choose
+how the sprig you're talking to answers out loud.
 
 When a message looks like a key or password, Thicket deletes it. Telegram
 lets bots do this in private chats, unlike Discord.

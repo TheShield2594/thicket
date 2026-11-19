@@ -73,6 +73,8 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `personality.catchphrases` | | Used sparingly, not in every message. |
 | `voice.style` | yes | Rules for how they talk. |
 | `voice.never_say` | | Phrases they never say. Checked in code before every reply; a reply that uses one is rewritten. |
+| `voice.speaks` | | When they answer out loud: `never`, `when_spoken_to` (the default: a voice message gets a voice message back) or `always`. See [Speaking out loud](#speaking-out-loud). |
+| `voice.sounds_like` | | The speech voice they speak in, as the speech server names it (`nova`, `af_heart`). Empty: the `speech_voice` setting. |
 | `relationships.user` | | How they see you. |
 | `relationships.characters` | | How they see other sprigs, keyed by id. |
 | `tools` | | Tool scopes, below. |
@@ -86,9 +88,48 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `household` | | The sprig's tier: `solo` (one person's: needs `belongs_to`), `family` (shared by every adult; the default without `belongs_to`) or `kid`. See [Households](household.md). |
 | `kids` | kid sprigs | User ids of the kids it talks to. |
 | `parents` | kid sprigs | User ids of the adults who set it up: they read its chats, get its safety alerts and choose what it may use. |
-| `allow` | | Kid sprigs only: adult data a parent lets it see, `family_memory` and/or `calendar`. Nothing by default. |
+| `allow` | | Kid sprigs only: adult data a parent lets it see, `family_memory` and/or `calendar`, and `voice` to let it answer out loud. Nothing by default. |
 
 Unknown fields are an error, so typos don't silently do nothing.
+
+### Speaking out loud
+
+Send a sprig a voice message (a Telegram voice note, a Discord audio
+file, or the web app's recorder) and, by default, it answers with one:
+the text reply first, then the same reply read aloud in its voice.
+Telegram gets a voice note, Discord an audio attachment, and the web app
+a player under the reply. `voice.speaks: always` has it answer out loud
+every time; `never` keeps it to text. Scheduled jobs, check-ins and
+notices are never spoken.
+
+```yaml
+voice:
+  style:
+    - Brisk, cheerful, short sentences.
+  speaks: when_spoken_to
+  sounds_like: nova
+```
+
+Each person chooses how each sprig talks back to them: **full** reads the
+whole reply (the default), **brief** says a short version and sends the
+full text alongside, **off** is text only. Say "voice brief", "voice
+full" or "voice off" to the sprig (or "voice" to hear how it's set), or
+use the Voice buttons in its details in the web app. Code, links and
+formatting aren't read out, and very long replies are cut at about 4,000
+characters with "the rest is in the message".
+
+Speech is made by an OpenAI-compatible speech endpoint
+(`POST /v1/audio/speech`): by default the model server (`model_url`,
+OpenRouter), or a local speech server such as Kokoro-FastAPI beside
+Ollama, set with `speech_url`. `speech_model` and `speech_voice` choose
+the model and the default voice. Spoken replies count against the spend
+caps like any model call: OpenRouter speech is priced at
+`speech_usd_per_1k_chars` (default $0.015 per 1,000 characters), and a
+local speech server is free. If speech fails, the text has already gone
+out, and admins are told once a day.
+
+Kid sprigs speak only once a parent allows it (`allow: [voice]`, or the
+Voice box on the web app's kid screen).
 
 ### Quiet hours and the daily budget
 
@@ -102,6 +143,35 @@ requests for your approval, safety alerts to parents, and failures that
 need you. If one arrives during your quiet hours (or past the day's
 limit), it says why. The web app's sprig details and the dashboard show
 how much of today's budget is used and what's held.
+
+### Nothing new, nothing sent
+
+A sprig with nothing new to say stays quiet. Every message it starts
+itself (job and trigger results, check-ins, follow-ups) is checked once
+it's written, before it's sent or held:
+
+- **A rerun is dropped.** If it says what one of the sprig's last three
+  messages to you said (nearly the same words and exactly the same
+  times, dates and numbers, in the same order), it isn't sent. Messages
+  held for quiet hours are checked again just before they go out, so two
+  held results that say the same thing arrive once.
+- **Nothing new, nothing sent.** If nothing changed since the sprig last
+  wrote to you (nothing on your calendar for the next day and nothing
+  newly put on it, no follow-ups due, nothing new waiting for you, no new
+  memories, no other job results) and the message brings nothing of its
+  own (a due follow-up, a trigger's new items, something a job looked up
+  online or in an integration), it isn't sent. A morning briefing on an
+  empty day sends nothing; you never get "nothing new today". A routine
+  that stands alone (it calls no tools and fires on no event, like a
+  word of the day or a short poem) brings its own news, so it skips this
+  rule and goes to the cheap model.
+- **Otherwise the cheap model takes a look** (`cheap_model`) and drops
+  filler. If that check can't run, the message goes out.
+
+The first two are decided by Thicket itself, without a model. A job run
+held back is recorded as "nothing to report" with the message it would
+have sent; a held-back check-in or follow-up counts as done. The activity
+log says what was held back and why.
 
 ## Tool scopes
 
@@ -314,8 +384,25 @@ Each sprig is drawn from parts, no image generation involved:
 They live in `<id>/avatar.json`; anything missing is picked from the
 sprig's id, so every sprig has a look. The avatar animates for idle,
 thinking, working, sleeping and stuck, on the dashboard and at
-`/avatars/<id>.svg`. Discord and Telegram still use the `avatar` image
-field, since they can't show SVG.
+`/avatars/<id>.svg`.
+
+It also shows how the sprig's last reply went, read by the personality
+check (`consistency_check`) in the same cheap-model call, so it costs
+nothing extra. **Pleased** (arched eyes, a wide smile, a little heart)
+follows a reply that landed in character; **unsure** (a raised brow, a
+wobbly mouth, a question mark) follows one rewritten for drifting out of
+character, a refusal or hedge, or an approval the sprig is waiting on.
+Either face replaces the `expression` for the moment, and fades back
+after five minutes (an approval's unsure lasts until it's answered, up to
+the same five minutes). With the check off, replies count as pleased
+unless they used a banned phrase.
+
+Discord and Telegram use the `avatar` image field, since they can't show
+SVG. Discord shows a mood when there's a picture for it next to the
+avatar: with `avatar: pip.png`, `pip.pleased.png` and `pip.unsure.png`
+are used while the mood lasts (served at `/avatars/` like the avatar, so
+`THICKET_PUBLIC_URL` must be set). Telegram has no per-message pictures,
+so it can't show moods.
 
 ## Voice tests
 

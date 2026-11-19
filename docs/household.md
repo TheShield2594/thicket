@@ -122,7 +122,7 @@ household: kid
 kids: [7]        # Max's user id
 parents: [1, 2]  # who set it up
 tools: ["mcp:fortnite/player_stats"]   # tools a parent approved, one by one
-allow: []        # family_memory and/or calendar, if a parent allows
+allow: []        # family_memory, calendar and/or voice, if a parent allows
 personality:
   traits: [playful, kind]
 voice:
@@ -150,15 +150,26 @@ cover each one.
 - **No adult data** (calendars, email, family memory) unless a parent
   allows it in `allow`. With `calendar` allowed they see only shared
   household events, never a parent's own calendar.
+- **No talking out loud** unless a parent allows `voice`: then the kid
+  sprig answers a voice message with one, like any sprig.
 - **Kids talk only to their kid sprigs.** Naming Juni or a family sprig
   doesn't reach it, and adults can't chat with a kid sprig.
+- **Relationship memory stays in the sandbox.** How the kid likes their
+  kid sprig to talk, what they enjoy and what annoyed them belongs to
+  that kid sprig alone: never shared with other sprigs or family memory.
+  The kid and the sprig's parents can see and change it on the memory
+  screen; nobody else can.
 
 ## Parents
 
 In the web app, each kid sprig you set up appears under Household in the
 sidebar ("Bramble’s chats"). It shows the whole chat, read-only, and what
 the sprig may use: approve or remove tools one by one, and switch family
-memory or the calendar on or off. Every change goes in the trail.
+memory or the calendar on or off. Every change goes in the trail. The
+same page shows what the sprig remembers about its kids, relationship
+memory apart from facts: edit, lock, undo or delete any of it, or add
+("likes simple words"), here, on the dashboard, or with
+`GET /api/v2/memories?sprig=bramble`.
 
 - **Read the whole chat, any time:** in the web app, or `GET /api/v2/kid-sprigs/bramble/chats`.
   Kids' messages are kept: "delete that" and deleting in the chat app

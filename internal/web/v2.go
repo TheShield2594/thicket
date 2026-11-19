@@ -59,6 +59,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/chats/{chat}/messages", a.bearer(a.post))
 	mux.HandleFunc("DELETE /api/v2/chats/{chat}/messages/{id}", a.bearer(a.deleteMessage))
 	mux.HandleFunc("POST /api/v2/chats/{chat}/messages/{id}/pin", a.bearer(a.pinMessage))
+	mux.HandleFunc("GET /api/v2/chats/{chat}/messages/{id}/audio", a.bearer(a.audio))
+	mux.HandleFunc("PUT /api/v2/sprigs/{id}/voice", a.bearer(a.setVoice))
 	mux.HandleFunc("GET /api/v2/events", a.bearer(a.events))
 	// Calendar.
 	mux.HandleFunc("GET /api/v2/calendar", a.bearer(a.v2Calendar))
@@ -79,6 +81,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/kid-sprigs", a.bearer(a.v2CreateKidSprig))
 	mux.HandleFunc("GET /api/v2/kid-sprigs/{id}/chats", a.bearer(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/v2/kid-sprigs/{id}/access", a.bearer(a.v2KidAccess))
+	// Memory: facts and relationship memory, yours or a kid sprig's you set up.
+	a.memoryRoutes(mux, "/api/v2", a.bearer)
 	return mux
 }
 

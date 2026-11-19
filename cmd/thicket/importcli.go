@@ -126,7 +126,7 @@ func characterImportCmd(cfg *config.Config, args []string, in io.Reader, out io.
 	if owner != nil {
 		var changes []store.MemoryChange
 		for _, m := range d.Memories {
-			mem := store.Memory{UserID: owner.ID, Kind: m.Kind, Content: m.Content, Source: "user", Locked: true}
+			mem := store.Memory{UserID: owner.ID, Kind: m.Kind, Content: m.Content, Source: "user", Locked: true, Origin: store.OriginImport}
 			if m.Personal {
 				mem.Character = c.ID
 			}

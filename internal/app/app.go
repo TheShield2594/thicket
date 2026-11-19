@@ -239,9 +239,18 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		OnAlert: func(ctx context.Context, al budget.Alert) {
 			a.Engine.Notify(ctx, al.Key, 31*24*time.Hour, al.Level, al.Message)
 		}}
+	// Spoken replies go to speech_url, or the model server when it's
+	// empty, with that server's key; the guard meters them.
+	a.Guard.Voice = &llm.SpeechClient{HTTP: &http.Client{}, Key: or.Key, URL: func(ctx context.Context) string {
+		if u := a.Settings.String(ctx, "speech_url"); u != "" {
+			return u
+		}
+		return a.Settings.String(ctx, "model_url")
+	}}
 	a.Engine.LLM = a.Guard
 	a.Engine.Budget = a.Guard
 	a.Guard.Paused = a.Engine.Paused // the kill switch, under every model call
+	a.Engine.Speech = a.Guard
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
 	// Local (stdio) integrations run one process per sprig, in its own
@@ -275,6 +284,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.Household = a.Engine
 	a.Web.Admin = a.Engine
 	a.Chars.OnLoad(a.Web.RosterChanged)
+	a.Web.Memories = a.Engine
 	a.Web.Calendar = a.Calendar
 	a.Web.BaseURL = cfg.WebBaseURL()
 	a.Web.Joined = a.Engine.WebJoined
@@ -309,7 +319,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			}
 			return a.Engine.Resume(ctx, u, sprig, "from the dashboard")
 		},
-		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {

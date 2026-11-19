@@ -4,8 +4,40 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v22)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v25)
 
+- Relationship memory, apart from facts: how things are going between
+  you and each sprig. New kinds `tone` (how you like it to talk to you),
+  `likes` and `dislikes` (what annoyed you) sit with the existing
+  in-jokes and shared moments; they always belong to one sprig, never
+  shared or family memory, so a kid's stays in the kid sandbox. The
+  memory review proposes them separately from facts, and the prompt
+  gives them to the sprig as "how to be with this person", not facts to
+  recite.
+- A memory screen: **Memory** in the web app's sidebar and the
+  dashboard's memory section show facts and relationship memory apart,
+  with where each came from and when. Edit, lock, undo or delete any of
+  them, or add your own ("prefers short answers, no emoji"); the next
+  reply follows. Edits go through the memory history and undo one by
+  one; deleting forgets for good. Parents see and change what a kid
+  sprig they set up remembers about its kids. API v2 has the same:
+  `GET/POST /api/v2/memories`, `PATCH`/`DELETE /api/v2/memories/{id}`,
+  `PUT …/lock`, `POST …/undo`. Migration 0024 records where each memory
+  came from and who changed it.
+- Spoken replies (schema v25): send a sprig a voice message and it
+  answers with one, after the text, in its own voice: a voice note on
+  Telegram, an audio file on Discord, a player in the web app. The
+  character file's `voice.speaks` says when (`never`, `when_spoken_to`,
+  the default, or `always`) and `voice.sounds_like` which voice. Each
+  person picks per sprig: **full** (the whole reply read aloud),
+  **brief** (a short spoken version, the full text alongside) or **off**,
+  by saying "voice brief" / "voice full" / "voice off", or in the web
+  app's sprig details (`PUT /api/v2/sprigs/{id}/voice`). Speech comes
+  from an OpenAI-compatible `/audio/speech` endpoint: OpenRouter by
+  default, or a local speech server such as Kokoro beside Ollama
+  (`speech_url`, `speech_model`, `speech_voice`), and counts against the
+  spend caps (`speech_usd_per_1k_chars` for OpenRouter; local is free).
+  Kid sprigs speak only when a parent allows `voice`.
 - "Remember this": reply to any message with **remember this** (or say
   "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
   or tap the new brain button in the web app, and it becomes a locked
@@ -21,6 +53,19 @@ stated.
   fails, your other linked apps are tried before it waits in the inbox.
   Web-only people are told once that a chat app would bring these to
   their phone.
+- A sprig with nothing new stays quiet. Every message it starts itself
+  (job and trigger results, check-ins, follow-ups) is dropped if it
+  repeats one of its last few messages to you, or if nothing changed
+  since it last wrote (no calendar items, nothing due, no new memories or
+  job results) and the message brings nothing of its own. Both are
+  decided by Thicket, not the model; otherwise the cheap model screens out
+  filler. A morning briefing on an empty day sends nothing, never
+  "nothing new today". A routine that reads nothing (a word of the day)
+  brings its own news, so the cheap model judges it instead, and held
+  messages are checked for reruns again just before they go out.
+  Held-back job runs count as "nothing to report",
+  and the activity log says what was held back and why. See
+  [Nothing new, nothing sent](docs/characters.md#nothing-new-nothing-sent).
 - The memory review now adds household facts said in passing ("we're
   vegetarian now") to family memory, from an adult's conversations with
   family sprigs only; kid and solo sprig chats never write it. Rollback
@@ -74,6 +119,15 @@ stated.
   [Extending Thicket](docs/adapters.md) (chat adapters and integrations);
   the architecture tour covers ownership, sandboxing, pause, rate limits
   and the trail.
+- Avatar moods: `pleased` and `unsure` states. The personality check now
+  also reads each reply's mood in the same cheap-model call, and the
+  verdict is kept per sprig per conversation (in memory): pleased after a
+  reply that landed, unsure after a rewrite for drift, a refusal or hedge,
+  or while an approval waits. The mood's face replaces the expression and
+  fades back after five minutes. Served at `/avatars/<id>.svg` (live or
+  `?state=pleased|unsure`) and on the dashboard; Discord uses
+  `<avatar>.pleased.<ext>` / `<avatar>.unsure.<ext>` pictures when they
+  exist. No schema change.
 
 ## Unreleased: sprig packages and untrusted content
 

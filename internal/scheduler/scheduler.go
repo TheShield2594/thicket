@@ -93,8 +93,11 @@ func Next(spec string, now time.Time, loc *time.Location) time.Time {
 type Result struct {
 	Status string // ok | empty | error
 	Output string
-	Err    error
-	Cost   float64
+	// Held says why an empty run's Output was held back rather than sent
+	// (the worth-saying gate); "" when the run had nothing to say at all.
+	Held string
+	Err  error
+	Cost float64
 }
 
 type Executor interface {

@@ -2,12 +2,14 @@
 
 One page at `/dashboard` with what Thicket knows and does for you. It's
 read-mostly: the only things you can do here are answer what needs you,
-and pause.
+pause, and change what sprigs remember about you.
 
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
-  or stuck when it has failed work in your inbox from the last day). The
-  page checks every 5 seconds. Each card also shows how many of the
+  or stuck when it has failed work in your inbox from the last day), or
+  how its last reply went for a few minutes after (pleased, or unsure
+  after a rewrite, a refusal or while it waits on your OK). The page
+  checks every 5 seconds. Each card also shows how many of the
   sprig's daily unprompted messages you've had today, how many are held
   for later (quiet hours or the daily limit), and its quiet hours.
 - **Needs you**: requests waiting for your OK (approve or deny), drafts a
@@ -20,7 +22,14 @@ and pause.
   and offers **Resume**. See [Pausing](operations.md#pausing-the-kill-switch).
 - **Trail**: what sprigs did, newest first: tools used, approvals,
   drafts, handoffs between sprigs, jobs.
-- What they remember about you, your jobs and their recent runs, your
+- **What they remember about you**: relationship memory (how things are
+  going with each sprig: how you like it to talk to you, what landed,
+  what annoyed you, in-jokes) apart from facts, each with where it came
+  from and when. Edit, lock or unlock, undo your last change, or delete
+  any of them, and add your own. Edits are kept as you wrote them
+  (locked); deleting forgets for good. Parents also see and change what
+  each kid sprig they set up remembers about its kids.
+- Your jobs and their recent runs, your
   recent background tasks (work one sprig gave another, with how it
   ended: done, nothing found, failed, stopped, or interrupted by a
   restart), and the skill library.
@@ -68,4 +77,6 @@ file publishes only to the host itself. Either:
 - It can't be embedded in other sites and is never cached.
 
 Avatars are also served on their own: `/avatars/<id>.svg` (live state) or
-`/avatars/<id>.svg?state=thinking`.
+`/avatars/<id>.svg?state=thinking`. The states are idle, thinking,
+working, sleeping, stuck, pleased and unsure (the last two follow how a
+sprig's last reply went: see [Avatars](characters.md#avatars)).

@@ -70,6 +70,27 @@ func TestLoadFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestMoodsSwapTheFace(t *testing.T) {
+	p := Default("pip", "")
+	for _, st := range []string{"pleased", "unsure"} {
+		svg := Render(p, st)
+		if !strings.Contains(svg, `class="sprig is-`+st+`"`) || !strings.Contains(svg, `class="mood-`+st+`"`) {
+			t.Fatalf("%s: variant missing: %s", st, svg)
+		}
+		// The mood's face replaces the expression's eyes and mouth.
+		for _, rule := range []string{".sprig.is-" + st + " .open", ".sprig.is-" + st + " .mood-" + st} {
+			if !strings.Contains(CSS, rule) {
+				t.Fatalf("%s: CSS lacks %q", st, rule)
+			}
+		}
+	}
+	// Every state draws both mood faces (hidden), so a page can switch to
+	// a mood by changing the class alone.
+	if svg := Inline(p, "idle", "av-pip", "Pip"); !strings.Contains(svg, "mood-pleased") || !strings.Contains(svg, "mood-unsure") {
+		t.Fatal("inline avatar can't change mood live")
+	}
+}
+
 // AVATAR_SHEET=/path/sheet.html go test ./internal/avatar -run Sheet
 // writes a page with every part and state, for looking at.
 func TestContactSheet(t *testing.T) {

@@ -42,6 +42,8 @@ const (
 const (
 	AllowFamilyMemory = "family_memory"
 	AllowCalendar     = "calendar"
+	// AllowVoice lets a kid sprig answer out loud (spoken replies).
+	AllowVoice = "voice"
 )
 
 // Person is someone who might talk to a sprig (store.User).
@@ -59,7 +61,30 @@ type Personality struct {
 type Voice struct {
 	Style    []string `yaml:"style"`
 	NeverSay []string `yaml:"never_say,omitempty"`
+	// SoundsLike is the speech voice spoken replies use (a voice name the
+	// speech server knows, e.g. alloy). Empty: the speech_voice setting.
+	SoundsLike string `yaml:"sounds_like,omitempty"`
+	// Speaks is when the sprig answers out loud: never, when_spoken_to
+	// (a voice message gets a voice message back; the default) or always.
+	Speaks string `yaml:"speaks,omitempty"`
 }
+
+// When a sprig speaks its replies (Voice.Speaks).
+const (
+	SpeakNever        = "never"
+	SpeakWhenSpokenTo = "when_spoken_to"
+	SpeakAlways       = "always"
+)
+
+// SpeaksWhen is Voice.Speaks with its default filled in.
+func (c *Character) SpeaksWhen() string {
+	if c.Voice.Speaks == "" {
+		return SpeakWhenSpokenTo
+	}
+	return c.Voice.Speaks
+}
+
+var voiceNameRe = regexp.MustCompile(`^[A-Za-z0-9_.:+-]{1,64}$`)
 
 type Relationships struct {
 	User       string            `yaml:"user,omitempty"`
@@ -118,7 +143,8 @@ type Character struct {
 	Kids    []int64 `yaml:"kids,omitempty"`
 	Parents []int64 `yaml:"parents,omitempty"`
 	// Allow lists adult data a parent has let a kid sprig see:
-	// family_memory, calendar. Nothing by default.
+	// family_memory, calendar, and voice (it may answer out loud). Nothing
+	// by default.
 	Allow []string `yaml:"allow,omitempty"`
 
 	Body string `yaml:"-"` // Markdown after the frontmatter
@@ -263,6 +289,14 @@ func (c *Character) Validate() []string {
 	if len(c.Voice.Style) == 0 {
 		p = append(p, "voice.style needs at least one rule for how they talk")
 	}
+	switch c.Voice.Speaks {
+	case "", SpeakNever, SpeakWhenSpokenTo, SpeakAlways:
+	default:
+		p = append(p, fmt.Sprintf("voice.speaks %q must be never, when_spoken_to or always", c.Voice.Speaks))
+	}
+	if c.Voice.SoundsLike != "" && !voiceNameRe.MatchString(c.Voice.SoundsLike) {
+		p = append(p, fmt.Sprintf("voice.sounds_like %q must be a speech voice name like alloy (letters, digits, - _ . only)", c.Voice.SoundsLike))
+	}
 	if c.Color != "" && !colorRe.MatchString(c.Color) {
 		p = append(p, fmt.Sprintf("color %q must look like #5aa469", c.Color))
 	}
@@ -337,8 +371,8 @@ func (c *Character) validateHousehold() []string {
 		}
 	}
 	for _, a := range c.Allow {
-		if a != AllowFamilyMemory && a != AllowCalendar {
-			p = append(p, fmt.Sprintf("allow %q must be family_memory or calendar", a))
+		if a != AllowFamilyMemory && a != AllowCalendar && a != AllowVoice {
+			p = append(p, fmt.Sprintf("allow %q must be family_memory, calendar or voice", a))
 		}
 	}
 	if c.Initiative.CheckIns || c.Initiative.FollowUps {

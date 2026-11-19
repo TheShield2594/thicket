@@ -180,6 +180,23 @@ answer is `users.remember_scope`.
   as scope `family`, may propose `family` adds, and de-duplicates them
   against family memory. Kid and solo sprig conversations never write it.
   The prompt labels each memory `shared`, `yours` or `family`.
+- Relationship memory: the kinds `tone` (how the person likes to be spoken
+  to), `likes`, `dislikes` (what annoyed them), `inside_joke` and
+  `shared_history` (`memory.Relationship`) are how things are going
+  between one sprig and one person, apart from facts. They always carry a
+  sprig id: never shared, never family memory, so a kid's stays in the kid
+  sandbox. The review proposes them in their own `relationship` list
+  (`Op.Rel`), turn selection gives them their own budget (`memory.Split`),
+  and the prompt puts them under "How to be with this person" as guidance
+  for how to talk, not facts to recite.
+- The memory screen (web app, dashboard, `/api/v2/memories`;
+  `agent/memoryscreen.go`) lists a person's memories, facts and
+  relationship apart, with where each came from (`memories.origin`:
+  `review`, `sprig:<id>`, `person:<id>`, `import`). Adds, edits and lock
+  changes go through `memory_events` with `by_user` set, and
+  `store.UndoMemoryChange` undoes them one by one (`undone_at`); deleting
+  scrubs the history as forgetting always has. A kid sprig's parents reach
+  what it remembers about its kids (`store.KidSprigMemories`).
 
 ## Webhook jobs
 
@@ -443,6 +460,24 @@ follow-ups aren't written until they may go out. Replies, approvals,
 safety alerts and failure reports bypass the gate and aren't counted;
 `mustReach` adds a line saying why when the gate would have held them.
 
+Before that gate, every proactive message passes the worth-saying gate
+(`internal/agent/worth.go`) once it's written: in `RunJob` for job and
+trigger output, in `proactive` for check-ins and follow-ups. `worthSaying`
+holds it back, in code, when it reruns one of the sprig's last three
+proactive messages to that person (word-set Jaccard of at least 0.7 and
+the same numbers; texts kept in `proactive_said`, the newest five per
+sprig and person, written by `sendProactive`), or when `newsFor` finds
+nothing new since the sprig last wrote (calendar items in the next 24
+hours or newly added, follow-ups due, inbox items updated, memories added
+or changed, other jobs' `ok` runs) and the message brings nothing itself
+(`proactiveDraft.news`: a due follow-up, a trigger or webhook payload, or
+outside sources the job's turn read, from its taint). Anything it can't
+read counts as news. Otherwise the cheap model judges the draft against
+what's new and the recent messages (purpose `presence`); a failed check
+sends. A held-back job run returns `empty` with the draft as its output
+and the reason in `scheduler.Result.Held`; `proactive` returns
+`errNotWorth`. Both are logged.
+
 Failures are dead-lettered into `inbox` (kinds `failed`, `interrupted`,
 `undelivered`, `draft`), keyed by `ref` (`job:ID`, `task:ID`) so repeats
 bump one open item. Delegated tasks are rows in `tasks`. At startup,
@@ -468,7 +503,14 @@ so `RunDraft` can do one later.
 `Engine.mark` counts a sprig as thinking for a whole turn and working
 while a tool runs. `SprigStates` adds stuck (open failed or interrupted
 inbox items from the last day) and sleeping (quiet hours, in the first
-admin's timezone). `internal/avatar` draws validated parameters only
+admin's timezone). Moods sit between thinking and stuck: `ensureInCharacter`
+keeps each reply's verdict per sprig per conversation (`Engine.noteReply`,
+in memory on the sprig's `busy` entry): rewritten for drift, or the mood
+`voiceCheck` reads in the same call. Pleased or unsure shows for
+`moodDecay` (five minutes) from the newest verdict; `deliverApproval`
+marks the sprig waiting (unsure) until `decide` answers it. `persona`
+swaps in `<avatar>.<mood>.<ext>` when that picture exists, for Discord.
+`internal/avatar` draws validated parameters only
 (enums and `#rrggbb`), so an `avatar.json` can't inject markup.
 
 ## Triggers and the commons

@@ -52,7 +52,10 @@ type Engine struct {
 	// Calendar is the household calendar.
 	Calendar *calendar.Service
 	Budget   *budget.Guard
-	Log      *slog.Logger
+	// Speech reads replies aloud (through the budget guard); nil means
+	// sprigs never speak.
+	Speech llm.Speaker
+	Log    *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only
@@ -320,22 +323,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 	in.Text = strings.TrimSpace(typed)
 
-	char := e.defaultSprigFor(user)
+	char, chosen := e.replySprig(in, user, addressed)
 	if char == nil {
 		return e.send(ctx, in.ChatRef(), host, "There's no sprig set up for you yet. Ask a grown-up to set one up for you!")
-	}
-	chosen := true // the user picked the sprig: by name, or by its thread
-	if addressed != nil {
-		char = addressed
-	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user) {
-		char = c // a per-sprig web thread
-	} else {
-		chosen = false
-		if id, ok := e.active.Load(in.ChatRef()); ok {
-			if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user) {
-				char = c
-			}
-		}
 	}
 
 	conv, err := e.DB.OpenConversation(ctx, user.ID, in.ChatRef(), e.Cfg.IdleAfter)
@@ -359,12 +349,33 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
-	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, packages: media.packages, userMsgID: msgID}
+	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, packages: media.packages, userMsgID: msgID,
+		spokenTo: media.spoken}
 	if user.IsKid() {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
 	}
 	return e.respond(ctx, t, "")
+}
+
+// replySprig is the sprig that answers this message, before any
+// auto-routing: the one named, the web thread's own, the one talking in
+// this chat, else the user's default (a kid's own sprig, or the host).
+// chosen says the user picked it (by name or by its thread). nil means
+// no sprig is set up for this user.
+func (e *Engine) replySprig(in channel.Incoming, user *store.User, addressed *character.Character) (char *character.Character, chosen bool) {
+	if addressed != nil {
+		return addressed, true
+	}
+	if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user) {
+		return c, true // a per-sprig web thread
+	}
+	if id, ok := e.active.Load(in.ChatRef()); ok {
+		if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user) {
+			return c, false
+		}
+	}
+	return e.defaultSprigFor(user), false
 }
 
 // respond runs a turn, posts the reply, and follows any handoff.
@@ -385,9 +396,19 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	var sendErr error
 	if reply != "" {
 		var ids []string
+		var msgID int64
 		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
 			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
+				msgID = id
 				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
+			}
+		}
+		// Out loud too, if this sprig speaks here (after the text, which
+		// is always sent). Never a failure message. The audio's messages
+		// belong to the reply: "delete that" takes them too.
+		if sendErr == nil && err == nil {
+			if voiceIDs := e.speak(ctx, t, reply, ids); len(voiceIDs) > 0 && msgID != 0 {
+				_ = e.DB.AddMessageRefs(ctx, msgID, t.chatRef, voiceIDs...)
 			}
 		}
 	}
@@ -442,7 +463,7 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		if t.conv != nil {
 			_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", note)
 		}
-		next := &turn{user: t.user, char: target, chatRef: t.chatRef, conv: t.conv, isDM: t.isDM, depth: t.depth + 1, query: h.message + " " + t.query}
+		next := &turn{user: t.user, char: target, chatRef: t.chatRef, conv: t.conv, isDM: t.isDM, depth: t.depth + 1, query: h.message + " " + t.query, spokenTo: t.spokenTo}
 		next.inherit(t)
 		next.addTaint("sprig " + t.char.ID) // the handoff note is a sprig's words
 		return e.respond(ctx, next, fmt.Sprintf("%s just handed this to you: %q. Pick it up and reply to the user directly.", t.char.DisplayName(), h.message))
@@ -588,8 +609,12 @@ func (e *Engine) persona(c *character.Character) channel.Persona {
 	case strings.HasPrefix(c.Avatar, "https://") || strings.HasPrefix(c.Avatar, "http://"):
 		p.AvatarURL = c.Avatar
 	case c.Avatar != "" && e.Cfg.PublicURL != "":
-		if _, err := os.Stat(filepath.Join(e.Chars.Dir(), filepath.Base(c.Avatar))); err == nil {
-			p.AvatarURL = e.Cfg.PublicURL + "/avatars/" + filepath.Base(c.Avatar)
+		file := filepath.Base(c.Avatar)
+		if _, err := os.Stat(filepath.Join(e.Chars.Dir(), file)); err == nil {
+			if m := e.moodAvatar(c.ID, file); m != "" {
+				file = m // its pleased or unsure picture, while the mood lasts
+			}
+			p.AvatarURL = e.Cfg.PublicURL + "/avatars/" + file
 		}
 	}
 	return p

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/memory"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -96,12 +97,14 @@ func buildSystemPrompt(in promptInput) string {
 		b.WriteString("For longer work that can happen while the user does other things, delegate_task.\n")
 	}
 
+	facts, rel := memory.Split(in.memories)
+	b.WriteString(relationshipSection(rel))
 	b.WriteString("\n## What you remember\n")
-	if len(in.memories) == 0 {
+	if len(facts) == 0 {
 		b.WriteString("Nothing yet.\n")
 	} else {
 		b.WriteString("Memories (#id, layer/kind). \"shared\": this person's, every sprig they talk to knows them; \"yours\": just between you and this person; \"family\": household memory every adult's family sprigs share, so never treat it as private to this person, and never repeat this person's own memories as if they were the household's.\n")
-		for _, m := range in.memories {
+		for _, m := range facts {
 			scope := "shared"
 			switch {
 			case m.Household:
@@ -183,6 +186,41 @@ func buildSystemPrompt(in promptInput) string {
 	b.WriteString("- Keep replies short unless asked for detail.\n")
 	b.WriteString(untrustedNote)
 	b.WriteString("\n")
+	return b.String()
+}
+
+// relHeads are the relationship section's lines, in the order they show.
+var relHeads = []struct{ kind, head string }{
+	{"tone", "How they like you to talk to them"},
+	{"dislikes", "What has annoyed them (avoid it)"},
+	{"likes", "What lands well with them"},
+	{"inside_joke", "In-jokes you share"},
+	{"shared_history", "Moments you've shared"},
+}
+
+// relationshipSection is how the relationship with this person is going:
+// guidance for how to talk, not facts to bring up. Edits from the memory
+// screen show here on the very next reply.
+func relationshipSection(rel []store.Memory) string {
+	if len(rel) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## How to be with this person\n")
+	b.WriteString("This is how your relationship with them is going. Let it shape how you talk to them in every reply; it outranks your usual style where they differ. ")
+	b.WriteString("Don't recite it or mention that you keep it.\n")
+	for _, h := range relHeads {
+		var lines []string
+		for _, m := range rel {
+			if m.Kind == h.kind {
+				lines = append(lines, fmt.Sprintf("  - %s (#%d)", m.Content, m.ID))
+			}
+		}
+		if len(lines) > 0 {
+			fmt.Fprintf(&b, "- %s:\n%s\n", h.head, strings.Join(lines, "\n"))
+		}
+	}
+	b.WriteString("When they tell you how they'd like you to be with them (\"no emoji\", \"less chatty\"), call remember with kind tone, likes or dislikes and scope mine.\n")
 	return b.String()
 }
 

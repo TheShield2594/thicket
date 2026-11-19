@@ -3,7 +3,11 @@
 // "api" channel of the local HTTP API).
 package channel
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"strings"
+)
 
 // Persona is how a character appears in a chat.
 type Persona struct {
@@ -84,6 +88,74 @@ type Channel interface {
 // posted (a long text may become several), so they can be deleted later.
 type Poster interface {
 	SendIDs(ctx context.Context, chatID string, p Persona, text string) ([]string, error)
+}
+
+// Voice is a spoken reply: audio of a sprig reading (all or a summary of)
+// a reply that was also sent as text.
+type Voice struct {
+	Audio []byte
+	// Format is the audio's format: "ogg" (Ogg Opus), "mp3", "wav",
+	// "aac" or "flac". See VoiceFormat.
+	Format string
+	// Text is what is said.
+	Text string
+	// With is the platform id of the text message this goes with, when
+	// the channel said (Poster); adapters may attach the audio to it.
+	With string
+}
+
+// VoiceSender is implemented by channels that can post a spoken reply:
+// Telegram a voice note, Discord an audio file, the web app a player.
+type VoiceSender interface {
+	// SpeechFormat is the speech server response_format the channel
+	// wants: "opus" for Telegram voice notes, "mp3" elsewhere.
+	SpeechFormat() string
+	// SendVoice returns the ids of any messages the audio became (none
+	// when it was attached to the text message), so deleting the reply
+	// deletes the audio too.
+	SendVoice(ctx context.Context, chatID string, p Persona, v Voice) ([]string, error)
+}
+
+// VoiceFormat names the format of audio from its first bytes, falling
+// back to its content type: "ogg", "mp3", "wav", "flac", "aac", or "" if
+// it can't tell.
+func VoiceFormat(b []byte, contentType string) string {
+	switch {
+	case bytes.HasPrefix(b, []byte("OggS")):
+		return "ogg"
+	case bytes.HasPrefix(b, []byte("ID3")), len(b) > 1 && b[0] == 0xFF && b[1]&0xE0 == 0xE0 && b[1]&0x06 != 0:
+		return "mp3"
+	case bytes.HasPrefix(b, []byte("RIFF")):
+		return "wav"
+	case bytes.HasPrefix(b, []byte("fLaC")):
+		return "flac"
+	case len(b) > 1 && b[0] == 0xFF && b[1]&0xF6 == 0xF0:
+		return "aac" // ADTS
+	}
+	ct := strings.ToLower(contentType)
+	for _, f := range []struct{ sub, name string }{{"ogg", "ogg"}, {"opus", "ogg"}, {"mpeg", "mp3"}, {"mp3", "mp3"}, {"wav", "wav"}, {"flac", "flac"}, {"aac", "aac"}} {
+		if strings.Contains(ct, f.sub) {
+			return f.name
+		}
+	}
+	return ""
+}
+
+// VoiceContentType is the content type for a VoiceFormat name.
+func VoiceContentType(format string) string {
+	switch format {
+	case "ogg":
+		return "audio/ogg"
+	case "mp3":
+		return "audio/mpeg"
+	case "wav":
+		return "audio/wav"
+	case "flac":
+		return "audio/flac"
+	case "aac":
+		return "audio/aac"
+	}
+	return "application/octet-stream"
 }
 
 // Deletion reports messages someone deleted in a chat app.

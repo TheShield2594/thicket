@@ -1,7 +1,9 @@
 // Package avatar draws sprigs as small parametric SVGs, built from parts
 // (body shape and colour, leaf hat, accessory, expression), with CSS
 // animations for what a sprig is doing: idle, thinking, working, sleeping,
-// stuck. No image generation: the same parameters always draw the same
+// stuck, and for how its last reply went: pleased, unsure. The two moods
+// swap the face for one of their own, so the expression changes at
+// runtime with the state class. No image generation: the same parameters always draw the same
 // sprig. Parameters live in <characters dir>/<id>/avatar.json.
 package avatar
 
@@ -23,7 +25,7 @@ var (
 	Hats        = []string{"sprout", "curl", "clover", "fern", "none"}
 	Accessories = []string{"none", "watering-can", "glasses", "scarf", "book", "lantern"}
 	Expressions = []string{"happy", "calm", "curious", "sleepy", "determined"}
-	States      = []string{"idle", "thinking", "working", "sleeping", "stuck"}
+	States      = []string{"idle", "thinking", "working", "sleeping", "stuck", "pleased", "unsure"}
 )
 
 // Params describe one sprig's look.
@@ -160,7 +162,7 @@ func shade(hex string, f float64) string {
 // CSS animates the states. A page with several inline avatars includes it
 // once; Render (standalone) embeds it.
 const CSS = `.sprig .fig{transform-origin:60px 108px;animation:sprig-bob 3.2s ease-in-out infinite}
-.sprig .closed,.sprig .think,.sprig .spark,.sprig .zzz,.sprig .alert{display:none}
+.sprig .closed,.sprig .think,.sprig .spark,.sprig .zzz,.sprig .alert,.sprig .mood-pleased,.sprig .mood-unsure,.sprig .glow,.sprig .puzzle{display:none}
 .sprig.is-thinking .fig{animation:sprig-tilt 2.6s ease-in-out infinite}
 .sprig.is-thinking .think{display:inline}
 .sprig .think circle{animation:sprig-blink 1.2s ease-in-out infinite}
@@ -172,9 +174,16 @@ const CSS = `.sprig .fig{transform-origin:60px 108px;animation:sprig-bob 3.2s ea
 .sprig.is-sleeping .zzz{display:inline;animation:sprig-float 3s ease-in-out infinite}
 .sprig.is-stuck .fig{animation:sprig-shake 2.4s ease-in-out infinite}
 .sprig.is-stuck .alert{display:inline;animation:sprig-blink 1.4s ease-in-out infinite}
+.sprig.is-pleased .open,.sprig.is-pleased .mouth,.sprig.is-unsure .open,.sprig.is-unsure .mouth{display:none}
+.sprig.is-pleased .mood-pleased,.sprig.is-unsure .mood-unsure{display:inline}
+.sprig.is-pleased .fig{animation:sprig-bounce 1.8s ease-in-out infinite}
+.sprig.is-pleased .glow{display:inline;animation:sprig-float 2.4s ease-in-out infinite}
+.sprig.is-unsure .fig{animation:sprig-tilt 3.6s ease-in-out infinite}
+.sprig.is-unsure .puzzle{display:inline;animation:sprig-blink 2s ease-in-out infinite}
 @keyframes sprig-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
 @keyframes sprig-tilt{0%,100%{transform:rotate(0)}30%{transform:rotate(-5deg)}60%{transform:rotate(3deg)}}
 @keyframes sprig-hop{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px) scaleY(1.03)}}
+@keyframes sprig-bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}
 @keyframes sprig-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,.985)}}
 @keyframes sprig-shake{0%,20%,100%{transform:translateX(0)}4%,12%{transform:translateX(-3px)}8%,16%{transform:translateX(3px)}}
 @keyframes sprig-blink{0%,100%{opacity:.25}50%{opacity:1}}
@@ -270,6 +279,7 @@ func draw(p Params, state, head, id string) string {
 	fmt.Fprintf(&b, `<g class="closed"><path d="M45 %[1]f q4 3 8 0M67 %[1]f q4 3 8 0" fill="none" stroke="%[2]s" stroke-width="2.5" stroke-linecap="round"/></g>`, eyeY, ink)
 	fmt.Fprintf(&b, `<circle cx="42" cy="%[1]f" r="4" fill="#f29a9a" opacity=".45"/><circle cx="78" cy="%[1]f" r="4" fill="#f29a9a" opacity=".45"/>`, eyeY+7)
 	mouthY := eyeY + 10
+	b.WriteString(`<g class="mouth">`)
 	switch p.Expression {
 	case "curious":
 		fmt.Fprintf(&b, `<circle cx="60" cy="%.0f" r="2.5" fill="none" stroke="%s" stroke-width="2"/>`, mouthY, ink)
@@ -278,6 +288,12 @@ func draw(p Params, state, head, id string) string {
 	default:
 		fmt.Fprintf(&b, `<path d="M54 %[1]f q6 5 12 0" fill="none" stroke="%[2]s" stroke-width="2.2" stroke-linecap="round"/>`, mouthY-1, ink)
 	}
+	b.WriteString(`</g>`)
+	// Mood faces, shown instead of the expression's eyes and mouth by the
+	// pleased and unsure states: arched eyes and a wide smile; one raised
+	// brow, uneven eyes and a wobbly mouth.
+	fmt.Fprintf(&b, `<g class="mood-pleased"><path d="M45 %[1]f q4-6 8 0M67 %[1]f q4-6 8 0" fill="none" stroke="%[2]s" stroke-width="2.6" stroke-linecap="round"/><path d="M52 %[3]f q8 9 16 0z" fill="%[2]s" stroke="%[2]s" stroke-width="1.6" stroke-linejoin="round"/></g>`, eyeY, ink, mouthY-2)
+	fmt.Fprintf(&b, `<g class="mood-unsure"><circle cx="49" cy="%[1]f" r="3" fill="%[2]s"/><circle cx="71" cy="%[1]f" r="2.4" fill="%[2]s"/><path d="M66 %[3]f q5-4 10-1" fill="none" stroke="%[2]s" stroke-width="2.2" stroke-linecap="round"/><path d="M54 %[4]f q3-3 6 0t6 0" fill="none" stroke="%[2]s" stroke-width="2.2" stroke-linecap="round"/></g>`, eyeY, ink, eyeY-9, mouthY)
 	// Accessory.
 	switch p.Accessory {
 	case "glasses":
@@ -296,6 +312,8 @@ func draw(p Params, state, head, id string) string {
 	b.WriteString(`<g class="think" fill="#7d8a83"><circle cx="88" cy="26" r="3"/><circle cx="97" cy="20" r="3.5"/><circle cx="107" cy="13" r="4"/></g>`)
 	b.WriteString(`<g class="spark" fill="#f2c94c"><path d="M20 30l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M98 36l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5z"/></g>`)
 	b.WriteString(`<g class="zzz" fill="#7d8a83" font-family="sans-serif" font-weight="700"><text x="86" y="34" font-size="12">z</text><text x="96" y="22" font-size="15">z</text></g>`)
+	b.WriteString(`<g class="glow" fill="#e9748a"><path d="M92 30c-2.5-3.5-7-1.5-5.5 2 1 2.2 5.5 5 5.5 5s4.5-2.8 5.5-5c1.5-3.5-3-5.5-5.5-2z"/><path d="M22 38c-1.8-2.5-5-1-4 1.5.7 1.6 4 3.6 4 3.6s3.3-2 4-3.6c1-2.5-2.2-4-4-1.5z"/></g>`)
+	b.WriteString(`<g class="puzzle" fill="#7d8a83" font-family="sans-serif" font-weight="700"><text x="92" y="30" font-size="18">?</text></g>`)
 	b.WriteString(`<g class="alert"><circle cx="98" cy="24" r="10" fill="#d9534f"/><path d="M98 17v9" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="98" cy="30.5" r="1.8" fill="#fff"/></g>`)
 	b.WriteString(`</svg>`)
 	return b.String()

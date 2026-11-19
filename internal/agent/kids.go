@@ -226,7 +226,7 @@ func (e *Engine) memoriesFor(ctx context.Context, t *turn) ([]store.Memory, erro
 
 // KidAccess changes what a kid sprig may use: tools a parent approves one
 // by one (web, or mcp:<server>/<tool>) and adult data a parent allows
-// (family_memory, calendar). Only its parents may, and every change goes
+// (family_memory, calendar, voice). Only its parents may, and every change goes
 // in the trail. The character file's validation refuses anything else.
 func (e *Engine) KidAccess(ctx context.Context, parent *store.User, sprig string, addTools, removeTools, addAllow, removeAllow []string) (*character.Character, error) {
 	c, ok := e.Chars.Get(sprig)

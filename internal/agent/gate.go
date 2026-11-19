@@ -13,6 +13,8 @@ import (
 // trigger output, check-ins, follow-ups) passes holdReason: inside the
 // sprig's quiet hours, or once its daily budget for that person is used
 // up, it waits. Replies to the person never pass here and never count.
+// Before that, once it's written, the worth-saying gate (worth.go) drops
+// a message with nothing new in it, or one that reruns a recent one.
 //
 // Finished output (a job's result) is held in the database, so a restart
 // doesn't lose it, and FlushHeld delivers it once nothing holds it back
@@ -59,11 +61,26 @@ func (e *Engine) sentToday(ctx context.Context, c *character.Character, u *store
 
 // sendProactive delivers a proactive message and counts it in the budget.
 func (e *Engine) sendProactive(ctx context.Context, u *store.User, c *character.Character, text string) error {
-	if err := e.sendToUser(ctx, u, c, text); err != nil {
+	return e.sendProactiveNote(ctx, u, c, text, "")
+}
+
+// sendProactiveNote is sendProactive with a note under the message. The
+// text without the note is kept for the worth-saying gate (worth.go), to
+// compare the next messages with.
+func (e *Engine) sendProactiveNote(ctx context.Context, u *store.User, c *character.Character, text, note string) error {
+	sent := text
+	if note != "" {
+		sent += "\n" + note
+	}
+	if err := e.sendToUser(ctx, u, c, sent); err != nil {
 		return err
 	}
-	if err := e.DB.RecordProactive(context.WithoutCancel(ctx), u.ID, c.ID, e.now()); err != nil {
+	ctx = context.WithoutCancel(ctx)
+	if err := e.DB.RecordProactive(ctx, u.ID, c.ID, e.now()); err != nil {
 		e.Log.Error("count proactive message", "err", err)
+	}
+	if err := e.DB.RememberSaid(ctx, u.ID, c.ID, e.Secrets.Redact(text), e.now()); err != nil {
+		e.Log.Error("keep proactive message text", "err", err)
 	}
 	return nil
 }
@@ -99,6 +116,9 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 		e.Log.Error("list held messages", "err", err)
 		return
 	}
+	// What this flush delivered, per sprig and person, for the repeat
+	// check (the sent history has it too, unless keeping it failed).
+	delivered := map[string][]string{}
 	for _, h := range held {
 		user, err := e.DB.UserByID(ctx, h.UserID)
 		if err != nil {
@@ -146,8 +166,16 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			_ = e.DB.ReleaseHeld(ctx, h.ID)
 			continue
 		}
-		text := h.Text + "\n" + heldNote(h, user)
-		if err := e.sendProactive(ctx, user, char, text); err != nil {
+		// Two runs held during quiet hours can say the same thing, and
+		// neither was in the sent history when the gate checked it: the
+		// repeat rule (worth.go) applies again, without a model.
+		key := fmt.Sprintf("%d:%s", user.ID, char.ID)
+		if why := e.heldRepeat(ctx, user, char, h.Text, delivered[key]); why != "" {
+			e.finishHeld(ctx, h.ID)
+			e.logActivity(ctx, "info", "initiative", char.ID, user.ID, fmt.Sprintf("held back %s, which was held: %s", h.Title, why), truncate(h.Text, 200))
+			continue
+		}
+		if err := e.sendProactiveNote(ctx, user, char, h.Text, heldNote(h, user)); err != nil {
 			e.Log.Error("deliver held message", "id", h.ID, "err", err)
 			// Not sent: keep it held (released for the next flush) unless the
 			// inbox takes it.
@@ -159,6 +187,7 @@ func (e *Engine) FlushHeld(ctx context.Context) {
 			e.finishHeld(ctx, h.ID)
 			continue
 		}
+		delivered[key] = append(delivered[key], h.Text)
 		e.finishHeld(ctx, h.ID)
 		e.logActivity(ctx, "info", "initiative", char.ID, user.ID, "delivered held "+h.Title, "")
 	}

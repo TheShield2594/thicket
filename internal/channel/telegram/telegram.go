@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,6 +135,42 @@ func (a *Adapter) call(ctx context.Context, client *http.Client, method string, 
 		return a.clean(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return a.do(client, req, method, out)
+}
+
+// upload is call for methods that send a file: multipart, with the file
+// as field (named name) and params as plain fields.
+func (a *Adapter) upload(ctx context.Context, method string, params map[string]string, field, name, contentType string, data []byte, out any) error {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for k, v := range params {
+		if err := mw.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, field, name))
+	h.Set("Content-Type", contentType)
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(data); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL+"/bot"+a.token+"/"+method, &body)
+	if err != nil {
+		return a.clean(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return a.do(a.http, req, method, out)
+}
+
+// do sends a Bot API request and reads its result into out.
+func (a *Adapter) do(client *http.Client, req *http.Request, method string, out any) error {
 	resp, err := client.Do(req)
 	if err != nil {
 		return a.clean(err)
@@ -169,7 +207,12 @@ func (a *Adapter) call(ctx context.Context, client *http.Client, method string, 
 
 // callRetry retries once when Telegram asks us to slow down.
 func (a *Adapter) callRetry(ctx context.Context, method string, params, out any) error {
-	err := a.call(ctx, a.http, method, params, out)
+	return retry(ctx, func() error { return a.call(ctx, a.http, method, params, out) })
+}
+
+// retry runs f, and once more if Telegram asks us to slow down.
+func retry(ctx context.Context, f func() error) error {
+	err := f()
 	var ae *apiError
 	if errors.As(err, &ae) && ae.Code == 429 && ae.RetryAfter > 0 && ae.RetryAfter <= 30 {
 		select {
@@ -177,7 +220,7 @@ func (a *Adapter) callRetry(ctx context.Context, method string, params, out any)
 			return ctx.Err()
 		case <-time.After(time.Duration(ae.RetryAfter) * time.Second):
 		}
-		err = a.call(ctx, a.http, method, params, out)
+		err = f()
 	}
 	return err
 }
@@ -586,6 +629,65 @@ func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Perso
 		err = fmt.Errorf("Telegram won't let me message them until they open a chat with the bot and press Start: %w", err)
 	}
 	return userID, err
+}
+
+// The engine finds spoken replies by this interface: keep it implemented.
+var _ channel.VoiceSender = (*Adapter)(nil)
+
+// SpeechFormat asks for Ogg Opus: what Telegram voice notes are.
+func (a *Adapter) SpeechFormat() string { return "opus" }
+
+// SendVoice posts a spoken reply. Ogg Opus goes out as a voice note
+// (sendVoice); MP3 as an audio file (sendAudio), which Telegram plays
+// inline. Anything else (a speech server that ignored the format), and a
+// voice note for someone who blocks them, goes as a file (sendDocument):
+// sendAudio takes only MP3 and M4A. It returns the id of the message.
+func (a *Adapter) SendVoice(ctx context.Context, chatID string, p channel.Persona, v channel.Voice) ([]string, error) {
+	format := v.Format
+	if format == "" {
+		format = channel.VoiceFormat(v.Audio, "")
+	}
+	params := map[string]string{"chat_id": chatID}
+	if p.Name != "" {
+		params["caption"] = "<b>" + escape(p.Name) + "</b>"
+		params["parse_mode"] = "HTML"
+	}
+	ext := format
+	if ext == "" {
+		ext = "bin"
+	}
+	method, field, name := "sendDocument", "document", "voice."+ext
+	switch format {
+	case "ogg":
+		method, field, name = "sendVoice", "voice", "voice.ogg"
+	case "mp3", "m4a":
+		method, field = "sendAudio", "audio"
+		if p.Name != "" {
+			params["title"] = p.Name
+		}
+	}
+	var sent struct {
+		MessageID int64 `json:"message_id"`
+	}
+	send := func() error {
+		return a.upload(ctx, method, params, field, name, channel.VoiceContentType(format), v.Audio, &sent)
+	}
+	err := retry(ctx, send)
+	var ae *apiError
+	if method == "sendVoice" && errors.As(err, &ae) && ae.Code == 400 && strings.Contains(strings.ToUpper(ae.Desc), "VOICE_MESSAGES_FORBIDDEN") {
+		// The person turned off receiving voice messages: send a file.
+		delete(params, "parse_mode")
+		params["caption"] = p.Name
+		method, field = "sendDocument", "document"
+		err = retry(ctx, send)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sent.MessageID == 0 {
+		return nil, nil
+	}
+	return []string{strconv.FormatInt(sent.MessageID, 10)}, nil
 }
 
 func (a *Adapter) Delete(ctx context.Context, chatID, messageID string) error {
