@@ -14,6 +14,7 @@ const S = {
   order: [],           // sprig ids, host first
   latest: new Map(),   // chat -> last message
   chats: new Map(),    // chat -> {messages, more, loaded, loading}
+  audio: new Map(),    // chat -> ids of messages a spoken reply arrived for
   typing: new Map(),   // chat -> timestamp
   routines: new Map(), // sprig id -> routines
   proactive: new Map(), // sprig id -> {daily_messages, sent_today, held}
@@ -497,12 +498,24 @@ function connect() {
   };
 }
 
-// A spoken reply arrived for a message already shown: add its player.
+// A spoken reply arrived for a message: add its player. It's remembered,
+// so a history load that started before it (or a message not loaded yet)
+// still gets the player (withAudio).
 function onAudio(chat, id) {
+  if (!S.audio.has(chat)) S.audio.set(chat, new Set());
+  S.audio.get(chat).add(id);
   const m = S.chats.get(chat)?.messages.find((x) => x.id === id);
   if (!m) return;
   m.audio = true;
   renderFeed(chat);
+}
+
+// withAudio marks the messages of a history response that a spoken reply
+// arrived for over the event stream.
+function withAudio(chat, msgs) {
+  const ids = S.audio.get(chat);
+  if (ids) for (const m of msgs) if (ids.has(m.id)) m.audio = true;
+  return msgs;
 }
 
 // A sprig was created, changed or removed: reload the roster so it shows
@@ -561,6 +574,7 @@ function onTyping(chat) {
 function onDeleted(chat, id) {
   const c = S.chats.get(chat);
   if (c) c.messages = c.messages.filter((m) => m.id !== id);
+  S.audio.get(chat)?.delete(id);
   if (S.latest.get(chat)?.id === id) S.latest.delete(chat);
   renderFeed(chat);
   renderSidebar();
@@ -601,6 +615,7 @@ async function loadChat(chat, opts = {}) {
     const before = opts.older && c.messages.length ? c.messages[0].id : 0;
     const res = await api(`/api/chats/${encodeURIComponent(chat)}/messages${before ? '?before=' + before : ''}`);
     if (session !== S.session) return; // signed out meanwhile
+    withAudio(chat, res.messages);
     if (opts.older) {
       c.messages = res.messages.concat(c.messages);
     } else {
@@ -756,7 +771,7 @@ function endSession() {
   S.session++;
   S.me = null;
   S.panes = []; S.focus = 0; S.details = false; S.filter = '';
-  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.proactive, S.detailsAt, S.drafts].forEach((m) => m.clear());
+  [S.sprigs, S.latest, S.chats, S.audio, S.typing, S.routines, S.proactive, S.detailsAt, S.drafts].forEach((m) => m.clear());
   S.order = [];
   paneEls.clear();
   $sidebar = $main = null;
@@ -1463,11 +1478,21 @@ function memoryItem(m, reload) {
 
 function memoryAdd(opts, reload) {
   const sprigs = opts.kid ? [] : S.order.map((id) => S.sprigs.get(id));
-  const sprig = !opts.kid && h('select.field.mem-kind', { 'aria-label': 'With' },
+  // Relationship kinds are with one sprig: offered for a kid sprig, or
+  // once a sprig is picked; "every sprig" takes facts only.
+  const kindsFor = () => (opts.kid || sprig.value ? [...REL_KINDS, ...FACT_KINDS] : FACT_KINDS);
+  const fillKinds = () => {
+    const was = kind.value;
+    const kinds = kindsFor();
+    kind.replaceChildren(...kinds.map((k) => h('option', { value: k, selected: k === was }, KIND_LABELS[k])));
+    if (!kinds.includes(was)) kind.value = kinds[0];
+  };
+  const sprig = !opts.kid && h('select.field.mem-kind', { 'aria-label': 'With', onchange: () => fillKinds() },
     h('option', { value: '' }, 'Every sprig (facts only)'),
     sprigs.map((s) => h('option', { value: s.id, selected: s.id === opts.sprig }, s.name)));
   const person = opts.kid && opts.kid.kids.length > 1 && h('select.field.mem-kind', { 'aria-label': 'About' }, opts.kid.kids.map((k) => h('option', { value: k.id }, k.name)));
-  const kind = h('select.field.mem-kind', { 'aria-label': 'Kind' }, [...REL_KINDS, ...FACT_KINDS].map((k) => h('option', { value: k }, KIND_LABELS[k])));
+  const kind = h('select.field.mem-kind', { 'aria-label': 'Kind' });
+  fillKinds();
   const input = h('textarea.field.mem-input', { rows: 2, maxlength: 300, required: true, placeholder: 'Prefers short answers, no emoji.', 'aria-label': 'Memory' });
   const err = h('p.err', { role: 'alert' });
   const form = h('form.mem-edit', { onsubmit: async (e) => {
