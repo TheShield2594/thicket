@@ -468,6 +468,17 @@ follow-ups aren't written until they may go out. Replies, approvals,
 safety alerts and failure reports bypass the gate and aren't counted;
 `mustReach` adds a line saying why when the gate would have held them.
 
+The weekly digest (`internal/agent/digest.go`) is proactive but outside
+that budget: `WeeklyDigests`, run on every initiative tick, finds each
+adult whose `digest.day`/`digest.time` passed in their timezone within the
+last day, waits out the host's quiet hours and pauses, claims
+`digest:<user>:<date>` in `notices` so it goes once, and sends what
+`BuildDigest` gathered from `job_runs`, `trail`, `inbox`, `approvals`,
+`messages` and `usage`, through `sendToUser` (no `RecordProactive`). Who
+sees which sprig is `UsableBy` or `IsParent`, never `PrivateFrom`; the
+text is built in code. `digest_prefs` (migration 0026) holds each person's
+`always`, `skip_empty` or `off`.
+
 Before that gate, every proactive message passes the worth-saying gate
 (`internal/agent/worth.go`) once it's written: in `RunJob` for job and
 trigger output, in `proactive` for check-ins and follow-ups. `worthSaying`

@@ -46,6 +46,19 @@ stated.
   decides what it may do. Its own levels and the tool defaults apply.
   If you relied on an every-sprig level for your own solo sprig, set it
   on that sprig.
+- A weekly digest (schema v26): once a week, Sunday 18:00 in each
+  adult's own timezone by default (`digest.day`, `digest.time`; `off`
+  stops it), Juni sends each adult one short message: per sprig, what it
+  did (job runs, replies, changes from the trail), what's waiting on them
+  (open inbox items and approvals) and what it cost that week against its
+  cap, with a total and a dashboard link. Each adult sees their own solo
+  sprigs and the family sprigs, parents also their kid sprigs, and nobody
+  another adult's solo sprig. Built in code from the database, never by
+  a model; it respects quiet hours and pauses but not the daily budget.
+  A quiet week sends one line, or nothing for whoever asks Juni for that
+  (new `weekly_digest` tool, which also shows the digest on request).
+  Migration 0026 keeps each person's choice. See
+  [The weekly digest](docs/household.md#the-weekly-digest).
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
   `likes` and `dislikes` (what annoyed you) sit with the existing

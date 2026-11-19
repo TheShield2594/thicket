@@ -206,8 +206,8 @@ func (e *Engine) deadLetterErr(ctx context.Context, it store.InboxItem) error {
 
 // --- light initiative: follow-ups and check-ins ---
 
-// RunInitiative delivers held messages and checks for due follow-ups and
-// quiet users every 5 minutes.
+// RunInitiative delivers held messages, sends weekly digests, and checks
+// for due follow-ups and quiet users every 5 minutes.
 func (e *Engine) RunInitiative(ctx context.Context) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -222,6 +222,8 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 			}
 			// Held messages are already written: no model needed.
 			e.FlushHeld(ctx)
+			// Nor is the weekly digest, which is built from the database.
+			e.WeeklyDigests(ctx)
 			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {
 				continue // follow-ups wait; nothing is lost
 			}

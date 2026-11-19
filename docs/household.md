@@ -193,6 +193,36 @@ memory apart from facts: edit, lock, undo or delete any of it, or add
   that check fails. Alerts are at most one an hour per kid and concern, go
   in the trail, and never block the chat.
 
+## The weekly digest
+
+Once a week Juni sends each adult one short message about their week:
+for each sprig they can see, what it did (job runs, replies, what it put
+on the calendar or changed, from the trail), what's waiting on them
+(open inbox items and approvals), and what it cost that week against its
+cap, with a total and a link to the dashboard for the rest.
+
+- **When:** `digest.day` (default `sunday`) at `digest.time` (default
+  `18:00`), in each person's own timezone. `digest.day off` stops it for
+  the household. It waits for the end of Juni's quiet hours, sends
+  nothing while Thicket or Juni is paused, and is not limited by Juni's
+  daily message budget (nor does it count against it). A digest that
+  can't go out within a day of its time is skipped for that week.
+- **What each person sees:** their own solo sprigs and the family
+  sprigs; parents also get the kid sprigs they set up (replies to the
+  kids, safety alerts). Never another adult's solo sprig, not even its
+  name or what it cost. Job runs, inbox items and approvals are the
+  person's own; a family sprig's changes are the person's own, or
+  everyone's for admins, as under **Changes** on the dashboard. Kids get
+  no digest.
+- **Cost:** what the sprig cost that week, for everyone it worked for,
+  against seven times its own daily cap (`budget.character.<id>.daily_usd`),
+  or "no cap of its own". The total adds up the sprigs listed.
+- **Quiet weeks** get one line. Tell Juni "skip the digest when there's
+  nothing in it" (or "turn my weekly digest off", or "show me my
+  digest") to change that for you; it's the `weekly_digest` tool.
+- It is put together from the database in code, not written by a model,
+  so the numbers and the needs-you list are exactly what the records say.
+
 ## The trail
 
 Every permission change and every sprig-created calendar entry is recorded
