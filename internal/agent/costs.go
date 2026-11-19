@@ -319,8 +319,19 @@ func (e *Engine) costGate(ctx context.Context, t *turn, tool *Tool, args json.Ra
 		}
 		return e.requestApprovalNote(ctx, t, tool, args, note), false
 	}
-	t.toolEstimate, _ = e.DB.AddEstimate(ctx, est)
+	t.toolEstimate = e.recordToolEstimate(ctx, t, est)
 	return "", true
+}
+
+// recordToolEstimate records a tool call's estimate, unless the call is
+// part of a background task whose own estimate covers the whole task (it
+// would then be counted twice in the accuracy figures).
+func (e *Engine) recordToolEstimate(ctx context.Context, t *turn, est store.Estimate) int64 {
+	if t.taskFrom != nil && t.estimateID != 0 {
+		return 0
+	}
+	id, _ := e.DB.AddEstimate(ctx, est)
+	return id
 }
 
 // toolEstimate is the estimate row for a tool call.
@@ -372,7 +383,7 @@ func (e *Engine) approvedCost(ctx context.Context, t *turn, tool *Tool, args jso
 		t.toolEstimate = askedID
 		return ""
 	}
-	t.toolEstimate, _ = e.DB.AddEstimate(ctx, est)
+	t.toolEstimate = e.recordToolEstimate(ctx, t, est)
 	return ""
 }
 

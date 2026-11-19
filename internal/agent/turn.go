@@ -181,10 +181,11 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 		if err != nil {
 			return "", err
 		}
-		if i == 0 && !t.jobMode() {
-			// A reply's estimate is for its first model call (with any PDFs):
-			// compared with that call alone, not with the tools it then ran,
-			// which are estimated on their own. A background task is
+		if i == 0 && t.taskFrom == nil {
+			// A reply's or a scheduled job's estimate is for its first model
+			// call (with any PDFs): compared with that call alone, not with
+			// the tools it then ran, which are estimated on their own. A
+			// background task's estimate is for the whole task, so it's
 			// measured whole.
 			measured()
 		}
