@@ -182,12 +182,9 @@ func TestStarterSprigsInstallOnAFreshInstall(t *testing.T) {
 			if err != nil || !strings.Contains(preview, "+++ b/characters/"+s.Char.ID+".md") || !strings.Contains(preview, "Spend cap") {
 				t.Fatalf("preview: %v\n%s", err, preview)
 			}
-			res, err := InstallStarter(ctx, f.e.DB, f.e.Chars.Dir(), st)
+			_, err = InstallStarter(ctx, f.e.DB, f.e.Chars.Dir(), st)
 			if err != nil {
 				t.Fatal(err)
-			}
-			if len(res.Problems) > 0 {
-				t.Fatalf("problems: %v", res.Problems)
 			}
 			if err := f.e.Chars.Load(); err != nil {
 				t.Fatal(err)
@@ -425,5 +422,53 @@ func TestStarterGuideInHostPrompt(t *testing.T) {
 	other := &character.Character{ID: "basil", Name: "Basil"}
 	if p := buildSystemPrompt(promptInput{char: other, user: &store.User{ID: 1, Role: store.RoleOwner}, now: time.Now(), onboarded: true}); strings.Contains(p, "## Starter sprigs") {
 		t.Error("only the host offers starters")
+	}
+}
+
+// A starter goes in all or nothing: if one of its levels, routines or its
+// cap can't be set, the sprig isn't added and nothing is left behind.
+func TestStarterInstallIsAllOrNothing(t *testing.T) {
+	f, _, _ := starterFixture(t)
+	ctx := context.Background()
+	s, err := FindStarterSprig("bill-tracker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := PrepareStarter(ctx, f.e.DB, f.e.Chars.Dir(), f.e.sprigNameTaken, s, StarterOptions{Owner: f.user.ID, CanWriteSkills: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := *st.Starter
+	broken.Levels = map[string]string{"*": store.LevelRead, "zz_last": "sideways"} // the second can't be set
+	st.Starter = &broken
+	if _, err := InstallStarter(ctx, f.e.DB, f.e.Chars.Dir(), st); err == nil {
+		t.Fatal("installed with a level that couldn't be set")
+	}
+	id := st.Pkg.Char.ID
+	if _, err := os.Stat(filepath.Join(f.e.Chars.Dir(), id+".md")); !os.IsNotExist(err) {
+		t.Fatalf("the character file was left: %v", err)
+	}
+	if jobs, _ := f.e.DB.CharacterJobs(ctx, id); len(jobs) != 0 {
+		t.Fatalf("routines left: %+v", jobs)
+	}
+	rows, _ := f.e.DB.ToolLevels(ctx)
+	for _, r := range rows {
+		if r.Character == id {
+			t.Fatalf("level left: %+v", r)
+		}
+	}
+	if _, ok, _ := f.e.DB.Setting(ctx, starterCapKey(id)); ok {
+		t.Fatal("the spend cap was left")
+	}
+	// And it can be added cleanly afterwards.
+	st, err = PrepareStarter(ctx, f.e.DB, f.e.Chars.Dir(), f.e.sprigNameTaken, s, StarterOptions{Owner: f.user.ID, CanWriteSkills: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallStarter(ctx, f.e.DB, f.e.Chars.Dir(), st); err != nil {
+		t.Fatal(err)
+	}
+	if lv, _ := f.e.DB.ExactToolLevel(ctx, id, "*"); lv != store.LevelRead {
+		t.Fatalf("bill tracker's level = %q, want read", lv)
 	}
 }

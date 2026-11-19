@@ -170,9 +170,6 @@ func sprigStarterCmd(cfg *config.Config, args []string, in io.Reader, out io.Wri
 		if len(res.Skills) > 0 {
 			fmt.Fprintln(out, "Skills:", strings.Join(res.Skills, ", "))
 		}
-		for _, p := range res.Problems {
-			fmt.Fprintln(out, "Not set (do it by hand):", p)
-		}
 	}
 	return nil
 }

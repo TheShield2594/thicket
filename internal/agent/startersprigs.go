@@ -509,24 +509,44 @@ type StarterInstalled struct {
 	Path     string
 	Routines []int64  // created paused
 	Skills   []string // as sprigpkg.Installed.Skills
-	// Problems are things that didn't take after the sprig was added
-	// (a level, a paused routine, the spend cap).
-	Problems []string
 }
 
 // InstallStarter adds a prepared starter: the package is installed (every
 // tool at draft, its skills), then the starter's levels and spend cap are
 // set and its routines are created paused.
 func InstallStarter(ctx context.Context, db *store.Store, charsDir string, st *StarterSetup) (*StarterInstalled, error) {
-	c := st.Pkg.Char
 	routines := st.Pkg.Routines
 	st.Pkg.Routines = nil // created paused below, not running
-	res, err := st.Pkg.Install(ctx, db, charsDir, sprigpkg.InstallOptions{Owner: st.Opts.Owner, Plans: st.Plans, CanWriteSkills: st.Opts.CanWriteSkills})
+	var jobs []int64
+	res, err := st.Pkg.Install(ctx, db, charsDir, sprigpkg.InstallOptions{Owner: st.Opts.Owner, Plans: st.Plans, CanWriteSkills: st.Opts.CanWriteSkills,
+		// Levels, paused routines and the cap go in before the sprig is
+		// live, all or nothing: a bill tracker without its read level
+		// isn't installed at all.
+		BeforeLive: func(ctx context.Context) (func(context.Context), error) {
+			var err error
+			jobs, err = applyStarterExtras(ctx, db, st, routines)
+			if err != nil {
+				return nil, err
+			}
+			return func(bg context.Context) { removeStarterExtras(bg, db, st, jobs) }, nil
+		}})
 	st.Pkg.Routines = routines
 	if err != nil {
 		return nil, err
 	}
-	out := &StarterInstalled{Path: res.Path, Skills: res.Skills}
+	return &StarterInstalled{Path: res.Path, Skills: res.Skills, Routines: jobs}, nil
+}
+
+// applyStarterExtras sets a starter's levels, paused routines and spend
+// cap. On failure it removes what it did and returns the error.
+func applyStarterExtras(ctx context.Context, db *store.Store, st *StarterSetup, routines []sprigpkg.Routine) (jobs []int64, err error) {
+	c := st.Pkg.Char
+	defer func() {
+		if err != nil {
+			removeStarterExtras(context.WithoutCancel(ctx), db, st, jobs)
+			jobs = nil
+		}
+	}()
 	if st.Tier != character.TierKid {
 		tools := make([]string, 0, len(st.Starter.Levels))
 		for tool := range st.Starter.Levels {
@@ -535,30 +555,43 @@ func InstallStarter(ctx context.Context, db *store.Store, charsDir string, st *S
 		sort.Strings(tools)
 		for _, tool := range tools {
 			if err := db.SetToolLevel(ctx, c.ID, tool, st.Starter.Levels[tool]); err != nil {
-				out.Problems = append(out.Problems, fmt.Sprintf("the level for %s (%v)", tool, err))
+				return jobs, fmt.Errorf("the level for %s: %w", tool, err)
 			}
 		}
 	}
 	for _, r := range routines {
 		j, err := db.CreateJob(ctx, store.Job{UserID: st.Opts.Owner, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})
+		if j != nil && j.ID != 0 {
+			jobs = append(jobs, j.ID)
+		}
 		if err == nil {
 			err = db.SetJobEnabled(ctx, j.ID, false)
 		}
 		if err != nil {
-			if j != nil && j.ID != 0 {
-				_ = db.DeleteJob(context.WithoutCancel(ctx), j.ID) // never leave it running
-			}
-			out.Problems = append(out.Problems, fmt.Sprintf("the routine %q (%v)", r.Name, err))
-			continue
+			return jobs, fmt.Errorf("the routine %q: %w", r.Name, err)
 		}
-		out.Routines = append(out.Routines, j.ID)
 	}
-	key := "budget.character." + c.ID + ".daily_usd"
-	if err := db.SetSetting(ctx, key, strconv.FormatFloat(st.Starter.DailyUSD, 'f', -1, 64)); err != nil {
-		out.Problems = append(out.Problems, fmt.Sprintf("the spend cap (%v)", err))
+	if err := db.SetSetting(ctx, starterCapKey(c.ID), strconv.FormatFloat(st.Starter.DailyUSD, 'f', -1, 64)); err != nil {
+		return jobs, fmt.Errorf("the spend cap: %w", err)
 	}
-	return out, nil
+	return jobs, nil
 }
+
+// removeStarterExtras undoes applyStarterExtras. The package install has
+// already cleared any levels an earlier sprig with this id left, so the
+// starter's levels are simply removed.
+func removeStarterExtras(ctx context.Context, db *store.Store, st *StarterSetup, jobs []int64) {
+	c := st.Pkg.Char
+	for _, id := range jobs {
+		_ = db.DeleteJob(ctx, id)
+	}
+	for tool := range st.Starter.Levels {
+		_ = db.SetToolLevel(ctx, c.ID, tool, "")
+	}
+	_ = db.DeleteSetting(ctx, starterCapKey(c.ID))
+}
+
+func starterCapKey(id string) string { return "budget.character." + id + ".daily_usd" }
 
 // --- in chat ---
 
@@ -766,9 +799,6 @@ func (e *Engine) addStarter(ctx context.Context, user *store.User, args json.Raw
 	}
 	if len(res.Skills) > 0 {
 		out += " Skills: " + strings.Join(res.Skills, ", ") + "."
-	}
-	if len(res.Problems) > 0 {
-		out += " These didn't take, so set them by hand: " + strings.Join(res.Problems, "; ") + "."
 	}
 	return out, nil
 }
