@@ -214,7 +214,7 @@ cookies (`Secure` over HTTPS).
   Needs OpenRouter.
 - Send pictures, PDFs and text files (from the web app too). Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
-  message, 10 MB and 50 pages each) and text files such as notes, CSVs or
+  message, 10 MB and 50 pages each; 2 MB if its pages can't be counted) and text files such as notes, CSVs or
   logs. Images are seen for that reply only. A PDF's text (its first
   20,000 characters, the `document_chars` setting) is kept for follow-up questions until the
   conversation goes quiet; text files stay in the conversation like any

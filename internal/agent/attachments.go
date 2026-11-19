@@ -28,6 +28,9 @@ const (
 	// maxPDFPages bounds what one message can cost: a PDF is read as
 	// input tokens or billed per page by OCR.
 	maxPDFPages = 50
+	// maxUnknownPDFBytes is the size cap for a PDF whose pages can't be
+	// counted (an unusual compression or a damaged file).
+	maxUnknownPDFBytes = 2 << 20
 	// Voice notes are transcribed and the transcript goes into the
 	// message. 10 MB is several minutes of compressed speech.
 	maxAudioPerMessage = 2
@@ -213,8 +216,12 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 				err = fmt.Errorf("not a PDF")
 			}
 			if err == nil {
-				if n := pdfPages(body); n > maxPDFPages {
+				switch n := pdfPages(body); {
+				case n > maxPDFPages:
 					err = fmt.Errorf("%d pages, limit %d", n, maxPDFPages)
+				case n == 0 && len(body) > maxUnknownPDFBytes:
+					// Without a page count, size is the only bound left.
+					err = fmt.Errorf("couldn't count its pages, and it's over %d MB", maxUnknownPDFBytes>>20)
 				}
 			}
 			if err != nil {
@@ -295,24 +302,6 @@ func transcriptNote(name, text string) string {
 		text = text[:cut] + " [rest of the recording cut]"
 	}
 	return fmt.Sprintf("[voice message %s, transcribed:]\n%s", name, text)
-}
-
-// pdfPages estimates a PDF's page count by counting page objects. PDFs
-// that keep their objects compressed hide them and count as 0: the byte
-// limit still applies to those.
-func pdfPages(b []byte) int {
-	n := 0
-	for i := 0; ; {
-		j := bytes.Index(b[i:], []byte("/Type"))
-		if j < 0 {
-			return n
-		}
-		i += j + len("/Type")
-		rest := bytes.TrimLeft(b[i:min(len(b), i+16)], " \t\r\n")
-		if bytes.HasPrefix(rest, []byte("/Page")) && !bytes.HasPrefix(rest, []byte("/Pages")) {
-			n++
-		}
-	}
 }
 
 func (e *Engine) fetch(ctx context.Context, a channel.Attachment, max int) ([]byte, string, error) {
