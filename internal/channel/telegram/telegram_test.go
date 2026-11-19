@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -391,6 +392,7 @@ func TestReactions(t *testing.T) {
 		t.Fatalf("unexpected reaction %+v", r)
 	case <-time.After(200 * time.Millisecond):
 	}
+	sort.Strings(emojis) // reactions are handled concurrently, so they can arrive in either order
 	if strings.Join(emojis, ",") != "✍,🔥" {
 		t.Fatalf("reactions: %v", emojis)
 	}
