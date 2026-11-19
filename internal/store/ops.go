@@ -252,25 +252,31 @@ type MCPServer struct {
 	Env       map[string]string `json:"env,omitempty"`     // values may contain {{secret:NAME}}
 	Headers   map[string]string `json:"headers,omitempty"` // values may contain {{secret:NAME}}
 	Enabled   bool              `json:"enabled"`
+	// Exec marks a server that can run commands or programs: its tools
+	// are offered only to sprigs with exec turned on.
+	Exec bool `json:"exec,omitempty"`
 }
 
 func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	args, _ := json.Marshal(nonNilSlice(m.Args))
 	env, _ := json.Marshal(nonNilMap(m.Env))
 	hdr, _ := json.Marshal(nonNilMap(m.Headers))
-	en := 0
+	en, ex := 0, 0
 	if m.Enabled {
 		en = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	if m.Exec {
+		ex = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET transport = excluded.transport, target = excluded.target, args = excluded.args,
-		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled`,
-		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, s.unix())
+		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec`,
+		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, s.unix())
 	return err
 }
 
 func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled FROM mcp_servers ORDER BY name")
+	rows, err := s.db.QueryContext(ctx, "SELECT name, transport, target, args, env, headers, enabled, exec FROM mcp_servers ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -279,14 +285,15 @@ func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
 	for rows.Next() {
 		var m MCPServer
 		var args, env, hdr string
-		var en int
-		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en); err != nil {
+		var en, ex int
+		if err := rows.Scan(&m.Name, &m.Transport, &m.Target, &args, &env, &hdr, &en, &ex); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(args), &m.Args)
 		_ = json.Unmarshal([]byte(env), &m.Env)
 		_ = json.Unmarshal([]byte(hdr), &m.Headers)
 		m.Enabled = en == 1
+		m.Exec = ex == 1
 		out = append(out, m)
 	}
 	return out, rows.Err()

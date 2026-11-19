@@ -243,6 +243,22 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Engine.Budget = a.Guard
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
+	// Local (stdio) integrations run one process per sprig, in its own
+	// folder; listing their tools uses a neutral folder. They share a HOME
+	// for caches, outside every sprig's folder.
+	a.MCP.Home = filepath.Join(cfg.DataDir, "mcp", "home")
+	a.MCP.Folder = func(sprig string) (string, error) {
+		dir := filepath.Join(cfg.DataDir, "mcp", "work")
+		if sprig != "" {
+			dir = filepath.Join(a.Chars.Dir(), sprig)
+		}
+		for _, d := range []string{dir, a.MCP.Home} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				return "", err
+			}
+		}
+		return filepath.Abs(dir)
+	}
 	a.OAuth = &mcp.OAuth{Secrets: sec, RedirectURL: cfg.WebBaseURL() + "/oauth/callback"}
 	a.MCP.OAuth = a.OAuth
 	a.Engine.MCP = a.MCP
@@ -510,6 +526,7 @@ func (a *App) Run(parent context.Context) error {
 		})
 	}
 	a.ensureSandbox(ctx)
+	a.keepExecGrants(ctx)
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {

@@ -34,7 +34,10 @@ type Tool struct {
 	Risky     bool // needs approval unless a level says otherwise
 	Writes    bool // changes something, but acts by default (see levels.go)
 	Untrusted bool // output is outside content: wrap it as data
-	Run       func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
+	// Exec: the tool can run commands or programs. Offered only to sprigs
+	// whose owner turned exec on (see sandboxing.go).
+	Exec bool
+	Run  func(ctx context.Context, t *turn, args json.RawMessage) (string, error)
 }
 
 // Label is shown in approval prompts.
@@ -92,9 +95,13 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 		out[tool.Name] = tool
 	}
 	if e.MCP != nil {
+		execOK := e.execAllowed(ctx, t.char)
 		for _, st := range e.MCP.Tools() {
 			if !t.char.AllowsMCP(st.Server, st.Tool.Name) {
 				continue
+			}
+			if st.Exec && !execOK {
+				continue // granted, but its owner hasn't turned exec on
 			}
 			st := st
 			params := string(st.Tool.InputSchema)
@@ -112,8 +119,21 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Scope:       "mcp:" + st.Server,
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
+				Exec:        st.Exec,
 				Run: func(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
-					res, err := e.MCP.Call(ctx, st.Server, st.Tool.Name, args, st.Tool.ReadOnly())
+					// Checked again here, in code, for every way a call
+					// runs (straight away, approved, from a draft).
+					if st.Exec && !e.execAllowed(ctx, t.char) {
+						e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+st.FuncName()+": exec isn't on", "")
+						return "", fmt.Errorf("%s can't run commands: its owner hasn't turned exec on", t.char.DisplayName())
+					}
+					if st.Local {
+						if err := e.checkLocalPaths(ctx, t.char, args); err != nil {
+							e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+st.FuncName()+": path outside the sprig's files", "")
+							return "", err
+						}
+					}
+					res, err := e.MCP.CallAs(ctx, t.char.ID, st.Server, st.Tool.Name, args, st.Tool.ReadOnly())
 					if err != nil {
 						return "", err
 					}
@@ -364,7 +384,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "grant_tools",
-			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/*. Edits its character file (never overwrites manual edits).",
+			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/* plus exec on (set_sprig_access), since it runs commands. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
 			AdminOnly:   true,
@@ -429,6 +449,7 @@ func (e *Engine) builtinTools() []*Tool {
 				"For hosted servers that use sign-in instead of a token (Notion, Linear, Sentry, Atlassian and others at URLs like https://mcp.notion.com/mcp), use auth 'oauth' with no Authorization header: Thicket posts the user a sign-in link itself and tells you when they're done. " +
 				"Only if the server can't register apps automatically, ask the user for an OAuth client id (and request_secret for its secret). After connecting, grant sprigs access with grant_tools.",
 			Params: `{"type":"object","properties":{"name":{"type":"string","description":"short lowercase name"},"transport":{"type":"string","enum":["http","stdio"]},"target":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"headers":{"type":"object","additionalProperties":{"type":"string"}},"env":{"type":"object","additionalProperties":{"type":"string"}},` +
+				`"exec":{"type":"boolean","description":"true if it can run commands or programs (a shell, a code runner): its tools are then offered only to sprigs with exec turned on (set_sprig_access)"},` +
 				`"auth":{"type":"string","enum":["none","oauth"],"description":"oauth: the user signs in through a link (http only)"},"client_id":{"type":"string","description":"oauth only, rarely needed"},"client_secret":{"type":"string","description":"oauth only: {{secret:NAME}}"}},"required":["name","transport","target"]}`,
 			Scope:     "admin",
 			AdminOnly: true,
@@ -451,6 +472,14 @@ func (e *Engine) builtinTools() []*Tool {
 			AdminOnly:   true,
 			ChatOnly:    true,
 			Run:         e.toolRemoveIntegration,
+		},
+		{
+			Name:        "set_sprig_access",
+			Description: "Show or change what a sprig may run and read beyond chatting. exec=true lets it use integrations that run commands (the sandbox computer, shell servers); off by default, and needed on top of granting the integration. grant_path / revoke_path: a full path on this machine it may use besides its own folder (Thicket's data can never be granted). Only the sprig's owner may change these: the person a private sprig belongs to, or the owner or an admin for a shared one. With only sprig, it describes the current access.",
+			Params:      `{"type":"object","properties":{"sprig":{"type":"string"},"exec":{"type":"boolean"},"grant_path":{"type":"string"},"revoke_path":{"type":"string"}},"required":["sprig"]}`,
+			Scope:       "admin",
+			ChatOnly:    true,
+			Run:         e.toolSetSprigAccess,
 		},
 		{
 			Name:        "set_tool_level",

@@ -28,7 +28,13 @@ until you say so:
 
 > Juni, give Pip the computer.
 
-Juni grants `mcp:sandbox/*`. The tools are:
+Juni grants `mcp:sandbox/*` and, because the sandbox runs commands,
+turns on the sprig's **exec** access (`set_sprig_access`): a sprig with
+the grant but without exec isn't offered the sandbox's tools at all.
+Only the sprig's owner can turn exec on (the person a private sprig
+belongs to, or the owner or an admin for a shared one), and it's in the
+trail. See [Sandboxing](mcp.md#sandboxing-files-and-commands). The tools
+are:
 
 | Tool | Default |
 |---|---|

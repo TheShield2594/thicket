@@ -57,6 +57,23 @@ func TestSandboxComputer(t *testing.T) {
 	if err := a.Chars.Load(); err != nil {
 		t.Fatal(err)
 	}
+	// Granting the integration isn't enough: exec is off until its owner
+	// turns it on, so the command tool isn't even offered.
+	if !servers[0].Exec {
+		t.Fatal("the sandbox isn't marked exec")
+	}
+	a.Engine.HandleIncoming(ctx, dm("tinker, build it on your computer"))
+	if out := sentText(fc.take()); strings.Contains(out, "approve") {
+		t.Fatalf("an exec tool was offered without exec on:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "out.txt")); err == nil {
+		t.Fatal("command ran without exec")
+	}
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	c, _ := a.Chars.Get("tinker")
+	if err := a.Engine.SetExec(ctx, owner, c, true); err != nil {
+		t.Fatal(err)
+	}
 	// Running a command asks first, and runs once approved.
 	a.Engine.HandleIncoming(ctx, dm("tinker, build it on your computer"))
 	if out := sentText(fc.take()); !strings.Contains(out, "echo built") || !strings.Contains(out, "approve") {

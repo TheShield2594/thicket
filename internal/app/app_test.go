@@ -329,6 +329,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 			return toolCall("ask_sprig", map[string]any{"to": "juniper", "question": "and you?"}), nil
 		}
 		return text("Tomorrow: dentist at 10, standup at 2."), nil
+	case strings.HasPrefix(sys, "You are Quill") && last.Role == "tool":
+		return text("Quill here: " + last.Content), nil
+	case strings.HasPrefix(sys, "You are Quill") && strings.HasPrefix(lastUserText(req.Messages), "read "):
+		return toolCall("mcp_files__read_file", map[string]any{"path": strings.TrimPrefix(lastUserText(req.Messages), "read ")}), nil
 	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
 		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
