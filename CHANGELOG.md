@@ -163,6 +163,10 @@ stated.
   `?state=pleased|unsure`) and on the dashboard; Discord uses
   `<avatar>.pleased.<ext>` / `<avatar>.unsure.<ext>` pictures when they
   exist. No schema change.
+- Fix: a sprig reload that was already running when a half-created
+  sprig's file was removed could finish last and bring the sprig back,
+  without its cap, until the next file check. Each reload now drops what
+  it read if a later reload has already finished.
 
 ## Unreleased: sprig packages and untrusted content
 
