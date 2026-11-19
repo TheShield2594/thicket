@@ -5,7 +5,9 @@ A small, self-hosted family of AI companions. Its characters are called
 little initiative, and stay true to who they are.
 
 Talk to them in Discord, in the built-in web app, or both. The web app
-installs on your phone and desktop and shows every sprig at once.
+installs on your phone and desktop and shows every sprig at once, and
+there's a [desktop app](docs/desktop.md) for macOS, Windows and Linux with
+a tray icon and native notifications.
 
 Thicket is one Go binary and one SQLite file, plus an optional sandbox
 container that sprigs use as their computer. No vector database, no
@@ -321,6 +323,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
 - [Dashboard](docs/dashboard.md)
+- [Desktop app](docs/desktop.md)
 - [Running Thicket: doctor, costs, inbox, voice checks](docs/operations.md)
 - [How Thicket works](docs/architecture.md)
 - [Changelog](CHANGELOG.md)

@@ -516,7 +516,8 @@ function notify(chat, m) {
   const s = S.sprigs.get(m.character);
   try {
     const n = new Notification(s?.name || 'Thicket', { body: plain(m.content).slice(0, 180), tag: chat, icon: '/app/icon-192.png' });
-    n.onclick = () => { window.focus(); openChat(chat); n.close(); };
+    // In the desktop app, thicketDesktop brings a hidden window back.
+    n.onclick = () => { window.thicketDesktop?.show(); window.focus(); openChat(chat); n.close(); };
   } catch { /* some platforms only allow notifications from the service worker */ }
 }
 
@@ -734,8 +735,18 @@ function sprigRow(chat) {
   !active && h('button.split', { title: 'Open side by side (or Shift-click)', 'aria-label': `Open ${name} side by side`, onclick: (e) => { e.stopPropagation(); openChat(chat, { split: true }); } }, icon('split')));
 }
 
+// desktopBadge shows the unread count on the dock or launcher icon when
+// running in the desktop app.
+let lastBadge = -1;
+function desktopBadge() {
+  if (!window.thicketDesktop || !S.me) return;
+  const n = [...S.latest.keys()].filter(unread).length;
+  if (n !== lastBadge) { lastBadge = n; window.thicketDesktop.setBadge(n); }
+}
+
 function renderSidebar() {
   if (!$sidebar || !S.me) return;
+  desktopBadge();
   const theme = document.documentElement.dataset.theme || 'auto';
   const q = S.filter.toLowerCase();
   const matches = (id) => {

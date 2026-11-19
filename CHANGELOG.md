@@ -6,6 +6,15 @@ stated.
 
 ## Unreleased: pins, deletes, cost visibility, secrets and sign-in (schema v14)
 
+- Desktop app (`desktop/`). An Electron app for macOS, Windows and Linux
+  that opens your Thicket server in its own window, with a tray icon
+  (closing keeps it running), native notifications that bring the window
+  back to the chat, an unread badge, start at login, and microphone access
+  for voice messages. Only the server's pages load in it; other links go
+  to the browser (the identity provider is allowed during single sign-on).
+  The web app calls `window.thicketDesktop` when it's there. The new
+  **desktop** workflow checks it and builds unsigned installers, attached
+  to a release on `desktop-v*` tags.
 - A computer for sprigs. The new `thicket-sandbox` container (Debian
   with git, curl, python3 and friends, a persistent `/workspace`, no
   access to Thicket's data, not published on a port) runs an MCP server
