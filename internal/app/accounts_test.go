@@ -415,3 +415,22 @@ func between(s, a, b string) string {
 	out, _, _ := strings.Cut(rest, b)
 	return out
 }
+
+// Wrong passwords lock a username for the client guessing, not for its
+// owner signing in from somewhere else.
+func TestUsernameLockIsPerClient(t *testing.T) {
+	e := accountsSetup(t)
+	guesser := e.client(t)
+	guesser.from = "203.0.113.50"
+	for i := 0; i < 5; i++ {
+		guesser.do("POST", "/api/login", map[string]string{"username": "kim", "password": fmt.Sprint("wrong guess ", i)}, true)
+	}
+	if code, _ := guesser.do("POST", "/api/login", map[string]string{"username": "kim", "password": "kims long password"}, true); code != 429 {
+		t.Fatalf("guesser not locked: %d", code)
+	}
+	kim := e.client(t)
+	kim.from = "198.51.100.20"
+	if code, out := kim.do("POST", "/api/login", map[string]string{"username": "kim", "password": "kims long password"}, true); code != 200 {
+		t.Fatalf("kim locked out by someone else's guesses: %d %v", code, out)
+	}
+}

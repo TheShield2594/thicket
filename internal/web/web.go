@@ -113,44 +113,8 @@ type Adapter struct {
 	stopped  chan struct{}
 	stopOnce sync.Once
 
-	users        userThrottle
-	loginMu      sync.Mutex
-	loginFails   int // failed redemptions in this window
-	loginPending int // admitted attempts still being redeemed
-	loginStart   time.Time
-}
-
-// Failed sign-ins are limited globally: tokens are unguessable, so this
-// only stops a flood of bad requests from tying up the database.
-const (
-	loginFailLimit  = 30
-	loginFailWindow = time.Minute
-)
-
-// loginBegin admits a sign-in attempt to the database, reserving a slot
-// so a concurrent burst can't all pass before failures are counted. Every
-// admitted attempt must call loginEnd.
-func (a *Adapter) loginBegin(now time.Time) bool {
-	a.loginMu.Lock()
-	defer a.loginMu.Unlock()
-	if now.Sub(a.loginStart) >= loginFailWindow {
-		a.loginStart, a.loginFails = now, 0
-	}
-	if a.loginFails+a.loginPending >= loginFailLimit {
-		return false
-	}
-	a.loginPending++
-	return true
-}
-
-// loginEnd releases an admitted attempt's slot, counting it if it failed.
-func (a *Adapter) loginEnd(failed bool) {
-	a.loginMu.Lock()
-	a.loginPending--
-	if failed {
-		a.loginFails++
-	}
-	a.loginMu.Unlock()
+	users  userThrottle
+	logins loginThrottle
 }
 
 func New(db *store.Store, chars *character.Registry, log *slog.Logger) *Adapter {
@@ -446,13 +410,13 @@ func (a *Adapter) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if !a.loginBegin(time.Now()) {
+	if !a.loginBegin(r, time.Now()) {
 		w.Header().Set("Retry-After", "60")
 		writeErr(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
 	uid, err := a.DB.RedeemWebLink(ctx, body.Token)
-	a.loginEnd(errors.Is(err, store.ErrNotFound))
+	a.loginEnd(r, errors.Is(err, store.ErrNotFound))
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusUnauthorized, "That link has expired or was already used. Ask for a new one.")
 		return

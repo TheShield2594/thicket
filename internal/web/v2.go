@@ -159,12 +159,12 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		if i := strings.LastIndex(token, "#"); i >= 0 {
 			token = token[i+1:]
 		}
-		if !a.loginBegin(now) {
+		if !a.loginBegin(r, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
 			return
 		}
 		id, err := a.DB.RedeemWebLink(ctx, token)
-		a.loginEnd(errors.Is(err, store.ErrNotFound))
+		a.loginEnd(r, errors.Is(err, store.ErrNotFound))
 		if err != nil || id == 0 { // a first-run owner link sets up in the browser, not an app
 			writeErr(w, http.StatusUnauthorized, "That link has expired or was already used. Ask for a new one.")
 			return
@@ -172,19 +172,19 @@ func (a *Adapter) v2Login(w http.ResponseWriter, r *http.Request) {
 		uid = id
 	default:
 		username := strings.TrimSpace(body.Username)
-		if a.users.locked(username, now) {
+		if a.users.locked(clientIP(r), username, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords for that username. Wait 15 minutes and try again.")
 			return
 		}
-		if !a.loginBegin(now) {
+		if !a.loginBegin(r, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
 			return
 		}
 		u, hash, err := a.DB.LoginByUsername(ctx, username)
 		verr := auth.VerifyPassword(hash, body.Password)
 		ok := err == nil && verr == nil && hash != ""
-		a.loginEnd(!ok)
-		a.users.record(username, ok, now)
+		a.loginEnd(r, !ok)
+		a.users.record(clientIP(r), username, ok, now)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "Wrong username or password.")
 			return

@@ -30,7 +30,8 @@ func main() {
 	if err := os.MkdirAll(s.Workdir, 0o755); err != nil {
 		log.Fatalf("workspace: %v", err)
 	}
-	srv := &http.Server{Addr: env("SANDBOX_ADDR", ":7070"), Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: env("SANDBOX_ADDR", ":7070"), Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/auth"
@@ -36,44 +35,7 @@ type OIDCLogin struct {
 const (
 	oidcStateCookie = "thicket_oidc"
 	oidcStateTTL    = 10 * time.Minute
-	// A username is locked for usernameLockFor after usernameFailLimit
-	// wrong passwords in a row.
-	usernameFailLimit = 5
-	usernameLockFor   = 15 * time.Minute
 )
-
-type userThrottle struct {
-	mu    sync.Mutex
-	fails map[string]int
-	until map[string]time.Time
-}
-
-func (u *userThrottle) locked(name string, now time.Time) bool {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return now.Before(u.until[strings.ToLower(name)])
-}
-
-func (u *userThrottle) record(name string, ok bool, now time.Time) {
-	key := strings.ToLower(name)
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.fails == nil {
-		u.fails, u.until = map[string]int{}, map[string]time.Time{}
-	}
-	if ok {
-		delete(u.fails, key)
-		return
-	}
-	u.fails[key]++
-	if u.fails[key] >= usernameFailLimit {
-		u.until[key] = now.Add(usernameLockFor)
-		delete(u.fails, key)
-	}
-	if len(u.fails) > 10000 { // bounded: a flood of made-up names
-		u.fails = map[string]int{}
-	}
-}
 
 // startSession sets the session cookie for a freshly signed-in user.
 func (a *Adapter) startSession(w http.ResponseWriter, r *http.Request, uid int64, method string) error {
@@ -106,19 +68,19 @@ func (a *Adapter) authOptions(w http.ResponseWriter, r *http.Request) {
 func (a *Adapter) passwordLogin(w http.ResponseWriter, r *http.Request, username, password string) {
 	ctx := r.Context()
 	now := time.Now()
-	if a.users.locked(username, now) {
+	if a.users.locked(clientIP(r), username, now) {
 		w.Header().Set("Retry-After", "900")
 		writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords for that username. Wait 15 minutes and try again.")
 		return
 	}
-	if !a.loginBegin(now) {
+	if !a.loginBegin(r, now) {
 		w.Header().Set("Retry-After", "60")
 		writeErr(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
 	u, hash, err := a.DB.LoginByUsername(ctx, username)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		a.loginEnd(false)
+		a.loginEnd(r, false)
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -126,8 +88,8 @@ func (a *Adapter) passwordLogin(w http.ResponseWriter, r *http.Request, username
 	// usernames exist.
 	verr := auth.VerifyPassword(hash, password)
 	ok := err == nil && verr == nil && hash != ""
-	a.loginEnd(!ok)
-	a.users.record(username, ok, now)
+	a.loginEnd(r, !ok)
+	a.users.record(clientIP(r), username, ok, now)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "Wrong username or password.")
 		return
@@ -185,19 +147,19 @@ func (a *Adapter) redeemInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Password: "+err.Error()+".")
 		return
 	}
-	if !a.loginBegin(time.Now()) {
+	if !a.loginBegin(r, time.Now()) {
 		writeErr(w, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
 		return
 	}
 	hash, err := auth.HashPassword(body.Password)
 	if err != nil {
-		a.loginEnd(false)
+		a.loginEnd(r, false)
 		writeErr(w, http.StatusInternalServerError, "couldn't hash the password")
 		return
 	}
 	inv, _ := a.DB.InviteByToken(r.Context(), body.Token)
 	u, err := a.DB.RedeemInvite(r.Context(), store.HashToken(body.Token), body.Username, hash)
-	a.loginEnd(errors.Is(err, store.ErrNotFound))
+	a.loginEnd(r, errors.Is(err, store.ErrNotFound))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusUnauthorized, "That invite has expired or was already used. Ask for a new one.")
@@ -252,13 +214,13 @@ func (a *Adapter) changePassword(w http.ResponseWriter, r *http.Request, u *stor
 	}
 	now := time.Now()
 	if login != nil && login.HasPassword {
-		if a.users.locked(login.Username, now) {
+		if a.users.locked(clientIP(r), login.Username, now) {
 			writeErr(w, http.StatusTooManyRequests, "Too many wrong passwords. Wait 15 minutes and try again.")
 			return
 		}
 		_, hash, _ := a.DB.LoginByUsername(ctx, login.Username)
 		if auth.VerifyPassword(hash, body.Current) != nil {
-			a.users.record(login.Username, false, now)
+			a.users.record(clientIP(r), login.Username, false, now)
 			writeErr(w, http.StatusUnauthorized, "Your current password isn't right.")
 			return
 		}
@@ -422,25 +384,25 @@ func (a *Adapter) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcFail(w, r, "That sign-in didn't start in this browser, or took too long. Try again.")
 		return
 	}
-	if !a.loginBegin(time.Now()) {
+	if !a.loginBegin(r, time.Now()) {
 		a.oidcFail(w, r, "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
 	verifier, nonce, inviteHash, err := a.DB.TakeOIDCState(ctx, state)
 	if err != nil {
-		a.loginEnd(true)
+		a.loginEnd(r, true)
 		a.oidcFail(w, r, "That sign-in expired. Try again.")
 		return
 	}
 	claims, err := a.OIDC.Provider.Exchange(ctx, q.Get("code"), verifier, nonce)
 	if err != nil {
-		a.loginEnd(true)
+		a.loginEnd(r, true)
 		a.Log.Warn("oidc sign-in failed", "err", err)
 		a.oidcFail(w, r, "Sign-in failed: "+truncate(err.Error(), 120))
 		return
 	}
 	u, msg, err := a.oidcUser(ctx, claims, inviteHash)
-	a.loginEnd(u == nil)
+	a.loginEnd(r, u == nil)
 	if err != nil {
 		a.Log.Error("oidc user", "err", err)
 		a.oidcFail(w, r, "Something went wrong signing you in.")

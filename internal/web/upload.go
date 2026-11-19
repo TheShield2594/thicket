@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/channel"
 )
@@ -37,6 +38,9 @@ func readPost(w http.ResponseWriter, r *http.Request) (string, []channel.Attachm
 		}
 		return strings.TrimSpace(body.Text), nil, nil
 	}
+	// 30 MB over a slow phone connection takes longer than the server's
+	// usual read timeout.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(10 * time.Minute))
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	mr, err := r.MultipartReader()
 	if err != nil {
