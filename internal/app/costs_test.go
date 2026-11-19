@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -292,5 +293,31 @@ func TestKidEstimateRefusalAtExhaustedCap(t *testing.T) {
 	}
 	if !strings.Contains(parent, "has used its monthly cap") || strings.Contains(parent, "smaller things") {
 		t.Fatalf("parent should get the cap-reached note: %q", parent)
+	}
+}
+
+// Only the latest change to a cap can be undone, even when a newer change
+// set the same figure again; undoing newest-first walks all the way back.
+func TestSprigCapUndoIsLatestFirst(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	for _, v := range []float64{1, 2, 0.5, 2} {
+		if _, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cur := func() float64 { return a.Settings.Float(ctx, "budget.character.bramble.monthly_usd") }
+	trail, _ := a.DB.TrailOfKind(ctx, store.TrailCap, "bramble", 10) // newest first
+	if len(trail) != 4 {
+		t.Fatalf("cap changes: %d", len(trail))
+	}
+	// $1 → $2 (an older change; the cap is $2 again, but not from it).
+	if _, err := a.Engine.UndoTrail(ctx, h.owner, trail[2].ID); !errors.Is(err, agent.ErrUndoStale) || cur() != 2 {
+		t.Fatalf("undoing an older change: %v, cap %v", err, cur())
+	}
+	for i, want := range []float64{0.5, 2, 1, 0} {
+		if _, err := a.Engine.UndoTrail(ctx, h.owner, trail[i].ID); err != nil || cur() != want {
+			t.Fatalf("undo %d: %v, cap %v (want %v)", i, err, cur(), want)
+		}
 	}
 }

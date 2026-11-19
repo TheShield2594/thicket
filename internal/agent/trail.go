@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/character"
-	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -168,6 +167,18 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	default:
 		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
 	}
+	if u.Type == "cap" {
+		// Only the latest change to a cap is undone: an older one would
+		// put back a value a newer change replaced (even one that set the
+		// same figure again). Checked and restored under one lock.
+		e.capMu.Lock()
+		defer e.capMu.Unlock()
+		if latest, err := e.latestCapChange(ctx, u.Character, u.Tool); err != nil {
+			return "", err
+		} else if latest != id {
+			return "", fmt.Errorf("that cap was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
+		}
+	}
 	// Claim the undo first, so two at once can't both run it.
 	ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID)
 	if err != nil {
@@ -251,14 +262,10 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 	case "mcp", "job":
 		return e.undoAction(ctx, by, u)
 	case "cap":
-		if u.Set != "" {
-			set, _ := strconv.ParseFloat(u.Set, 64)
-			if cur := e.Settings.Float(ctx, settings.SprigCap(u.Character, u.Tool)); cur != set {
-				return "", fmt.Errorf("that cap was changed again since (it's %s now), so undoing this would undo the newer change too: %w", capText(cur), ErrUndoStale)
-			}
-		}
+		// Checked to be the latest change in UndoTrail, under capMu; this
+		// restore isn't a new change in the trail (the undo entry is).
 		usd, _ := strconv.ParseFloat(u.Level, 64)
-		s, err := e.SetSprigCap(ctx, by, u.Character, u.Tool, usd)
+		s, err := e.setSprigCap(ctx, by, u.Character, u.Tool, usd, false)
 		if err != nil {
 			return "", err
 		}
@@ -300,4 +307,20 @@ func (e *Engine) SetToolLevel(ctx context.Context, by *store.User, sprig, tool, 
 		return err
 	}
 	return e.setLevel(ctx, by, sprig, tool, level, "set through the API")
+}
+
+// latestCapChange is the newest cap change still in force for one sprig's
+// daily or monthly cap (0 if none).
+func (e *Engine) latestCapChange(ctx context.Context, sprig, period string) (int64, error) {
+	entries, err := e.DB.TrailOfKind(ctx, store.TrailCap, sprig, 100)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range entries {
+		var u trailUndo
+		if json.Unmarshal(t.Undo, &u) == nil && u.Type == "cap" && u.Tool == period {
+			return t.ID, nil
+		}
+	}
+	return 0, nil
 }

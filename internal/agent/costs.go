@@ -492,6 +492,14 @@ func budgetReply(t *turn, be *llm.BudgetError) string {
 // kid sprig's cap can only be raised (or removed) by its parents; anyone
 // who manages a sprig may lower it. It goes in the trail, with undo.
 func (e *Engine) SetSprigCap(ctx context.Context, by *store.User, sprig, period string, usd float64) (string, error) {
+	e.capMu.Lock()
+	defer e.capMu.Unlock()
+	return e.setSprigCap(ctx, by, sprig, period, usd, true)
+}
+
+// setSprigCap is SetSprigCap with capMu held; record puts the change in
+// the trail (an undo doesn't: its own entry says it).
+func (e *Engine) setSprigCap(ctx context.Context, by *store.User, sprig, period string, usd float64, record bool) (string, error) {
 	if period != "daily" && period != "monthly" {
 		return "", errors.New("the cap is daily or monthly")
 	}
@@ -525,7 +533,9 @@ func (e *Engine) SetSprigCap(ctx context.Context, by *store.User, sprig, period 
 	if err := e.Settings.Set(ctx, name, value); err != nil {
 		return "", err
 	}
-	e.trailCap(ctx, by, c, period, prev, usd)
+	if record {
+		e.trailCap(ctx, by, c, period, prev, usd)
+	}
 	return fmt.Sprintf("%s's %s cap is now %s.", c.DisplayName(), period, capText(usd)), nil
 }
 

@@ -160,3 +160,23 @@ func (s *Store) LatestTrailAck(ctx context.Context, chatRef string, userID int64
 	}
 	return id, err
 }
+
+// TrailOfKind returns the newest entries of one kind about one sprig that
+// haven't been undone.
+func (s *Store) TrailOfKind(ctx context.Context, kind, character string, limit int) ([]TrailEntry, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+trailCols+" FROM trail WHERE kind = ? AND character = ? AND undone_at IS NULL ORDER BY id DESC LIMIT ?",
+		kind, character, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TrailEntry
+	for rows.Next() {
+		t, err := scanTrail(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}

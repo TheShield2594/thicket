@@ -114,6 +114,7 @@ type Engine struct {
 	rememberAsks sync.Map
 	// costAsks: chatRef -> *costAsk (a costly turn waiting for "go ahead")
 	costAsks  sync.Map
+	capMu     sync.Mutex // a sprig cap change, or the check and restore of its undo
 	linkMu    sync.Mutex
 	links     map[string]linkCode    // code -> pending link
 	linkFails map[string][]time.Time // channel:user -> failed attempts
