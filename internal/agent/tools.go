@@ -378,6 +378,17 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolCreateCharacter,
 		},
 		{
+			Name: "create_kid_sprig",
+			Description: "Set up a kid sprig: a chat-only companion for one or more of the household's kids. Interview first, a question or two at a time: which kids it's for (they must already be in the household as kids), who its parents are (default: the user), a name and a personality. " +
+				"preview: the draft says hello in the chat as it would to the kid (call again with changes to re-preview). create: shows the parent preview of the latest draft and asks for approval; nothing is created until they approve. " +
+				"It starts with no tools, no family memory or calendar, and never messages anyone on its own; its parents decide what it may use later.",
+			Params:    kidSprigSchema,
+			Scope:     "characters",
+			AdminOnly: true,
+			ChatOnly:  true,
+			Run:       e.toolCreateKidSprig,
+		},
+		{
 			Name:        "import_sprig",
 			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories.",
 			Params:      `{"type":"object","properties":{"file":{"type":"string","description":"the package's file name, as in the message"},"id":{"type":"string","description":"a different id, if its own is taken"},"name":{"type":"string","description":"a different name, if its own is taken"}},"required":["file"]}`,
@@ -576,7 +587,7 @@ func (e *Engine) builtinTools() []*Tool {
 			AdminOnly:   true,
 			Run:         e.toolMemoryReviews,
 		},
-	}, append(e.calendarTools(), e.digestTools()...)...)
+	}, append(append(e.calendarTools(), e.digestTools()...), e.kidLimitTools()...)...)
 }
 
 // --- memory tools ---

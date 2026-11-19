@@ -522,6 +522,8 @@ func (e *Engine) internalAction(ctx context.Context, user *store.User, a *store.
 		return e.importSprig(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "add_starter":
 		return e.addStarter(ctx, user, json.RawMessage(a.Args))
+	case internalPrefix + "create_kid_sprig":
+		return e.createKidSprigApproved(ctx, user, json.RawMessage(a.Args))
 	}
 	return "", fmt.Errorf("unknown action %s", a.Tool)
 }

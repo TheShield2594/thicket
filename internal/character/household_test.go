@@ -3,6 +3,7 @@ package character
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 type person struct {
@@ -108,5 +109,51 @@ func TestKidSprigValidation(t *testing.T) {
 	solo.Household = TierSolo
 	if len(solo.Validate()) == 0 {
 		t.Error("solo sprig without belongs_to accepted")
+	}
+}
+
+func TestKidLimitsClosed(t *testing.T) {
+	at := func(day, clock string) time.Time {
+		tm, err := time.Parse("2006-01-02 15:04", day+" "+clock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm
+	}
+	// 2026-11-15 is a Sunday.
+	l := KidLimits{Hours: "07:00-21:00", SchoolNights: "20:00"}
+	for _, c := range []struct{ day, clock, want string }{
+		{"2026-11-15", "19:59", ""},             // Sunday evening, before school-night time
+		{"2026-11-15", "20:00", "school_night"}, // Sunday is a school night
+		{"2026-11-16", "02:00", "school_night"}, // still Sunday night
+		{"2026-11-16", "06:30", "hours"},        // Monday morning, before hours
+		{"2026-11-16", "07:00", ""},
+		{"2026-11-19", "20:30", "school_night"}, // Thursday
+		{"2026-11-20", "20:30", ""},             // Friday: not a school night
+		{"2026-11-21", "01:00", "hours"},        // Friday night after midnight: hours still apply
+		{"2026-11-21", "21:00", "hours"},        // Saturday after hours
+	} {
+		if got := l.Closed(at(c.day, c.clock)); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.day, c.clock, got, c.want)
+		}
+	}
+	late := KidLimits{SchoolNights: "00:30"}
+	for _, c := range []struct{ day, clock, want string }{
+		{"2026-11-15", "23:00", ""},
+		{"2026-11-16", "00:10", ""},
+		{"2026-11-16", "00:45", "school_night"},
+		{"2026-11-21", "00:45", ""}, // Friday night
+	} {
+		if got := late.Closed(at(c.day, c.clock)); got != c.want {
+			t.Errorf("late %s %s: %q, want %q", c.day, c.clock, got, c.want)
+		}
+	}
+	if (KidLimits{}).Closed(at("2026-11-16", "03:00")) != "" {
+		t.Error("no limits closed something")
+	}
+	for _, bad := range []KidLimits{{Hours: "7-9"}, {Hours: "08:00-08:00"}, {SchoolNights: "25:00"}, {DailyMinutes: -1}, {DailyMessages: 5000}} {
+		if len(bad.Problems()) == 0 {
+			t.Errorf("%+v accepted", bad)
+		}
 	}
 }

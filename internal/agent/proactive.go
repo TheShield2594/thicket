@@ -227,6 +227,7 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {
 				continue // follow-ups wait; nothing is lost
 			}
+			e.DailyKidReports(ctx) // topics need the model
 			e.FollowUps(ctx)
 			e.CheckIns(ctx)
 			e.Presets(ctx) // morning briefs, event heads-ups, due reminders

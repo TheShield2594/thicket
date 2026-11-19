@@ -83,8 +83,12 @@ type DigestSprig struct {
 	Failed  int // of them, failed
 	Replies int // replies it wrote to the person (to the kids, for a kid sprig)
 	Changes []string
-	Safety  int      // safety alerts (kid sprigs)
-	Waiting []string // open inbox items and approvals
+	Safety  int // safety alerts (kid sprigs)
+	// A kid sprig's week, for a parent who gets the kid report weekly:
+	// time spent, the kids' messages, and topics in a sentence or two.
+	Minutes, Messages int
+	Topics            string
+	Waiting           []string // open inbox items and approvals
 	// CostUSD is its whole week's spend, or, when Share is set (a family
 	// sprig, for someone who isn't an admin), only what was spent for
 	// the person. A share comes with no cap.
@@ -96,7 +100,7 @@ type DigestSprig struct {
 
 // Empty reports whether the sprig has nothing to report this week.
 func (d DigestSprig) Empty() bool {
-	return d.Runs == 0 && d.Replies == 0 && len(d.Changes) == 0 && d.Safety == 0 && len(d.Waiting) == 0 && d.CostUSD < 0.005
+	return d.Runs == 0 && d.Replies == 0 && d.Messages == 0 && len(d.Changes) == 0 && d.Safety == 0 && len(d.Waiting) == 0 && d.CostUSD < 0.005
 }
 
 // Empty reports whether the week has nothing to say.
@@ -256,6 +260,21 @@ func (e *Engine) BuildDigest(ctx context.Context, u *store.User, from, to time.T
 	return d, nil
 }
 
+// addKidReports puts the week's time and topics in the sections of the
+// kid sprigs u looks after, if they get the kid report weekly.
+func (e *Engine) addKidReports(ctx context.Context, u *store.User, d *Digest, from, to time.Time) {
+	reports := map[string]*KidReport{}
+	for _, r := range e.kidReportsFor(ctx, u, from, to, true) {
+		reports[r.ID] = r
+	}
+	for i := range d.Sprigs {
+		s := &d.Sprigs[i]
+		if r, ok := reports[s.ID]; ok && s.Tier == character.TierKid {
+			s.Minutes, s.Messages, s.Topics = r.Usage.Minutes, r.Usage.Messages, r.Topics
+		}
+	}
+}
+
 // digestWaiting files something waiting on the person under its sprig, or
 // under Other. Something about another adult's solo sprig is left out.
 func (e *Engine) digestWaiting(d *Digest, sprigOf func(string) (int, bool), char string, userID int64, what string) {
@@ -336,6 +355,12 @@ func (d *Digest) Text(link string) string {
 		}
 		if len(did) > 0 {
 			b.WriteString("Did: " + strings.Join(did, "; ") + "\n")
+		}
+		if s.Messages > 0 {
+			b.WriteString(fmt.Sprintf("Time: %s, %s from %s\n", minutesText(s.Minutes), countOf(s.Messages, "message", "messages"), strings.TrimPrefix(s.For, "for ")))
+		}
+		if s.Topics != "" {
+			b.WriteString("Topics: " + s.Topics + "\n")
 		}
 		if len(s.Changes) > 0 {
 			b.WriteString("Changed: " + digestList(s.Changes) + "\n")
@@ -501,6 +526,9 @@ func (e *Engine) WeeklyDigests(ctx context.Context) {
 // a failure goes to the inbox rather than being retried.
 func (e *Engine) sendDigest(ctx context.Context, u *store.User, host *character.Character, from, to time.Time, mode string) {
 	d, err := e.BuildDigest(ctx, u, from, to)
+	if err == nil {
+		e.addKidReports(ctx, u, d, from, to)
+	}
 	if err != nil {
 		e.Log.Error("build weekly digest", "user", u.ID, "err", err)
 		e.logActivity(ctx, "error", "initiative", host.ID, u.ID, "the weekly digest couldn't be put together", err.Error())
@@ -554,6 +582,7 @@ func (e *Engine) toolWeeklyDigest(ctx context.Context, t *turn, args json.RawMes
 		if err != nil {
 			return "", err
 		}
+		e.addKidReports(ctx, t.user, d, to.AddDate(0, 0, -7), to)
 		return d.Text(e.dashboardLink()), nil
 	}
 	if !store.ValidDigestMode(action) {

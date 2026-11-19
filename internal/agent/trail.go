@@ -21,7 +21,7 @@ import (
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
-	Type      string   `json:"type"` // level | grant | allow | event | role | cap (Tool = period, Level = the cap to restore)
+	Type      string   `json:"type"` // level | grant | allow | limits (Args = the limits to restore) | event | role | cap (Tool = period, Level = the cap to restore)
 	Character string   `json:"character,omitempty"`
 	Tool      string   `json:"tool,omitempty"`
 	Level     string   `json:"level,omitempty"` // the level to restore ("" = none set)
@@ -149,6 +149,8 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
 		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
+	case u.Type == "limits" && !parentOf():
+		return "", fmt.Errorf("%w: only its parents can change a kid sprig's time limits", ErrUndoNotAllowed)
 	case u.Type == "cap":
 		// Through SetSprigCap's own rules: only a kid sprig's parents
 		// raise its cap, whoever undoes.
@@ -162,7 +164,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
-	case (u.Type == "grant" || u.Type == "allow") && parentOf():
+	case (u.Type == "grant" || u.Type == "allow" || u.Type == "limits") && parentOf():
 		// a parent undoing a change to their kid's sprig
 	default:
 		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
@@ -217,6 +219,19 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		done = fmt.Sprintf("%s's tools are back to %s", c.DisplayName(), listOr(cp.Tools))
+	case "limits":
+		c, ok := e.Chars.Get(u.Character)
+		if !ok {
+			return "", fmt.Errorf("the sprig %q no longer exists", u.Character)
+		}
+		var l character.KidLimits
+		if err := json.Unmarshal(u.Args, &l); err != nil {
+			return "", err
+		}
+		if err := e.writeLimits(ctx, c, l); err != nil {
+			return "", err
+		}
+		done = fmt.Sprintf("%s's time limits are back to %s", c.DisplayName(), describeLimits(l))
 	case "allow":
 		c, ok := e.Chars.Get(u.Character)
 		if !ok {

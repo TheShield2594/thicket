@@ -35,6 +35,12 @@ or through the app API (`POST /api/v2/calendars`):
   Radicale. Give the calendar's collection URL with a username and
   password. `{"name": "Family", "kind": "caldav", "url": "https://dav.example.com/calendars/kim/family/", "username": "kim", "password": "…", "shared": true}`
 
+- **Through an integration (admins):** a calendar an MCP server reaches
+  (a Google Calendar server, Composio, an Outlook server). Name the
+  integration as connected and its read-only tool that lists events, and
+  say what shape its result has (see below).
+  `{"name": "Family", "kind": "mcp", "mcp": {"integration": "gcal", "tool": "list_events", "preset": "google", "args": {"calendarId": "family@group.calendar.google.com"}}, "shared": true}`
+
 Thicket checks the calendar loads before saving it. The address (feed
 links carry a private token) and the password go in the encrypted store,
 never the database. Calendars are read-only: Thicket never writes to
@@ -42,6 +48,39 @@ them. Recurring events, time zones, all-day events, exceptions and
 cancellations are handled; events are re-read at most every 5 minutes.
 
 `"shared": true` puts it on every adult's calendar.
+
+### Calendars through an integration
+
+Only the owner and admins connect these, since they read through the
+household's connection to the integration. Thicket calls the tool only
+if the integration lists it as read-only (`readOnlyHint`), on every
+call: a tool that changes anything is refused when you connect it and
+never called afterwards. Results are cached for 5 minutes like the other
+calendars, and the same rules apply: your own unless shared, and kids
+(and kid sprigs) never see an adult's own calendar.
+
+The tool's result must be JSON. How it maps to events:
+
+- `preset`: `google` (Google Calendar's `events.list`: passes the range
+  as `timeMin`/`timeMax`, reads `items[].summary`, `start`, `end`,
+  `location`, `htmlLink`) or `outlook` (Microsoft Graph's
+  `calendarView`: `startDateTime`/`endDateTime`, `value[].subject`, …).
+- `args`: fixed arguments for every call, such as a calendar id. They
+  win over the preset's.
+- `from_arg`, `to_arg`: the arguments that take the start and end of the
+  range (RFC 3339). Without them the range isn't passed, and events are
+  filtered after the call.
+- `map`: where each field is, as a dotted path, or several separated by
+  `|` (the first that's there wins): `items` (the list of events),
+  `title`, `start`, `end`, `all_day`, `location`, `link`, `id`. Fields
+  left out use common names (`summary|title|subject|name`,
+  `start|startTime|start_time|starts_at`, …), so many servers need no
+  mapping at all.
+
+A start or end can be an RFC 3339 time, a local date-time (read in your
+timezone), a date (an all-day event), a Unix time, or an object like
+`{"dateTime": …, "timeZone": …}` or `{"date": …}`. Results without a
+title or a start are skipped; links other than http(s) are dropped.
 
 ## Sprigs and the calendar
 

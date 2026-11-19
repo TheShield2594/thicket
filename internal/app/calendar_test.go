@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,5 +318,147 @@ func TestRemoveSprigOutput(t *testing.T) {
 	w := signIn(t, a, ctx, web.URL)
 	if code, out := w.do("DELETE", fmt.Sprintf("/api/calendar/outputs/%d", mine), nil, true); code != 200 || out["trail_id"] == nil {
 		t.Fatalf("web app remove: %d %v", code, out)
+	}
+}
+
+// fakeCalendarMCP is a calendar integration: list_events reads (Google's
+// shape, honouring timeMin/timeMax), create_event would write.
+func fakeCalendarMCP(t *testing.T, title string) (srv *httptest.Server, lists, creates *atomic.Int32) {
+	t.Helper()
+	lists, creates = &atomic.Int32{}, &atomic.Int32{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &req)
+		if req.ID == nil {
+			w.WriteHeader(202)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-06-18","capabilities":{}}}`, *req.ID)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[`+
+				`{"name":"list_events","description":"list events","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},`+
+				`{"name":"create_event","description":"add an event","inputSchema":{"type":"object"}}]}}`, *req.ID)
+		case "tools/call":
+			out := `{"error":"no"}`
+			if req.Params.Name == "create_event" {
+				creates.Add(1)
+			} else {
+				lists.Add(1)
+				if req.Params.Arguments["timeMin"] == nil || req.Params.Arguments["timeMax"] == nil || req.Params.Arguments["calendarId"] != "family" {
+					out = `{"items":[]}`
+				} else {
+					out = `{"kind":"calendar#events","items":[` +
+						`{"id":"ev1","summary":"` + title + `","start":{"dateTime":"2026-11-19T15:00:00Z"},"end":{"dateTime":"2026-11-19T16:00:00Z"},"location":"Gym","htmlLink":"https://calendar.example/ev1"},` +
+						`{"id":"ev2","summary":"Bake sale","start":{"date":"2026-11-20"},"end":{"date":"2026-11-21"}},` +
+						`{"id":"far","summary":"Far away","start":{"dateTime":"2027-03-01T10:00:00Z"}}]}`
+				}
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":%q}]}}`, *req.ID, out)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, lists, creates
+}
+
+// A calendar read through an integration's read-only tool: admins
+// connect it, it's mapped and cached like the others, a tool that writes
+// is never called, and private ones stay private (from kids above all).
+func TestMCPCalendarSource(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	a.Calendar.Now = func() time.Time { return now }
+	a.Engine.Now = func() time.Time { return now }
+	connect := func(name, title string) (*atomic.Int32, *atomic.Int32) {
+		srv, lists, creates := fakeCalendarMCP(t, title)
+		s := store.MCPServer{Name: name, Transport: "http", Target: srv.URL, Enabled: true}
+		if err := a.DB.PutMCPServer(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.MCP.Connect(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		return lists, creates
+	}
+	lists, creates := connect("gcal", "Owner's swim")
+	src := calendar.MCPSource{Integration: "gcal", Tool: "list_events", Preset: "google", Args: map[string]any{"calendarId": "family"}}
+
+	if _, err := a.Engine.AddMCPCalendar(ctx, h.kim, "Kim's", src, false); err == nil {
+		t.Fatal("a member read a calendar through an integration")
+	}
+	writer := src
+	writer.Tool = "create_event"
+	if _, err := a.Engine.AddMCPCalendar(ctx, h.owner, "Bad", writer, false); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("a tool that writes was accepted: %v", err)
+	}
+	if creates.Load() != 0 {
+		t.Fatal("a tool that writes was called")
+	}
+	if _, err := a.Engine.AddMCPCalendar(ctx, h.owner, "Swim", src, false); err != nil {
+		t.Fatal(err)
+	}
+
+	from, to := now.Add(-2*time.Hour), now.AddDate(0, 0, 4)
+	view := func(u *store.User, f calendar.Filter) []calendar.Item {
+		t.Helper()
+		items, errs, err := a.Calendar.View(ctx, u, from, to, f)
+		if err != nil || len(errs) > 0 {
+			t.Fatalf("view: %v %v", err, errs)
+		}
+		return items
+	}
+	events := view(h.owner, calendar.Filter{Layers: map[string]bool{calendar.LayerEvents: true}})
+	if got := titles(events, calendar.LayerEvents); got != "Owner's swim | Bake sale" {
+		t.Fatalf("owner's events: %q", got)
+	}
+	swim, sale := events[0], events[1]
+	if swim.Location != "Gym" || swim.SourceURL != "https://calendar.example/ev1" || swim.Calendar != "Swim" || swim.AllDay ||
+		!swim.End.Equal(time.Date(2026, 11, 19, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("swim mapped wrong: %+v", swim)
+	}
+	if !sale.AllDay {
+		t.Fatalf("bake sale should be all-day: %+v", sale)
+	}
+	// Cached like the others.
+	n := lists.Load()
+	view(h.owner, calendar.Filter{})
+	if lists.Load() != n {
+		t.Fatal("the integration was called again within the cache time")
+	}
+
+	// Private: Kim and a kid sprig with the calendar allowed don't see it.
+	if got := titles(view(h.kim, calendar.Filter{}), calendar.LayerEvents); got != "" {
+		t.Fatalf("Kim sees the owner's own integration calendar: %q", got)
+	}
+	if got := titles(view(h.kid, calendar.Filter{SharedOnly: true}), calendar.LayerEvents); got != "" {
+		t.Fatalf("a kid sees a parent's own calendar: %q", got)
+	}
+
+	// A shared one is on everyone's calendar, a kid sprig's included.
+	connect("family", "Family picnic")
+	shared := src
+	shared.Integration = "family"
+	if _, err := a.Engine.AddMCPCalendar(ctx, h.owner, "Family", shared, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := titles(view(h.kim, calendar.Filter{}), calendar.LayerEvents); got != "Family picnic | Bake sale" {
+		t.Fatalf("Kim's shared events: %q", got)
+	}
+	if got := titles(view(h.kid, calendar.Filter{SharedOnly: true}), calendar.LayerEvents); got != "Family picnic | Bake sale" {
+		t.Fatalf("kid sprig's shared events: %q", got)
+	}
+	if creates.Load() != 0 {
+		t.Fatal("a tool that writes was called")
 	}
 }

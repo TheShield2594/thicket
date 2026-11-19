@@ -443,3 +443,78 @@ func TestWebAppHouseholdScreens(t *testing.T) {
 		t.Fatalf("write without X-Thicket: %d", res.StatusCode)
 	}
 }
+
+// Juni sets up a kid sprig in chat: an interview, a preview in its own
+// voice, a parent preview to approve, and nothing before approval.
+func TestKidSprigInChat(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	h.kidSays("hi!") // Max has talked before, so he can be reached
+
+	// Only admins are offered the tool, and only admins can create one.
+	h.kimSays("hello")
+	if toolNames(h.fm)["create_kid_sprig"] {
+		t.Fatal("a member was offered create_kid_sprig")
+	}
+	if _, err := a.Engine.CreateKidSprig(ctx, h.kim, agent.KidSprigSpec{ID: "sneaky", Name: "Sneaky", Role: "x", Kids: []int64{h.kid.ID}, Parents: []int64{h.kim.ID}}); err == nil {
+		t.Fatal("a member created a kid sprig")
+	}
+	h.ownerSay("hello")
+	if !toolNames(h.fm)["create_kid_sprig"] {
+		t.Fatal("the owner wasn't offered create_kid_sprig")
+	}
+
+	// An adult can't be listed as a kid.
+	out := h.ownerSay("make a kid sprig clover for Kim")
+	if strings.Contains(personas(out), "Clover") || !strings.Contains(lastToolResult(h.fm), "isn't one of the household's kids") {
+		t.Fatalf("an adult listed as a kid: %q / %s", personas(out), lastToolResult(h.fm))
+	}
+
+	// The preview says hello as it would to the kid.
+	out = h.ownerSay("make a kid sprig clover for Max with parents me,Kim")
+	if !strings.Contains(personas(out), "Clover (preview)") || !strings.Contains(sentText(out), "doodling") {
+		t.Fatalf("no preview: %+v", out)
+	}
+	out = h.ownerSay("lovely, create the kid sprig clover")
+	text := sentText(out)
+	for _, want := range []string{"Parent preview", "Clover", "Talks only to Max", "and Kim. They can read every chat", "no tools", "Reply **approve**"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("parent preview missing %q:\n%s", want, text)
+		}
+	}
+	if !strings.HasPrefix(lastToolResult(h.fm), "PENDING") {
+		t.Fatalf("model told: %q", lastToolResult(h.fm))
+	}
+	// Nothing is created before approval.
+	if _, ok := a.Chars.Get("clover"); ok {
+		t.Fatal("clover created before approval")
+	}
+
+	out = h.ownerSay("approve")
+	c, ok := a.Chars.Get("clover")
+	if !ok || !c.IsKid() || len(c.Tools) != 0 || len(c.Allow) != 0 {
+		t.Fatalf("clover after approval: %+v", c)
+	}
+	if fmt.Sprint(c.Kids) != fmt.Sprint([]int64{h.kid.ID}) || fmt.Sprint(c.Parents) != fmt.Sprint([]int64{h.owner.ID, h.kim.ID}) {
+		t.Fatalf("kids %v parents %v", c.Kids, c.Parents)
+	}
+	if !modelSaw(h.fm, "Clover's chats") {
+		t.Fatal("the approving parent wasn't told what they can do")
+	}
+	var kimTold, kidHello bool
+	for _, s := range out {
+		kimTold = kimTold || (s.chat == "dm-kim" && strings.Contains(s.text, "Clover's chats") && strings.Contains(s.text, "safety alert"))
+		kidHello = kidHello || (s.chat == "dm-max" && s.persona == "Clover" && strings.Contains(s.text, "Clover"))
+	}
+	if !kimTold || !kidHello {
+		t.Fatalf("kim told %v, kid hello %v:\n%+v", kimTold, kidHello, out)
+	}
+	trail, _ := a.DB.Trail(ctx, h.owner.ID, 20)
+	var inTrail bool
+	for _, e := range trail {
+		inTrail = inTrail || (e.Character == "clover" && strings.Contains(e.Summary, "kid sprig"))
+	}
+	if !inTrail {
+		t.Fatalf("not in the trail: %+v", trail)
+	}
+}

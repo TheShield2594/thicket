@@ -409,6 +409,9 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+name+": "+err.Error(), "")
 		return "Error: " + err.Error() + ", so " + tool.Label() + " was NOT run. Stop and tell the user."
 	}
+	if msg := e.kidOutbound(ctx, t, tool, args); msg != "" {
+		return msg // personal details a kid shared stay in Thicket
+	}
 	if msg, ok := e.gate(ctx, t, tool, args); !ok {
 		return msg
 	}

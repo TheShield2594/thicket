@@ -142,24 +142,26 @@ func (s *Store) SprigEventsFor(ctx context.Context, userID int64, from, to time.
 
 // CalendarSource is a calendar an adult connected, read-only.
 type CalendarSource struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"` // ics | caldav
-	URL       string    `json:"-"`    // may carry a private token (ICS links do)
-	Username  string    `json:"-"`
-	Secret    string    `json:"-"` // name of the password in the encrypted store
+	ID       int64  `json:"id"`
+	UserID   int64  `json:"user_id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // ics | caldav | mcp
+	URL      string `json:"-"`    // may carry a private token (ICS links do)
+	Username string `json:"-"`
+	Secret   string `json:"-"` // name of the password in the encrypted store
+	// Config is an mcp source's integration, tool and mapping (JSON).
+	Config    string    `json:"-"`
 	Shared    bool      `json:"shared"`
 	Enabled   bool      `json:"enabled"`
 	LastError string    `json:"last_error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const calSourceCols = "id, user_id, name, kind, url, username, secret, shared, enabled, last_error, created_at"
+const calSourceCols = "id, user_id, name, kind, url, username, secret, shared, enabled, last_error, created_at, config"
 
 func (s *Store) AddCalendarSource(ctx context.Context, c CalendarSource) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO calendar_sources (user_id, name, kind, url, username, secret, shared, enabled, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`, c.UserID, s.clean(c.Name), c.Kind, c.URL, c.Username, c.Secret, boolInt(c.Shared), s.unix())
+	res, err := s.db.ExecContext(ctx, `INSERT INTO calendar_sources (user_id, name, kind, url, username, secret, shared, enabled, created_at, config)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`, c.UserID, s.clean(c.Name), c.Kind, c.URL, c.Username, c.Secret, boolInt(c.Shared), s.unix(), c.Config)
 	if err != nil {
 		return 0, err
 	}
@@ -184,7 +186,7 @@ func (s *Store) CalendarSourcesFor(ctx context.Context, userID int64) ([]Calenda
 		var c CalendarSource
 		var shared, enabled int
 		var created int64
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.Kind, &c.URL, &c.Username, &c.Secret, &shared, &enabled, &c.LastError, &created); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.Kind, &c.URL, &c.Username, &c.Secret, &shared, &enabled, &c.LastError, &created, &c.Config); err != nil {
 			return nil, err
 		}
 		c.Shared, c.Enabled, c.CreatedAt = shared == 1, enabled == 1, time.Unix(created, 0)

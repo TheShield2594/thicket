@@ -296,7 +296,7 @@ func (e *Engine) AddCalendar(ctx context.Context, u *store.User, name, kind, raw
 		return nil, errors.New("name is required (at most 60 characters)")
 	}
 	if kind != "ics" && kind != "caldav" {
-		return nil, errors.New("kind must be ics (a calendar feed link) or caldav")
+		return nil, errors.New("kind must be ics (a calendar feed link) or caldav (or mcp, a calendar read through an integration)")
 	}
 	if err := calendar.CheckURL(rawURL); err != nil {
 		return nil, err
@@ -335,6 +335,49 @@ func (e *Engine) AddCalendar(ctx context.Context, u *store.User, name, kind, raw
 		who = "shared with the household"
 	}
 	e.logActivity(ctx, "info", "calendar", "", u.ID, fmt.Sprintf("calendar %q connected (%s, %s)", name, kind, who), "")
+	return &src, nil
+}
+
+// AddMCPCalendar connects a calendar read through an integration (an MCP
+// server's read-only "list events" tool), after checking it loads. Only
+// admins, who connect integrations, may: a calendar is read with the
+// household's connection, whoever it's for.
+func (e *Engine) AddMCPCalendar(ctx context.Context, u *store.User, name string, m calendar.MCPSource, shared bool) (*store.CalendarSource, error) {
+	if u.IsKid() {
+		return nil, errors.New("kids can't connect calendars")
+	}
+	if !u.IsAdmin() {
+		return nil, errors.New("only the owner or an admin can read a calendar through an integration")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 60 {
+		return nil, errors.New("name is required (at most 60 characters)")
+	}
+	cfg, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := calendar.ParseMCPSource(string(cfg)); err != nil {
+		return nil, err
+	}
+	if e.MCP == nil {
+		return nil, errors.New("integrations aren't available")
+	}
+	src := store.CalendarSource{UserID: u.ID, Name: name, Kind: "mcp", Config: string(cfg), Shared: shared}
+	now := e.now()
+	if _, _, err := e.Calendar.Probe(ctx, src, now.AddDate(0, 0, -1), now.AddDate(0, 0, 14), u.Location()); err != nil {
+		return nil, fmt.Errorf("couldn't read that calendar: %v", err)
+	}
+	id, err := e.DB.AddCalendarSource(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	src.ID = id
+	who := "their own"
+	if shared {
+		who = "shared with the household"
+	}
+	e.logActivity(ctx, "info", "calendar", "", u.ID, fmt.Sprintf("calendar %q connected (%s → %s, %s)", name, m.Integration, m.Tool, who), "")
 	return &src, nil
 }
 

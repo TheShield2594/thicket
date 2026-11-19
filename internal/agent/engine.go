@@ -83,6 +83,7 @@ type Engine struct {
 	chatLocks sync.Map   // chatRef -> *sync.Mutex
 	active    sync.Map   // chatRef -> character id
 	drafts    sync.Map   // user id -> *character.Character
+	kidDrafts sync.Map   // user id -> *kidDraft
 	userMu    sync.Mutex // serialises first-contact user creation
 	rateMu    sync.Mutex
 	rate      map[int64][]time.Time
@@ -363,6 +364,13 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if user.IsKid() {
 		// After the reply, so the kid isn't kept waiting; never blocks it.
 		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
+		// Past a time limit the kid hears so, kindly; no model is called.
+		if msg := e.kidLimitReply(ctx, user, char, in.Text); msg != "" {
+			if err := e.send(ctx, in.ChatRef(), char, msg); err != nil {
+				return err
+			}
+			return e.DB.AddMessage(ctx, conv.ID, "assistant", char.ID, msg)
+		}
 	}
 	if err := e.respond(ctx, t, ""); err != nil {
 		return err

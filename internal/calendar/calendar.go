@@ -81,6 +81,8 @@ type Service struct {
 	DB      *store.Store
 	Secrets Secrets
 	HTTP    *http.Client
+	// MCP reads calendars reached through an integration (kind mcp).
+	MCP MCPCaller
 	// CacheFor is how long a fetched calendar is reused (default 5 minutes).
 	CacheFor time.Duration
 	Now      func() time.Time
@@ -226,11 +228,7 @@ func (s *Service) events(ctx context.Context, src store.CalendarSource, from, to
 		return filterRange(c.events, from, to), nil
 	}
 	s.mu.Unlock()
-	data, err := s.fetch(ctx, src, from, to)
-	if err != nil {
-		return nil, err
-	}
-	evs, err := ParseICS(data, from, to, loc)
+	evs, err := s.load(ctx, src, from, to, loc)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +236,22 @@ func (s *Service) events(ctx context.Context, src store.CalendarSource, from, to
 	s.cache[src.ID] = cached{at: s.now(), from: from, to: to, events: evs}
 	s.mu.Unlock()
 	return evs, nil
+}
+
+// load reads a source's events in range, whatever its kind.
+func (s *Service) load(ctx context.Context, src store.CalendarSource, from, to time.Time, loc *time.Location) ([]Event, error) {
+	if src.Kind == "mcp" {
+		m, err := ParseMCPSource(src.Config)
+		if err != nil {
+			return nil, err
+		}
+		return s.fetchMCP(ctx, m, from, to, loc)
+	}
+	data, err := s.fetch(ctx, src, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return ParseICS(data, from, to, loc)
 }
 
 // Forget drops a calendar from the cache (after it changes or is removed).
@@ -374,6 +388,10 @@ func redactURL(err error, raw string) string {
 // Probe loads a calendar once, without caching: to check it works before
 // it's saved.
 func (s *Service) Probe(ctx context.Context, src store.CalendarSource, from, to time.Time, loc *time.Location) ([]Event, string, error) {
+	if src.Kind == "mcp" {
+		evs, err := s.load(ctx, src, from, to, loc)
+		return evs, "", err
+	}
 	data, err := s.fetch(ctx, src, from, to)
 	if err != nil {
 		return nil, "", err

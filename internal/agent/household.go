@@ -60,11 +60,54 @@ type KidSprigSpec struct {
 // then decide what it may use (KidAccess). It starts with no tools, no
 // adult data and no initiative.
 func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigSpec) (*character.Character, error) {
+	c, err := e.kidSprigFromSpec(ctx, by, s)
+	if err != nil {
+		return nil, err
+	}
+	// A low cap that only its parents can raise, in place before the
+	// sprig is live.
+	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
+	// Under the cap lock until the first cap is in the trail, so a cap
+	// change can't land in between and be undone by undoing this one.
+	e.capMu.Lock()
+	defer e.capMu.Unlock()
+	undoCap, err := e.presetCap(ctx, c.ID, capUSD)
+	if err != nil {
+		return nil, err
+	}
+	existed := e.fileExists(c.ID)
+	if _, err := e.Chars.Write(ctx, c); err != nil {
+		// Write can fail after the file is in place (saving its hash):
+		// take the file away first, so it never loads without its cap.
+		if e.unpublish(c.ID, existed) {
+			undoCap()
+		}
+		return nil, err
+	}
+	e.addTrail(ctx, by.ID, c.ID, store.TrailGrant, fmt.Sprintf("kid sprig %s created for %v, parents %v", c.DisplayName(), c.Kids, c.Parents), "", nil)
+	if capUSD > 0 {
+		e.trailCap(ctx, by, c, "monthly", 0, capUSD)
+	}
+	e.logActivity(ctx, "info", "character", c.ID, by.ID, "kid sprig created", "")
+	got, _ := e.Chars.Get(c.ID)
+	return got, nil
+}
+
+// kidSprigFromSpec checks a kid sprig spec and builds the character it
+// describes, without writing anything: only admins, the kids must be the
+// household's kids and the parents its adults.
+func (e *Engine) kidSprigFromSpec(ctx context.Context, by *store.User, s KidSprigSpec) (*character.Character, error) {
 	if !by.IsAdmin() {
 		return nil, errors.New("only the owner or an admin can create kid sprigs")
 	}
 	if _, exists := e.Chars.Get(s.ID); exists {
 		return nil, fmt.Errorf("there's already a sprig called %q", s.ID)
+	}
+	if len(s.Kids) == 0 {
+		return nil, errors.New("a kid sprig needs at least one kid it talks to")
+	}
+	if len(s.Parents) == 0 {
+		return nil, errors.New("a kid sprig needs at least one parent")
 	}
 	for _, id := range s.Kids {
 		u, err := e.DB.UserByID(ctx, id)
@@ -95,31 +138,5 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, errors.New(strings.Join(probs, "; "))
 	}
-	// A low cap that only its parents can raise, in place before the
-	// sprig is live.
-	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
-	// Under the cap lock until the first cap is in the trail, so a cap
-	// change can't land in between and be undone by undoing this one.
-	e.capMu.Lock()
-	defer e.capMu.Unlock()
-	undoCap, err := e.presetCap(ctx, c.ID, capUSD)
-	if err != nil {
-		return nil, err
-	}
-	existed := e.fileExists(c.ID)
-	if _, err := e.Chars.Write(ctx, c); err != nil {
-		// Write can fail after the file is in place (saving its hash):
-		// take the file away first, so it never loads without its cap.
-		if e.unpublish(c.ID, existed) {
-			undoCap()
-		}
-		return nil, err
-	}
-	e.addTrail(ctx, by.ID, c.ID, store.TrailGrant, fmt.Sprintf("kid sprig %s created for %v, parents %v", c.DisplayName(), c.Kids, c.Parents), "", nil)
-	if capUSD > 0 {
-		e.trailCap(ctx, by, c, "monthly", 0, capUSD)
-	}
-	e.logActivity(ctx, "info", "character", c.ID, by.ID, "kid sprig created", "")
-	got, _ := e.Chars.Get(c.ID)
-	return got, nil
+	return c, nil
 }
