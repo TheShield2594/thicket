@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -359,5 +361,168 @@ func TestApprovalKeepsItsEstimate(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the asked estimate is gone")
+	}
+}
+
+// failInserts makes every insert into table fail until the returned func
+// is called, like a full disk or a locked database would.
+func failInserts(t *testing.T, a *App, table string) func() {
+	t.Helper()
+	if _, err := a.DB.DB().Exec(`CREATE TRIGGER fail_` + table + ` BEFORE INSERT ON ` + table + ` BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := a.DB.DB().Exec(`DROP TRIGGER fail_` + table); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A kid sprig whose file was written but whose hash couldn't be saved is
+// taken away again with its cap: it never loads, uncapped or otherwise,
+// and creating it again works.
+func TestKidSprigHashSaveFailure(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	spec := agent.KidSprigSpec{ID: "moss", Name: "Moss", Role: "A reading buddy.", Kids: []int64{h.kid.ID}, Parents: []int64{h.owner.ID}}
+	restore := failInserts(t, a, "character_files")
+	if _, err := a.Engine.CreateKidSprig(ctx, h.owner, spec); err == nil {
+		t.Fatal("created with its hash unsaved")
+	}
+	restore()
+	if _, err := os.Stat(filepath.Join(a.Cfg.CharactersDir, "moss.md")); !os.IsNotExist(err) {
+		t.Fatalf("the half-created file is still there: %v", err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.Chars.Get("moss"); ok {
+		t.Fatal("the half-created sprig loads")
+	}
+	if v := a.Settings.Float(ctx, "budget.character.moss.monthly_usd"); v != 0 {
+		t.Fatalf("a cap was left behind for a sprig that doesn't exist: %v", v)
+	}
+	c, err := a.Engine.CreateKidSprig(ctx, h.owner, spec)
+	if err != nil {
+		t.Fatalf("second try: %v", err)
+	}
+	if v := a.Settings.Float(ctx, "budget.character."+c.ID+".monthly_usd"); v != 1 {
+		t.Fatalf("kid sprig cap after the retry: %v", v)
+	}
+}
+
+// A cap change that can't be recorded in the trail is put back and
+// reported as failed: undo could never tell it was the newest change.
+func TestSprigCapTrailWriteFailure(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	if _, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 2); err != nil {
+		t.Fatal(err)
+	}
+	restore := failInserts(t, a, "trail")
+	_, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 5)
+	restore()
+	if err == nil || !strings.Contains(err.Error(), "wasn't changed") {
+		t.Fatalf("unrecorded cap change: %v", err)
+	}
+	if v := a.Settings.Float(ctx, "budget.character.bramble.monthly_usd"); v != 2 {
+		t.Fatalf("the unrecorded cap stayed: %v", v)
+	}
+	// The recorded change is still the newest, so undoing it works.
+	trail, _ := a.DB.TrailOfKind(ctx, store.TrailCap, "bramble", 1)
+	if len(trail) != 1 || !strings.Contains(trail[0].Summary, "→ $2.00") {
+		t.Fatalf("newest cap entry: %+v", trail)
+	}
+	if _, err := a.Engine.UndoTrail(ctx, h.owner, trail[0].ID); err != nil {
+		t.Fatalf("undoing the recorded change: %v", err)
+	}
+}
+
+// The same through Juni: a sprig approved with a cap whose hash can't be
+// saved is taken away with its cap, and approving it again works.
+func TestNewSprigHashSaveFailure(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	propose := func() {
+		a.Engine.HandleIncoming(ctx, dm("bring on capped wren"))
+		a.Engine.HandleIncoming(ctx, dm("lovely, create wren"))
+		fc.take()
+	}
+	propose()
+	restore := failInserts(t, a, "character_files")
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	restore()
+	fc.take()
+	if _, err := os.Stat(filepath.Join(a.Cfg.CharactersDir, "wren.md")); !os.IsNotExist(err) {
+		t.Fatalf("the half-created file is still there: %v", err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.Chars.Get("wren"); ok {
+		t.Fatal("the half-created sprig loads")
+	}
+	if v := a.Settings.Float(ctx, "budget.character.wren.monthly_usd"); v != 0 {
+		t.Fatalf("a cap was left behind for a sprig that doesn't exist: %v", v)
+	}
+	propose()
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	fc.take()
+	if _, ok := a.Chars.Get("wren"); !ok {
+		t.Fatal("second approval didn't create wren")
+	}
+	if v := a.Settings.Float(ctx, "budget.character.wren.monthly_usd"); v != 3 {
+		t.Fatalf("cap after the retry: %v", v)
+	}
+}
+
+const pipSearches = `---
+id: pip
+name: Pip
+role: Looks things up.
+personality:
+  traits: [curious]
+voice:
+  style: [brisk]
+tools: [web]
+---
+Pip looks things up.
+`
+
+// A paid web search inside a background task is covered by the task's own
+// estimate: it isn't recorded again on its own, so the accuracy figures
+// don't count it twice.
+func TestSearchInsideATaskIsntEstimatedTwice(t *testing.T) {
+	a, fc, fm, ctx := setup(t)
+	onboard(t, a, fc, ctx)
+	if err := os.WriteFile(filepath.Join(a.Cfg.CharactersDir, "pip.md"), []byte(pipSearches), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a.Engine.HandleIncoming(ctx, dm("have pip look into search the web for tomato care"))
+	a.Engine.WaitTasks()
+	fc.take()
+	searched := false
+	fm.mu.Lock()
+	for _, r := range fm.reqs {
+		searched = searched || r.WebResults > 0 && strings.Contains(r.Messages[1].Content, "tomato care")
+	}
+	fm.mu.Unlock()
+	if !searched {
+		t.Fatal("Pip's task never searched")
+	}
+	ests, _ := a.DB.Estimates(ctx, time.Now().Add(-time.Hour), 20)
+	var tasks, searches int
+	for _, e := range ests {
+		switch e.Kind {
+		case "task":
+			tasks++
+		case "search":
+			searches++
+		}
+	}
+	if tasks != 1 || searches != 0 {
+		t.Fatalf("want the task's estimate only, got %d task and %d search: %+v", tasks, searches, ests)
 	}
 }

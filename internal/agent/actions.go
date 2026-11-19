@@ -364,8 +364,6 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 		if err := e.paused(ctx, c.ID); err != nil {
 			return "", fmt.Errorf("%w: resume it first", err)
 		}
-		// The sprig's file policy applies as it does to any call: a path
-		// revoked since the action isn't reached by undoing it.
 		// The sprig's file policy applies to any path in the undo, whatever
 		// the integration's transport: the connection CallAs uses may not be
 		// the one there now (it can reconnect, or be re-added as a local

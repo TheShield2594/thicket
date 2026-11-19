@@ -350,6 +350,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return text("Quill here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Quill") && strings.HasPrefix(lastUserText(req.Messages), "read "):
 		return toolCall("mcp_files__read_file", map[string]any{"path": strings.TrimPrefix(lastUserText(req.Messages), "read ")}), nil
+	case strings.HasPrefix(sys, "You are Pip") && last.Role != "tool" && strings.Contains(last.Content, "search the web for "):
+		_, q, _ := strings.Cut(last.Content, "search the web for ")
+		q, _, _ = strings.Cut(q, "\n")
+		return toolCall("web_search", map[string]any{"query": q}), nil
 	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
 		return text("Pip here: " + last.Content), nil
 	case strings.HasPrefix(sys, "You are Pip"):
@@ -384,6 +388,9 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	case strings.Contains(u, "bring on my own wren"):
 		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps Robin's secret reading list.",
 			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "private": true}), nil
+	case strings.Contains(u, "bring on capped wren"):
+		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps the reading list.",
+			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "monthly_cap_usd": 3}), nil
 	case strings.Contains(u, "bring on wren"):
 		return toolCall("preview_character", map[string]any{"id": "wren", "name": "Wren", "role": "Keeps the reading list.",
 			"traits": []string{"bookish", "gentle"}, "voice_style": []string{"short and warm"}, "tools": []string{"schedule"},

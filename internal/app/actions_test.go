@@ -317,3 +317,48 @@ func TestUndoNotOfferedForAltSpelledSecret(t *testing.T) {
 		t.Fatal("a secret was stored in the trail")
 	}
 }
+
+// An undo whose arguments name a path outside the sprig's files is
+// refused, whatever transport the integration uses now: a remote one may
+// be re-added as a local one (or reconnect) between the action and the
+// undo, so the check doesn't depend on it.
+func TestUndoChecksPathsWhateverTransport(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	todo := &fakeTodo{}
+	srv := todo.serve(t)
+	outside := filepath.Join(t.TempDir(), "not-tods.txt")
+	s := store.MCPServer{Name: "todo", Transport: "http", Target: srv.URL, Enabled: true,
+		Undo: map[string]store.InverseCall{"add_item": {Tool: "delete_item", Args: map[string]string{"id": "{{result.id}}", "path": outside},
+			Said: "I added {{args.item}} to {{args.list}}", Label: "remove it"}}}
+	if err := a.DB.PutMCPServer(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.MCP.Connect(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Cfg.CharactersDir, "tod.md"), []byte(tod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a.DB.SetToolLevel(ctx, "tod", store.AnyTool, store.LevelAct)
+
+	a.Engine.HandleIncoming(ctx, dm("Tod, add milk to groceries"))
+	fc.take()
+	if todo.count() != 1 {
+		t.Fatalf("item not added: %d", todo.count())
+	}
+	a.Engine.HandleIncoming(ctx, dm("undo"))
+	out := sentText(fc.take())
+	if todo.count() != 1 {
+		t.Fatal("an undo reaching a path outside the sprig's files was run")
+	}
+	if strings.Contains(out, "Undone") || !strings.Contains(out, "can only use files in its own folder") {
+		t.Fatalf("undo reply: %s", out)
+	}
+	trail, _ := a.DB.Trail(ctx, 0, 5)
+	if len(trail) == 0 || trail[0].Kind != store.TrailAction || !trail[0].UndoneAt.IsZero() {
+		t.Fatalf("a refused undo marked the entry undone: %+v", trail)
+	}
+}

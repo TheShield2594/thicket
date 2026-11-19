@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/theshield2594/thicket/internal/store"
@@ -115,5 +116,72 @@ func TestInvitedKidGreetedOnce(t *testing.T) {
 	h.kidSays("hi")
 	if sys := lastChatPrompt(h.fm); strings.Contains(sys, "Saying hello") {
 		t.Fatal("greeted again on the first message")
+	}
+}
+
+// A kid's hello isn't used up by a reply that failed: the next real
+// reply still says hello.
+func TestKidHelloNotSpentOnAFailure(t *testing.T) {
+	h := setupHousehold(t)
+	h.fm.mu.Lock()
+	h.fm.failOn = "hello there"
+	h.fm.mu.Unlock()
+	h.kidSays("hello there")
+	if kid, _ := h.a.DB.UserByID(h.ctx, h.kid.ID); !kid.OnboardedAt.IsZero() {
+		t.Fatal("a failed reply counted as the kid's hello")
+	}
+	h.fm.mu.Lock()
+	h.fm.failOn = ""
+	h.fm.mu.Unlock()
+	h.kidSays("hi")
+	if sys := lastChatPrompt(h.fm); !strings.Contains(sys, "Saying hello (the first time you talk)") {
+		t.Fatalf("no hello after the failure:\n%s", sys)
+	}
+	if kid, _ := h.a.DB.UserByID(h.ctx, h.kid.ID); kid.OnboardedAt.IsZero() {
+		t.Fatal("the real hello wasn't recorded")
+	}
+}
+
+// A pause that lands while a kid's first reply is being written (one
+// written by another process, which the reply sees before any watcher
+// stops it) doesn't count as the hello: after resume, the kid sprig
+// still says it.
+func TestKidHelloNotSpentOnAPause(t *testing.T) {
+	h := setupHousehold(t)
+	var once sync.Once
+	h.fm.mu.Lock()
+	h.fm.onChat = func() {
+		once.Do(func() {
+			if _, err := h.a.DB.SetPause(h.ctx, "bramble", h.owner.ID, "test"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	h.fm.mu.Unlock()
+	out := texts(h.kidSays("the slow tool task"))
+	h.fm.mu.Lock()
+	h.fm.onChat = nil
+	h.fm.mu.Unlock()
+	if !strings.Contains(out, "paused") {
+		t.Fatalf("reply after the pause:\n%s", out)
+	}
+	if kid, _ := h.a.DB.UserByID(h.ctx, h.kid.ID); !kid.OnboardedAt.IsZero() {
+		t.Fatal("a paused reply counted as the kid's hello")
+	}
+	if err := h.a.Engine.Resume(h.ctx, h.owner, "bramble", "test"); err != nil {
+		t.Fatal(err)
+	}
+	// The history still mentions the slow tool task: let it finish.
+	release := make(chan struct{})
+	close(release)
+	h.fm.mu.Lock()
+	h.fm.release = release
+	h.fm.mu.Unlock()
+	h.kidSays("hi again")
+	if sys := lastChatPrompt(h.fm); !strings.Contains(sys, "Saying hello (the first time you talk)") {
+		t.Fatalf("no hello after the pause:\n%s", sys)
+	}
+	if kid, _ := h.a.DB.UserByID(h.ctx, h.kid.ID); kid.OnboardedAt.IsZero() {
+		t.Fatal("the real hello wasn't recorded")
 	}
 }
