@@ -1,0 +1,7 @@
+# Starter metadata: what the package itself can't say (who it's for,
+# levels, spend cap). See docs/authoring.md#starter-sprigs.
+summary: A reading buddy for kids that talks about their book, helps with tricky words and never spoils the ending.
+tiers: [kid]
+ages: "5-12"
+offer: when a parent mentions a kid who reads (or should read more), bedtime books, or a reading log from school
+daily_usd: 0.25

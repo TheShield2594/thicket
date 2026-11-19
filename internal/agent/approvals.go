@@ -120,6 +120,9 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	if a.Tool == internalPrefix+"import_sprig" {
 		detail = "(a sprig package)"
 	}
+	if a.Tool == internalPrefix+"add_starter" && strings.Contains(a.Args, `"tier":"solo"`) {
+		detail = "(a private sprig: not logged)" // admins read the activity log
+	}
 	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), detail)
 	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM, approvedEstimate: a.EstimateID}
 	what := strings.TrimPrefix(a.Tool, internalPrefix)
@@ -276,6 +279,8 @@ func (e *Engine) internalAction(ctx context.Context, user *store.User, a *store.
 		return e.raiseLevel(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "import_sprig":
 		return e.importSprig(ctx, user, json.RawMessage(a.Args))
+	case internalPrefix + "add_starter":
+		return e.addStarter(ctx, user, json.RawMessage(a.Args))
 	}
 	return "", fmt.Errorf("unknown action %s", a.Tool)
 }

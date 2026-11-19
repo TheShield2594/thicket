@@ -1,0 +1,10 @@
+# Starter metadata: what the package itself can't say (who it's for,
+# levels, spend cap). See docs/authoring.md#starter-sprigs.
+summary: Keeps the chore rotation fair and the week's who-does-what straight, from the household calendar.
+tiers: [family]
+offer: when someone mentions chores, whose turn it is, a busy family week, or keeping the household organised
+daily_usd: 0.50
+# Scheduling and changing routines asks first; everything else starts at draft.
+levels:
+  schedule_job: ask
+  update_job: ask

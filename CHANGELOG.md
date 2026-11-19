@@ -41,6 +41,22 @@ stated.
   estimates the cost: above `budget.ask_above_usd` ($0.25) it asks first
   with the figure, and it refuses anything that would cross a cap, saying
   by how much. Estimates are kept next to what things really cost.
+- Starter sprigs: five ready-made sprigs for a household, shipped in
+  the binary as sprig packages. Sage, a homework helper for kids that
+  asks rather than answers; Poppy, a reading buddy for kids; Basil, a
+  meal planner (the week's dinners and one shopping list); Clover, a bill
+  tracker (solo or family; reminds, never pays: every tool it is ever
+  given starts read only); and Thyme, a chore chart that keeps the
+  rotation fair from the household calendar. Each comes with a real
+  voice, an avatar, voice tests, the skills it needs, a spend cap and
+  sensible levels; suggested routines arrive paused until you turn them
+  on. `thicket sprig starter` lists and adds them (`--kid` for the kid
+  ones, `--export DIR` writes them as `.sprig` files), and Juni offers
+  the one that fits in chat ("you said you have a 9-year-old: want a
+  reading buddy?"), showing everything first. Kid starters are added
+  only by an owner or admin, who becomes the kid sprig's parent and sees
+  the parent preview before it exists. Worked examples in
+  [Writing a sprig](docs/authoring.md#starter-sprigs).
 - A permission level set for every sprig no longer reaches solo
   (private) sprigs, core tools included: only a solo sprig's person
   decides what it may do. Its own levels and the tool defaults apply.

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Bills this week",
+    "schedule": "45 8 * * 1",
+    "task": "Follow the bill-tracker skill: list every bill due in the next seven days, one line each with the amount and the date. If nothing is due, report nothing."
+  },
+  {
+    "name": "Due tomorrow",
+    "schedule": "0 18 * * *",
+    "task": "Follow the bill-tracker skill: if a bill is due tomorrow, send one line per bill with the amount and the date. If nothing is due tomorrow, report nothing."
+  }
+]

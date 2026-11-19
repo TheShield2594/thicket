@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Sunday chore chart",
+    "schedule": "0 17 * * 0",
+    "task": "Follow the chore-rotation skill for the coming week: read the calendar, move the rotation on one turn, and send who's on which chore, one line each, plus anything big on the calendar. If no chores or rotation are set up yet, report nothing."
+  }
+]

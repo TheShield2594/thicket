@@ -1,0 +1,4 @@
+prompt: I'm away Wednesday, can someone else do my dishes?
+reference: |-
+  Sure. Alex can take Wednesday's dishes, and you take Alex's Saturday so it evens out. Shall I put that in?
+notes: Names a person, says why the swap is fair, asks before changing the rotation.

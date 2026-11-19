@@ -243,6 +243,105 @@ the sprig arrives as a family sprig with every tool at `draft`, and any
 integration scopes it asked for are listed for the owner to grant
 ([Sharing a sprig](characters.md#sharing-a-sprig)).
 
+## Starter sprigs
+
+Thicket ships five sprigs ready to add, and each is a worked example of
+everything above. Their sources are folders in
+[`internal/agent/startersprigs/`](../internal/agent/startersprigs), in
+the layout a sprig has on disk, plus the skills and routines a package
+carries:
+
+```
+startersprigs/meal-planner/
+  character.md          the character file
+  avatar.json           its look
+  voice_tests/*.yaml    five or six, with references
+  skills/*.skill.md     the skills it needs
+  routines.json         suggested routines (optional)
+  starter.yaml          what a package can't say: tiers, levels, spend cap, when to offer it
+```
+
+At startup each folder is assembled into a `.sprig` package with the
+same writer `export-sprig` uses, and read back with the same checks an
+import gets. `thicket sprig starter --export DIR` writes them out, so
+they can be imported anywhere like any shared sprig.
+
+```bash
+thicket sprig starter                               # list them
+thicket sprig starter meal-planner chore-chart      # add two (shown first)
+thicket sprig starter reading-buddy --kid Mia       # a kid sprig, for Mia
+thicket sprig starter bill-tracker --tier family    # shared instead of yours alone
+```
+
+Or ask Juni: she offers the one that fits what you've told her ("you
+said you have a 9-year-old: want a reading buddy?") and shows you every
+file before anything is added. Added starters differ from an imported
+package in three ways: suggested routines arrive **paused** (turn them
+on in chat or on the dashboard once you've tried the sprig), the
+starter's own levels and daily spend cap are set, and a kid starter can
+become a kid sprig. Only an owner or admin adds a kid starter; they
+become its parent and see the parent preview first: everything it will
+say and be, who it talks to, and that it's read only.
+
+| Starter | Sprig | Tier | Tools | Levels | Routines (paused) | Cap a day |
+|---|---|---|---|---|---|---|
+| `homework-helper` | Sage | kid | none | read (always, for kids) | none | $0.25 |
+| `reading-buddy` | Poppy | kid | none | read (always, for kids) | none | $0.25 |
+| `meal-planner` | Basil | family | schedule, web | draft; scheduling asks | Sunday meal plan | $0.50 |
+| `bill-tracker` | Clover | solo or family | schedule, calendar | **read**; scheduling asks | bills this week, due tomorrow | $0.25 |
+| `chore-chart` | Thyme | family | schedule, calendar | draft; scheduling asks | Sunday chore chart | $0.50 |
+
+What each one shows:
+
+- **Sage, the homework helper**, is a voice built on a refusal. The role
+  says what it's for *and* what it won't do ("asks questions instead of
+  giving answers"), `voice.style` turns that into rules you can check in
+  a reply ("ends almost every message with one question"), and
+  `never_say` holds "The answer is" and "Here's the answer", which code
+  enforces. The `homework-coach` skill spells out the line between
+  confirming a kid's answer (fine) and supplying one (never), and the
+  voice tests include the kid who says "just tell me". Kid sprigs get
+  no tools, routines or initiative; the safety paragraph every kid
+  sprig ends with is added when it's set up.
+- **Poppy, the reading buddy**, shows a rule that's about *content*
+  rather than a phrase: no spoilers. That can't go in `never_say` (it
+  isn't a phrase), so it's a style rule, a skill step, a "Watch out", and
+  a voice test (`02-no-spoilers`). One of her tests is a safety prompt,
+  so a model change that makes her chirpy about a stranger's request
+  shows up as drift.
+- **Basil, the meal planner**, is a family sprig: family memory holds
+  the household's diets and allergies, so the skill reads it first. Its
+  voice allows lists only where a list is the job (the plan, the
+  shopping list), which the voice test `02-plan-the-week` pins down. The
+  Sunday routine names its skill and says when to report nothing.
+- **Clover, the bill tracker**, is the levels example. It needs to read
+  the calendar and remember bills, and must never move money, so
+  `starter.yaml` sets every granted tool to `read`: any integration
+  someone gives it later (a bank, say) starts read only too, and
+  scheduling a routine asks first. It's solo by default (bills are
+  private) and can be shared by the household's adults instead. Its
+  voice tests cover "just pay it" and someone offering a card number.
+- **Thyme, the chore chart**, is the one we chose for the fifth slot.
+  Chores and "who's doing what this week" are the coordination nearly
+  every family does every week, and they lean on two things Thicket
+  already has: the household calendar (nobody gets the bins on the night
+  they're away) and family memory (the rotation). It shows a sprig
+  written for the adults about the kids: kids can't talk to family
+  sprigs, so they're in the rotation by name and the grown-ups pass the
+  chart on.
+
+The tests in `internal/agent/startersprigs_test.go` hold every starter
+to this guide: 3-4 traits, style rules, never-say phrases and example
+lines; at least five voice tests whose references pass the never-say
+check, use a catchphrase at most once and stay short; skills that follow
+the skill advice; routines that name their skill and say when to report
+nothing; and, on a fresh install, that each one adds cleanly, its
+routines are paused, its levels and cap are set, and the kid ones pass
+kid validation (valid as a kid sprig, only their kid can talk to them,
+read only, offered no tool that changes anything). Recording fresh
+references with `thicket voice-check ID --record` after adding one is
+still worth doing on your model.
+
 ## A checklist
 
 - The role is one sentence and one job.
@@ -254,3 +353,5 @@ integration scopes it asked for are listed for the owner to grant
 - Routines whose tasks stand alone and say when "nothing to report" is
   right.
 - Five voice tests, recorded once it sounds right.
+- Stuck? Start from the closest [starter sprig](#starter-sprigs) and
+  change it.

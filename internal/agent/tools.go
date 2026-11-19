@@ -386,6 +386,14 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:         e.toolImportSprig,
 		},
 		{
+			Name:        "starter_sprigs",
+			Description: "Thicket's ready-made sprigs (a homework helper and a reading buddy for kids, a meal planner, a bill tracker, a chore chart). list shows them; add shows the user everything one will get (for a kid sprig, the parent preview) and asks for their OK. Nothing is added until they approve. Suggested routines arrive paused.",
+			Params:      `{"type":"object","properties":{"action":{"type":"string","enum":["list","add"]},"starter":{"type":"string","description":"the starter's id, e.g. reading-buddy"},"tier":{"type":"string","enum":["solo","family","kid"],"description":"only for a starter that can be more than one (the bill tracker: solo, the default, or family)"},"kids":{"type":"array","items":{"type":"string"},"description":"for a kid starter: the kids it's for, by name (default: the household's only kid)"},"id":{"type":"string","description":"a different id, if its own is taken"},"name":{"type":"string","description":"a different name, if its own is taken"}},"required":["action"]}`,
+			Scope:       "characters",
+			ChatOnly:    true,
+			Run:         e.toolStarterSprigs,
+		},
+		{
 			Name:        "import_guide",
 			Description: "How to bring a character over from another app (OpenClaw, Hermes Agent, character cards from SillyTavern/Chub, Grok, ChatGPT, Character.AI, anything else): the steps, the import command, and for apps with no export a ready-to-paste prompt that gets the character to write itself out. Use when the user asks how to import or move a companion here.",
 			Params:      `{"type":"object","properties":{"platform":{"type":"string","description":"the app, as the user named it, e.g. openclaw, hermes, sillytavern, grok, chatgpt"},"memories":{"type":"boolean","description":"also bring what that app knows about the user (default true)"}},"required":["platform"]}`,

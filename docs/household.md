@@ -142,6 +142,10 @@ voice:
 
 Admins create them (`POST /api/v2/kid-sprigs`, or write the file). Their
 parents then decide what they may use (`PATCH /api/v2/kid-sprigs/bramble/access`).
+Two ready-made kid sprigs come with Thicket, a homework helper and a
+reading buddy: ask Juni, or `thicket sprig starter reading-buddy --kid
+NAME`. The admin who adds one becomes its parent and sees everything it
+will be first ([Starter sprigs](authoring.md#starter-sprigs)).
 
 ## What kid sprigs can't do
 

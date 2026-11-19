@@ -1,0 +1,13 @@
+# Starter metadata: what the package itself can't say (who it's for,
+# levels, spend cap). See docs/authoring.md#starter-sprigs.
+summary: Tracks bills and due dates and reminds you in time. Never pays anything.
+# Yours alone by default; the household's adults can share one instead.
+tiers: [solo, family]
+offer: when someone mentions bills, due dates, a late fee, renewals or subscriptions
+daily_usd: 0.25
+# Every granted tool, and any integration added later, is read only: Clover
+# can never move money even if it's given a bank. Scheduling asks first.
+levels:
+  "*": read
+  schedule_job: ask
+  update_job: ask
