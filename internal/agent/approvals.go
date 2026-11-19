@@ -121,7 +121,7 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 		detail = "(a sprig package)"
 	}
 	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s (%s)", a.ID, status, a.Tool), detail)
-	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM}
+	t := &turn{user: user, char: char, chatRef: a.ChatRef, conv: conv, isDM: isDM, approvedEstimate: a.EstimateID}
 	what := strings.TrimPrefix(a.Tool, internalPrefix)
 	switch {
 	case !approve:

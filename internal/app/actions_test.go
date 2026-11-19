@@ -274,8 +274,8 @@ func TestActionTrailKeepsSecretsOut(t *testing.T) {
 		t.Fatalf("chat: %s", out)
 	}
 	var leaked int
-	a.DB.DB().QueryRow("SELECT COUNT(*) FROM trail WHERE summary LIKE ? OR undo LIKE ? OR undo LIKE ?",
-		"%tok<en%", "%tok<en%", "%tok\\u003cen%").Scan(&leaked)
+	a.DB.DB().QueryRow("SELECT COUNT(*) FROM trail WHERE summary LIKE ? OR undo LIKE ? OR undo LIKE ? OR detail LIKE ? OR detail LIKE ?",
+		"%tok<en%", "%tok<en%", "%u003cen-secret%", "%tok<en%", "%u003cen-secret%").Scan(&leaked)
 	if leaked != 0 {
 		t.Fatal("a secret was stored in the trail")
 	}

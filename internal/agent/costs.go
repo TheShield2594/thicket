@@ -311,8 +311,8 @@ func (e *Engine) costGate(ctx context.Context, t *turn, tool *Tool, args json.Ra
 	threshold := e.askAbove(ctx)
 	if threshold > 0 && t.toolUSD > threshold && !t.user.IsKid() {
 		est.Outcome = store.EstimateAsked
-		_, _ = e.DB.AddEstimate(ctx, est)
-		t.toolUSD -= usd // asked about separately; approved runs aren't counted again
+		t.askEstimate, _ = e.DB.AddEstimate(ctx, est) // goes with the approval
+		t.toolUSD -= usd                              // asked about separately; approved runs aren't counted again
 		note := fmt.Sprintf("💸 This will cost about %s (%s).", money(usd), what)
 		if t.toolUSD > 0 {
 			note = fmt.Sprintf("💸 This will cost about %s (%s), on top of about %s already spent on this request.", money(usd), what, money(t.toolUSD))
@@ -346,13 +346,16 @@ func (e *Engine) approvedCost(ctx context.Context, t *turn, tool *Tool, args jso
 		return ""
 	}
 	est := toolEstimate(t, tool, who, usd, what)
-	// The figure the person was shown when asked: an approval turn knows
-	// less than the turn that asked (its prompt size, for one), so its own
-	// estimate can come out lower.
-	askedID, asked, err := e.DB.AskedEstimate(ctx, t.user.ID, who.ID, est.Kind, what, e.now().Add(-approvalMaxAge-time.Minute))
-	if err == nil {
-		usd = max(usd, asked)
-		est.EstimateUSD = usd
+	// The figure the person was shown when asked, carried by this very
+	// approval: an approval turn knows less than the turn that asked (its
+	// prompt size, for one), so its own estimate can come out lower.
+	var askedID int64
+	if id := t.approvedEstimate; id != 0 {
+		if asked, err := e.DB.EstimateUSD(ctx, id); err == nil {
+			askedID = id
+			usd = max(usd, asked)
+			est.EstimateUSD = usd
+		}
 	}
 	if why, _ := e.overCap(ctx, who, usd); why != "" {
 		est.Outcome = store.EstimateRefused
@@ -615,16 +618,20 @@ func (e *Engine) fileExists(id string) bool {
 
 // unpublish removes a new sprig's character file after a failed create,
 // and reloads the registry so it isn't live. Only for a file the create
-// itself wrote (existed is false): never someone's own file.
-func (e *Engine) unpublish(id string, existed bool) {
+// itself wrote (existed is false): never someone's own file. It reports
+// whether the file is gone; if not, the caller keeps the sprig's cap, so
+// a file that may still load never loads uncapped.
+func (e *Engine) unpublish(id string, existed bool) bool {
 	if existed {
-		return
+		return false
 	}
 	path := filepath.Join(e.Chars.Dir(), id+".md")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		e.Log.Error("remove a half-created sprig", "path", path, "err", err)
+		e.Log.Error("remove a half-created sprig; keeping its cap", "path", path, "err", err)
+		return false
 	}
 	if err := e.Chars.Load(); err != nil {
 		e.Log.Error("reload sprigs", "err", err)
 	}
+	return true
 }

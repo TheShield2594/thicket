@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -380,12 +381,22 @@ func (r *Redactor) Add(v string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, x := range r.values {
-		if x == v {
-			return
+	add := func(v string) {
+		for _, x := range r.values {
+			if x == v {
+				return
+			}
+		}
+		r.values = append(r.values, v)
+	}
+	add(v)
+	// Its JSON-escaped form too (tok<en is tok\u003cen inside JSON), so a
+	// secret in a JSON payload or tool output is caught as well.
+	if b, err := json.Marshal(v); err == nil {
+		if esc := string(b[1 : len(b)-1]); esc != v {
+			add(esc)
 		}
 	}
-	r.values = append(r.values, v)
 }
 
 // Patterns that look like credentials even if we've never seen the value.

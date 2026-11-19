@@ -74,6 +74,10 @@ type turn struct {
 	toolUSD      float64
 	toolEstimate int64
 	promptChars  int
+	// askEstimate is the estimate an approval being requested carries;
+	// approvedEstimate the one the approval being run was asked with.
+	askEstimate      int64
+	approvedEstimate int64
 
 	// Taint (taint.go): the outside sources that entered this turn, and
 	// the person's own words for it.
@@ -512,7 +516,8 @@ func (e *Engine) requestApprovalNote(ctx context.Context, t *turn, tool *Tool, a
 		note += "\n"
 	}
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\n%sReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500), note)
-	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args)}
+	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args), EstimateID: t.askEstimate}
+	t.askEstimate = 0
 	if t.chatRef != "" {
 		// Posted after the reply; registered by respond once delivered.
 		t.afterReply = append(t.afterReply, post{text: msg, approval: a})

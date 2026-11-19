@@ -16,3 +16,7 @@ CREATE TABLE trail_acks (
     PRIMARY KEY (chat_ref, platform_id)
 );
 CREATE INDEX trail_acks_recent ON trail_acks (chat_ref, user_id, created_at);
+
+-- The cost estimate an approval was asked with, so approving it is checked
+-- and measured against the figure that was shown.
+ALTER TABLE approvals ADD COLUMN estimate_id INTEGER NOT NULL DEFAULT 0;

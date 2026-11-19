@@ -321,3 +321,43 @@ func TestSprigCapUndoIsLatestFirst(t *testing.T) {
 		}
 	}
 }
+
+// An approved tool call is checked against the estimate its approval was
+// asked with (carried by the approval itself), not a fresh, possibly
+// lower, figure.
+func TestApprovalKeepsItsEstimate(t *testing.T) {
+	a, fc, _, ctx := setup(t)
+	onboard(t, a, fc, ctx)
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	if err := a.Settings.Set(ctx, "budget.ask_above_usd", "0.01"); err != nil {
+		t.Fatal(err)
+	}
+	a.Engine.HandleIncoming(ctx, dm("search the web for tomato care"))
+	if out := sentText(fc.take()); !strings.Contains(out, "This will cost about $0.02") {
+		t.Fatalf("want a cost question: %s", out)
+	}
+	pending, _ := a.DB.PendingApprovals(ctx, owner.ID, time.Hour)
+	if len(pending) != 1 || pending[0].EstimateID == 0 {
+		t.Fatalf("approval doesn't carry its estimate: %+v", pending)
+	}
+	// Make the figure that was asked about one that no longer fits the cap.
+	a.DB.DB().Exec("UPDATE estimates SET estimate_usd = 5 WHERE id = ?", pending[0].EstimateID)
+	if _, err := a.Engine.SetSprigCap(ctx, owner, "juniper", "monthly", 1); err != nil {
+		t.Fatal(err)
+	}
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	fc.take()
+	runs, _ := a.DB.Estimates(ctx, time.Now().Add(-time.Hour), 10)
+	found := false
+	for _, r := range runs {
+		if r.ID == pending[0].EstimateID {
+			found = true
+			if r.Outcome != store.EstimateRefused {
+				t.Fatalf("approved call ran against a lower figure: %+v", r)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the asked estimate is gone")
+	}
+}

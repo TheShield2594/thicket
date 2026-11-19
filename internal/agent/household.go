@@ -108,8 +108,9 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 	if _, err := e.Chars.Write(ctx, c); err != nil {
 		// Write can fail after the file is in place (saving its hash):
 		// take the file away first, so it never loads without its cap.
-		e.unpublish(c.ID, existed)
-		undoCap()
+		if e.unpublish(c.ID, existed) {
+			undoCap()
+		}
 		return nil, err
 	}
 	e.addTrail(ctx, by.ID, c.ID, store.TrailGrant, fmt.Sprintf("kid sprig %s created for %v, parents %v", c.DisplayName(), c.Kids, c.Parents), "", nil)

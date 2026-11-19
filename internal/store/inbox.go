@@ -142,8 +142,8 @@ func (s *Store) ResolveInbox(ctx context.Context, id, userID int64) error {
 func (s *Store) ApprovalByID(ctx context.Context, id int64) (*Approval, error) {
 	var a Approval
 	var at int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at FROM approvals WHERE id = ?`, id).
-		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at)
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals WHERE id = ?`, id).
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -189,7 +189,7 @@ func (s *Store) ToolRecordSince(ctx context.Context, character, tool string, sin
 // PendingApprovals lists approvals still waiting for an answer (younger
 // than maxAge). userID 0 means everyone's.
 func (s *Store) PendingApprovals(ctx context.Context, userID int64, maxAge time.Duration) ([]Approval, error) {
-	q := `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at FROM approvals
+	q := `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals
 		WHERE status = 'pending' AND created_at >= ?`
 	args := []any{s.unix() - int64(maxAge.Seconds())}
 	if userID != 0 {
@@ -205,7 +205,7 @@ func (s *Store) PendingApprovals(ctx context.Context, userID int64, maxAge time.
 	for rows.Next() {
 		var a Approval
 		var at int64
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID); err != nil {
 			return nil, err
 		}
 		a.CreatedAt = time.Unix(at, 0)

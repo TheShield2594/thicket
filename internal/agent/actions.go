@@ -366,16 +366,13 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 		}
 		// The sprig's file policy applies as it does to any call: a path
 		// revoked since the action isn't reached by undoing it.
-		// Decided from the integration's stored settings, not the live
-		// connection, which may be down and reconnect inside CallAs.
-		local, err := e.storedLocal(ctx, u.Server)
-		if err != nil {
+		// The sprig's file policy applies to any path in the undo, whatever
+		// the integration's transport: the connection CallAs uses may not be
+		// the one there now (it can reconnect, or be re-added as a local
+		// one in between), and refusing an undo is safer than reaching a
+		// revoked path.
+		if err := e.checkLocalPaths(ctx, c, u.Args); err != nil {
 			return "", err
-		}
-		if local {
-			if err := e.checkLocalPaths(ctx, c, u.Args); err != nil {
-				return "", err
-			}
 		}
 		res, err := e.MCP.CallAs(ctx, c.ID, u.Server, u.Tool, u.Args, false, e.execAllowed(ctx, c))
 		if err != nil {
@@ -396,20 +393,4 @@ func argsMap(raw json.RawMessage) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	return m
-}
-
-// storedLocal reports, from its stored settings (whether or not it's
-// connected now), whether an integration runs on Thicket's own machine
-// (stdio), so paths in its arguments are this machine's.
-func (e *Engine) storedLocal(ctx context.Context, name string) (bool, error) {
-	servers, err := e.DB.MCPServers(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, s := range servers {
-		if s.Name == name {
-			return s.Transport == "stdio", nil
-		}
-	}
-	return false, fmt.Errorf("the integration %q is no longer connected", name)
 }

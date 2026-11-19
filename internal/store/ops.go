@@ -374,11 +374,13 @@ type Approval struct {
 	Status    string
 	Result    string
 	CreatedAt time.Time
+	// EstimateID is the cost estimate the person was asked with (0: none).
+	EstimateID int64
 }
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix())
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID)
 	if err != nil {
 		return 0, err
 	}
@@ -395,9 +397,9 @@ func (s *Store) LatestPendingApproval(ctx context.Context, userID int64, chatRef
 	}
 	var a Approval
 	var at int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at FROM approvals
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals
 		WHERE user_id = ? AND chat_ref = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`, userID, chatRef).
-		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at)
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
