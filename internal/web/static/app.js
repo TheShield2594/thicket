@@ -526,6 +526,10 @@ function onMessage(chat, m) {
   if (m.role === 'assistant') {
     S.typing.delete(chat);
     notify(chat, m);
+    // A sprig's message can change today's count or release a held one:
+    // mark its details stale, and refresh them if they're showing.
+    S.detailsAt.delete(sprigOf(chat));
+    if (S.details && sprigOf(S.panes[S.focus] || '') === sprigOf(chat)) renderDetails();
   }
   S.latest.set(chat, m);
   if (S.panes.includes(chat) && document.visibilityState === 'visible') markRead(chat);
@@ -1737,6 +1741,12 @@ MOBILE.addEventListener('change', () => {
   if (S.me) renderShell();
 });
 
-setInterval(() => { if (S.me && document.visibilityState === 'visible') renderSidebar(); }, 60_000);
+// Once a minute: the sidebar, and open details (they refetch once a minute
+// old, so held messages going out and a new day show up while they stay open).
+setInterval(() => {
+  if (!S.me || document.visibilityState !== 'visible') return;
+  renderSidebar();
+  if (S.details) renderDetails();
+}, 60_000);
 
 boot();
