@@ -263,9 +263,18 @@ type PressHandler func(ctx context.Context, p Press) PressReply
 // people answer by typing.
 type ActionSender interface {
 	// SendActions posts text as a persona with buttons under it (on the
-	// last part, if the text is split), returning the ids posted.
+	// last part, if the text is split), returning the ids posted: the
+	// last is the message with the buttons.
 	SendActions(ctx context.Context, chatID string, p Persona, text string, actions []Action) ([]string, error)
 	// OnPress registers what to call when a button is pressed. Call it
 	// before Run.
 	OnPress(PressHandler)
+}
+
+// ActionSettler is implemented by channels that can settle a message
+// with buttons when nobody pressed one (the question was answered some
+// other way, or expired): its buttons are removed and outcome is shown
+// with it, as a PressReply's Outcome does.
+type ActionSettler interface {
+	SettleActions(ctx context.Context, chatID, messageID, outcome string) error
 }

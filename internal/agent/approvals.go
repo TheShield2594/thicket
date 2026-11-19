@@ -88,6 +88,8 @@ func (e *Engine) decide(ctx context.Context, user *store.User, a *store.Approval
 	if ans == nil {
 		return false, err
 	}
+	// Answered without its buttons: take them off the prompt.
+	e.settlePrompt(ctx, a, ans.outcome())
 	if said == "" {
 		ans.note = "The user answered a request from the dashboard."
 	}
@@ -102,6 +104,17 @@ type answer struct {
 	approve bool
 	gone    bool   // the sprig that asked no longer exists
 	note    string // event recorded when the user typed nothing
+}
+
+// outcome is what the prompt's message shows once it's answered.
+func (ans *answer) outcome() string {
+	switch {
+	case ans.gone:
+		return "Not run: the sprig that asked is gone"
+	case ans.approve:
+		return "✅ Approved"
+	}
+	return "✖️ Denied"
 }
 
 // claim moves an approval out of pending. Everything that can fail
@@ -248,7 +261,14 @@ func (e *Engine) pressApproval(ctx context.Context, p channel.Press, rest string
 	if a.UserID != user.ID || a.ChatRef != p.ChatRef() {
 		return notYours
 	}
+	if a.Reserved {
+		// Tapped in the moment between the prompt going out and it being
+		// opened: nothing is settled, so the next tap works.
+		return channel.PressReply{Notice: "One moment: that request is still being set up. Tap again."}
+	}
 	if a.Status != "pending" || e.now().Sub(a.CreatedAt) > approvalMaxAge {
+		// This press settles the message, so nothing else has to.
+		_, _ = e.DB.TakePromptMsg(ctx, a.ID)
 		return channel.PressReply{Notice: "That request was already answered or has expired.", Outcome: settledLabel(a, e.now())}
 	}
 	// Claim it now, so the message settles at once; the action and the
@@ -262,12 +282,11 @@ func (e *Engine) pressApproval(ctx context.Context, p channel.Press, rest string
 	if ans == nil {
 		return channel.PressReply{Notice: "That request was already answered."}
 	}
-	word, outcome := "denied", "✖️ Denied"
-	switch {
-	case ans.gone:
-		word, outcome = "approved", "Not run: the sprig that asked is gone"
-	case approve:
-		word, outcome = "approved", "✅ Approved"
+	// The channel settles the pressed message with the reply.
+	_, _ = e.DB.TakePromptMsg(ctx, a.ID)
+	word, outcome := "denied", ans.outcome()
+	if approve {
+		word = "approved"
 	}
 	ans.note = fmt.Sprintf("The user %s the request with a button.", word)
 	e.logActivity(ctx, "info", "approval", a.Character, user.ID, fmt.Sprintf("approval #%d %s with a button", a.ID, word), "")
@@ -284,6 +303,84 @@ func (e *Engine) pressApproval(ctx context.Context, p channel.Press, rest string
 		}
 	}()
 	return channel.PressReply{Outcome: outcome}
+}
+
+// settlePrompt takes the buttons off an approval's prompt and shows how
+// it ended, for an approval answered without them (typed, or from the
+// dashboard). It doesn't wait for the chat app, and a failure is only
+// logged: the answer stands either way.
+func (e *Engine) settlePrompt(ctx context.Context, a *store.Approval, outcome string) {
+	msg, err := e.DB.TakePromptMsg(ctx, a.ID)
+	if err != nil {
+		e.Log.Warn("settle approval prompt", "err", err, "approval", a.ID)
+		return
+	}
+	if msg == "" {
+		return
+	}
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				e.Log.Error("panic settling an approval prompt", "panic", v)
+			}
+		}()
+		e.settleMsg(context.WithoutCancel(ctx), a, msg, outcome)
+	}()
+}
+
+// settleMsg edits the message with an approval's buttons to show outcome
+// without them, on channels that can.
+func (e *Engine) settleMsg(ctx context.Context, a *store.Approval, msg, outcome string) {
+	name, chatID := splitRef(a.ChatRef)
+	s, ok := e.channelFor(name).(channel.ActionSettler)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, settleTimeout)
+	defer cancel()
+	if err := s.SettleActions(ctx, chatID, msg, outcome); err != nil {
+		e.Log.Warn("couldn't take the buttons off an approval prompt", "err", err, "approval", a.ID, "channel", name)
+	}
+}
+
+// settleTimeout bounds one edit of a prompt; settleEvery is how often
+// expired approvals' prompts are settled.
+const (
+	settleTimeout = 30 * time.Second
+	settleEvery   = time.Minute
+)
+
+// SettleApprovals expires approvals nobody answered in time and settles
+// the prompts of those that ended with their buttons still showing:
+// expired ones, and any whose edit was missed.
+func (e *Engine) SettleApprovals(ctx context.Context) {
+	aps, err := e.DB.UnsettledApprovals(ctx, approvalMaxAge)
+	if err != nil {
+		e.Log.Warn("unsettled approvals", "err", err)
+		return
+	}
+	for i := range aps {
+		a := &aps[i]
+		msg, err := e.DB.TakePromptMsg(ctx, a.ID)
+		if err != nil || msg == "" {
+			continue
+		}
+		e.settleMsg(ctx, a, msg, settledLabel(a, e.now()))
+	}
+}
+
+// RunApprovalSweep settles expired approvals' prompts until ctx ends.
+func (e *Engine) RunApprovalSweep(ctx context.Context) {
+	t := time.NewTicker(settleEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			e.SettleApprovals(ctx)
+		}
+	}
 }
 
 // settledLabel says how an approval that's no longer waiting ended.

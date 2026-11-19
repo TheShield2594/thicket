@@ -557,6 +557,7 @@ func (a *App) Run(parent context.Context) error {
 		}
 	})
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
+	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })
 	goRun("memory", func() { a.Reviewer.Run(ctx) })
 	goRun("initiative", func() { a.Engine.RunInitiative(ctx) })

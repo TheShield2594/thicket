@@ -142,12 +142,14 @@ func (s *Store) ResolveInbox(ctx context.Context, id, userID int64) error {
 func (s *Store) ApprovalByID(ctx context.Context, id int64) (*Approval, error) {
 	var a Approval
 	var at int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals WHERE id = ?`, id).
-		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID)
+	var decided sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, decided_at, estimate_id FROM approvals WHERE id = ?`, id).
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &decided, &a.EstimateID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	a.CreatedAt = time.Unix(at, 0)
+	a.Reserved = a.Status == "expired" && !decided.Valid
 	return &a, err
 }
 

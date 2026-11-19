@@ -54,7 +54,23 @@ type Adapter struct {
 
 	onReact func(ctx context.Context, r channel.Reaction)
 	onPress channel.PressHandler
+
+	// buttoned remembers the text of recent messages sent with buttons,
+	// as Telegram stored it, so SettleActions can add the outcome under
+	// it: bots can't fetch a message. The oldest are forgotten first.
+	buttonedMu sync.Mutex
+	buttoned   map[string]sentText
+	buttonedQ  []string
 }
+
+// sentText is a message's text and its formatting, as Telegram has it.
+type sentText struct {
+	Text     string            `json:"text"`
+	Entities []json.RawMessage `json:"entities"`
+}
+
+// maxButtoned is how many messages with buttons are remembered.
+const maxButtoned = 256
 
 // OnReaction registers what to call when someone adds a reaction. Call it
 // before Run.
@@ -105,6 +121,7 @@ func New(token string, listenChats []string, log *slog.Logger) *Adapter {
 		http:      &http.Client{Timeout: 30 * time.Second},
 		poll:      &http.Client{Timeout: (pollTimeout + 20) * time.Second},
 		albums:    map[string]*album{},
+		buttoned:  map[string]sentText{},
 		albumWait: albumWait, albumMaxWait: albumMaxWait}
 }
 
@@ -502,23 +519,87 @@ func (a *Adapter) press(ctx context.Context, q *callbackQuery) {
 		return
 	}
 	m := q.Message
+	a.forget(m.Chat.ID, m.MessageID)
+	a.settle(ctx, m.Chat.ID, m.MessageID, &sentText{Text: m.Text, Entities: m.Entities}, r.Outcome)
+}
+
+// settle edits a message to show outcome under its text, in italics, with
+// its buttons removed. If the text isn't known or can't be edited, the
+// buttons are still taken away. The error is that of removing them.
+func (a *Adapter) settle(ctx context.Context, chatID, messageID int64, m *sentText, outcome string) error {
 	none := map[string]any{"inline_keyboard": [][]any{}}
-	// The outcome goes under the text in italics; the original entities
-	// still fit, since text is only added after them.
-	ents := append([]json.RawMessage(nil), m.Entities...)
-	if b, err := json.Marshal(map[string]any{"type": "italic", "offset": len(utf16Units(m.Text + "\n\n")), "length": len(utf16Units(r.Outcome))}); err == nil {
-		ents = append(ents, b)
-	}
-	err := a.callRetry(ctx, "editMessageText", map[string]any{"chat_id": m.Chat.ID, "message_id": m.MessageID,
-		"text": m.Text + "\n\n" + r.Outcome, "entities": ents, "reply_markup": none,
-		"link_preview_options": map[string]any{"is_disabled": true}}, nil)
-	if err != nil {
-		// At least take the buttons away.
+	if m != nil && m.Text != "" {
+		// The original entities still fit, since text is only added
+		// after them.
+		ents := append([]json.RawMessage(nil), m.Entities...)
+		if b, err := json.Marshal(map[string]any{"type": "italic", "offset": len(utf16Units(m.Text + "\n\n")), "length": len(utf16Units(outcome))}); err == nil {
+			ents = append(ents, b)
+		}
+		err := a.callRetry(ctx, "editMessageText", map[string]any{"chat_id": chatID, "message_id": messageID,
+			"text": m.Text + "\n\n" + outcome, "entities": ents, "reply_markup": none,
+			"link_preview_options": map[string]any{"is_disabled": true}}, nil)
+		if err == nil {
+			return nil
+		}
 		a.log.Debug("telegram editMessageText failed", "err", err)
-		if err := a.callRetry(ctx, "editMessageReplyMarkup", map[string]any{"chat_id": m.Chat.ID, "message_id": m.MessageID, "reply_markup": none}, nil); err != nil {
-			a.log.Warn("telegram: couldn't remove a message's buttons", "err", err)
+	}
+	// At least take the buttons away.
+	if err := a.callRetry(ctx, "editMessageReplyMarkup", map[string]any{"chat_id": chatID, "message_id": messageID, "reply_markup": none}, nil); err != nil {
+		a.log.Warn("telegram: couldn't remove a message's buttons", "err", err)
+		return a.clean(err)
+	}
+	return nil
+}
+
+// SettleActions settles a message sent with buttons that nobody pressed:
+// the outcome goes under its text and the buttons are removed. A message
+// sent before a restart is no longer remembered, so it only loses its
+// buttons.
+func (a *Adapter) SettleActions(ctx context.Context, chatID, messageID, outcome string) error {
+	chat, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram: bad chat id %q", chatID)
+	}
+	msg, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram: bad message id %q", messageID)
+	}
+	return a.settle(ctx, chat, msg, a.forget(chat, msg), outcome)
+}
+
+// remember keeps a message's text for settling it later.
+func (a *Adapter) remember(chatID, messageID int64, m sentText) {
+	key := fmt.Sprintf("%d:%d", chatID, messageID)
+	a.buttonedMu.Lock()
+	defer a.buttonedMu.Unlock()
+	if _, ok := a.buttoned[key]; !ok {
+		a.buttonedQ = append(a.buttonedQ, key)
+	}
+	a.buttoned[key] = m
+	for len(a.buttonedQ) > maxButtoned {
+		delete(a.buttoned, a.buttonedQ[0])
+		a.buttonedQ = a.buttonedQ[1:]
+	}
+}
+
+// forget drops a remembered message's text and returns it (nil if it
+// wasn't remembered).
+func (a *Adapter) forget(chatID, messageID int64) *sentText {
+	key := fmt.Sprintf("%d:%d", chatID, messageID)
+	a.buttonedMu.Lock()
+	defer a.buttonedMu.Unlock()
+	m, ok := a.buttoned[key]
+	if !ok {
+		return nil
+	}
+	delete(a.buttoned, key)
+	for i, k := range a.buttonedQ {
+		if k == key {
+			a.buttonedQ = append(a.buttonedQ[:i], a.buttonedQ[i+1:]...)
+			break
 		}
 	}
+	return &m
 }
 
 // incoming normalises a message. ok is false for messages to ignore.
@@ -693,6 +774,10 @@ func (a *Adapter) send(ctx context.Context, chatID string, p channel.Persona, te
 	for i, part := range parts {
 		var sent struct {
 			MessageID int64 `json:"message_id"`
+			Chat      struct {
+				ID int64 `json:"id"`
+			} `json:"chat"`
+			sentText
 		}
 		html := toHTML(part)
 		if i == 0 && p.Name != "" {
@@ -723,6 +808,13 @@ func (a *Adapter) send(ctx context.Context, chatID string, p channel.Persona, te
 		}
 		if sent.MessageID != 0 {
 			ids = append(ids, strconv.FormatInt(sent.MessageID, 10))
+			if last && markup != nil {
+				chat := sent.Chat.ID
+				if chat == 0 {
+					chat, _ = strconv.ParseInt(chatID, 10, 64)
+				}
+				a.remember(chat, sent.MessageID, sent.sentText)
+			}
 		}
 	}
 	return ids, nil

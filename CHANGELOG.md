@@ -216,7 +216,14 @@ stated.
   it isn't theirs. Typing approve or deny still works. Adapters opt in
   with the new `channel.ActionSender` interface. An approval is now
   reserved before its prompt is sent (so the buttons can name it) and
-  becomes answerable only once the prompt is delivered.
+  becomes answerable only once the prompt is delivered; a tap in that
+  moment is asked to try again. Answered any other way (typed, from the
+  dashboard or the API) or left to expire, the prompt is settled too:
+  Thicket keeps the prompt message's id (schema v27) and edits it to show
+  the outcome without its buttons, through the new optional
+  `channel.ActionSettler` (`SettleActions`). A sweep each minute settles
+  prompts that expired. Telegram remembers recent prompts' text for the
+  edit; one sent before a restart only loses its buttons.
 
 ## Unreleased: sprig packages and untrusted content
 

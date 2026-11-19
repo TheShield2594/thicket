@@ -602,6 +602,17 @@ user, or from another chat, is refused privately. The engine claims the
 approval at once and runs the action and the sprig's reply afterwards,
 in turn with the chat. Presses only come from people in a chat app, so
 an agent (the local API, the MCP server) still can't answer an approval.
+A tap on a row still reserved (the prompt is out but not yet opened) is
+asked to try again and settles nothing.
+
+The id of the message with the buttons is stored with the approval
+(`approvals.prompt_msg`). However the approval ends, whoever ends it
+takes that id (`TakePromptMsg` clears it, so it is settled once): a
+press settles the message itself; a typed answer or one from the
+dashboard or API calls the channel's optional `channel.ActionSettler`
+(`SettleActions`) in the background; and `RunApprovalSweep` expires
+unanswered approvals each minute and settles their prompts as
+"Expired". A failed edit is logged and never undoes the decision.
 
 A user can have several identities, one per app account
 (`identities` table). `UserByExternal` resolves any of them;

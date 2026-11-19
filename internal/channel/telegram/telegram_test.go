@@ -107,7 +107,7 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 				return
 			}
 			f.sent = append(f.sent, p)
-			ok(map[string]any{"message_id": 1})
+			ok(map[string]any{"message_id": len(f.sent), "text": p["text"]})
 		case "sendVoice", "sendAudio", "sendDocument":
 			if f.noVoice && method == "sendVoice" {
 				w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: VOICE_MESSAGES_FORBIDDEN"}`))
@@ -545,5 +545,74 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A message with buttons answered some other way is settled as a press
+// would settle it: outcome under the text, buttons gone.
+func TestSettleActions(t *testing.T) {
+	a, f := newTest(t)
+	ctx := context.Background()
+	acts := []channel.Action{{ID: "approval:7:approve", Label: "Approve"}, {ID: "approval:7:deny", Label: "Deny"}}
+	ids, err := a.SendActions(ctx, "42", channel.Persona{Name: "Pip"}, "I need your OK", acts)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("send: %v %v", ids, err)
+	}
+	if err := a.SettleActions(ctx, "42", ids[0], "✅ Approved"); err != nil {
+		t.Fatal(err)
+	}
+	edits := f.callsTo("editMessageText")
+	if len(edits) != 1 {
+		t.Fatalf("edits: %+v", edits)
+	}
+	edit := edits[0]
+	if edit["text"] != "<b>Pip</b>\nI need your OK\n\n✅ Approved" || fmt.Sprint(edit["chat_id"]) != "42" || fmt.Sprint(edit["message_id"]) != ids[0] {
+		t.Fatalf("edit: %v", edit)
+	}
+	ents, _ := json.Marshal(edit["entities"])
+	if string(ents) != `[{"length":10,"offset":27,"type":"italic"}]` {
+		t.Fatalf("entities: %s", ents)
+	}
+	if kb, _ := json.Marshal(edit["reply_markup"]); string(kb) != `{"inline_keyboard":[]}` {
+		t.Fatalf("buttons not removed: %s", kb)
+	}
+
+	// A message it doesn't remember (sent before a restart) only loses
+	// its buttons.
+	if err := a.SettleActions(ctx, "42", "77", "Expired"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.callsTo("editMessageText")); n != 1 {
+		t.Fatalf("edited text it doesn't know: %d", n)
+	}
+	rm := f.callsTo("editMessageReplyMarkup")
+	if len(rm) != 1 || fmt.Sprint(rm[0]["message_id"]) != "77" {
+		t.Fatalf("buttons not removed: %+v", rm)
+	}
+
+	// If the text can't be edited, the buttons still go.
+	ids, _ = a.SendActions(ctx, "42", channel.Persona{Name: "Pip"}, "I need your OK", acts)
+	f.mu.Lock()
+	f.rejectEdit = true
+	f.mu.Unlock()
+	if err := a.SettleActions(ctx, "42", ids[0], "✖️ Denied"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.callsTo("editMessageText")) != 2 || len(f.callsTo("editMessageReplyMarkup")) != 2 {
+		t.Fatal("no fallback to removing the buttons")
+	}
+	if err := a.SettleActions(ctx, "42", "nope", "Expired"); err == nil {
+		t.Fatal("a bad message id should fail")
+	}
+}
+
+// Only so many messages' texts are remembered.
+func TestButtonedIsBounded(t *testing.T) {
+	a := New(token, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for i := 0; i < maxButtoned+10; i++ {
+		a.remember(1, int64(i), sentText{Text: "x"})
+	}
+	if len(a.buttoned) != maxButtoned || len(a.buttonedQ) != maxButtoned || a.forget(1, 0) != nil || a.forget(1, maxButtoned+9) == nil {
+		t.Fatalf("remembered %d", len(a.buttoned))
 	}
 }

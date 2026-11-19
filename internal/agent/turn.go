@@ -487,15 +487,20 @@ func (e *Engine) deliverApproval(ctx context.Context, c *character.Character, a 
 		e.Log.Error("register approval", "err", err)
 		return err
 	}
-	if err := e.sendActions(ctx, a.ChatRef, c, msg, approvalActions(id)); err != nil {
+	promptMsg, err := e.sendActions(ctx, a.ChatRef, c, msg, approvalActions(id))
+	if err != nil {
 		if derr := e.DB.DropApproval(context.WithoutCancel(ctx), id); derr != nil {
 			e.Log.Error("drop undelivered approval", "err", derr)
 		}
 		return err
 	}
 	// Open it even if the caller's context ended right after delivery.
-	if err := e.DB.OpenApproval(context.WithoutCancel(ctx), id); err != nil {
+	// The prompt's message is kept, to settle its buttons however the
+	// approval ends.
+	if err := e.DB.OpenApproval(context.WithoutCancel(ctx), id, promptMsg); err != nil {
 		e.Log.Error("register approval", "err", err)
+		// Its buttons then say it no longer exists.
+		_ = e.DB.DropApproval(context.WithoutCancel(ctx), id)
 		_ = e.send(context.WithoutCancel(ctx), a.ChatRef, c, "Sorry, I couldn't register that request, so approving it won't do anything. Please ask me again.")
 		return err
 	}

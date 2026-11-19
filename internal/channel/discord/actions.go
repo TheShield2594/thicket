@@ -172,3 +172,40 @@ func settled(m *discordgo.Message, outcome string) *discordgo.WebhookEdit {
 	}
 	return &discordgo.WebhookEdit{Components: &none, Embeds: &embeds}
 }
+
+// SettleActions settles a message sent with buttons that nobody pressed:
+// its buttons are removed and the outcome shown, as after a press. A
+// message the persona webhook posted is edited through that webhook;
+// anything else through the bot.
+func (a *Adapter) SettleActions(ctx context.Context, chatID, messageID, outcome string) error {
+	if a.s == nil {
+		return fmt.Errorf("discord is not connected")
+	}
+	m, err := a.s.ChannelMessage(chatID, messageID, discordgo.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	edit := settled(m, outcome)
+	if m.WebhookID == "" {
+		_, err = a.s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: messageID, Channel: chatID, Components: edit.Components, Embeds: edit.Embeds},
+			discordgo.WithContext(ctx))
+		return err
+	}
+	parent, thread := chatID, ""
+	if ch := a.channel(chatID); ch != nil && ch.IsThread() {
+		parent, thread = ch.ParentID, ch.ID
+	}
+	hook, err := a.webhook(parent)
+	if err != nil {
+		return err
+	}
+	if hook.ID != m.WebhookID {
+		return errors.New("the message was posted by another webhook")
+	}
+	uri := discordgo.EndpointWebhookMessage(hook.ID, hook.Token, messageID)
+	if thread != "" {
+		uri += "?thread_id=" + thread
+	}
+	_, err = a.s.RequestWithBucketID("PATCH", uri, edit, discordgo.EndpointWebhookToken("", ""), discordgo.WithContext(ctx))
+	return err
+}

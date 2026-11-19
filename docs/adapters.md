@@ -41,6 +41,7 @@ Optional interfaces add features when the platform supports them:
 | `channel.DeleteWatcher` (`OnDelete`) | deleting a message in the app deletes it from Thicket's history |
 | `channel.ReactionWatcher` (`OnReaction`) | reactions as one-tap commands: 🧠, 📌 or ✍ on a message remembers it |
 | `channel.ActionSender` (`SendActions`, `OnPress`) | buttons on a message: approval prompts get **Approve** / **Deny** (see [Buttons](#buttons)) |
+| `channel.ActionSettler` (`SettleActions`) | a prompt answered without its buttons (typed, from the dashboard, expired) loses them and shows the outcome |
 | `channel.Identity` (`Bot`) | the bot's name and "add me" link, shown when it's connected in chat |
 | `channel.Checker` (`Check`) | test a token without connecting, so a bad one is refused before anything changes |
 
@@ -57,6 +58,17 @@ and ignore bots. It answers quickly with a `PressReply`:
 - `Outcome`: settle the message, so it can't be pressed twice: remove
   the buttons and show the outcome with it (Telegram edits the text,
   Discord the embed footer).
+
+`SendActions` returns the ids it posted, the message with the buttons
+last; Thicket keeps that id with the approval. When an approval ends
+without a press (typed approve or deny, the dashboard or API, or it
+expired), Thicket calls `SettleActions(ctx, chatID, messageID, outcome)`
+once, which should do what an `Outcome` does after a press. Reuse the
+press path's edit. Telegram bots can't fetch a message, so the Telegram
+adapter remembers the text of recent messages it sent with buttons;
+one it doesn't know (sent before a restart) only loses its buttons.
+Discord fetches the message and edits it through the bot or the persona
+webhook, whichever posted it. Errors are logged; the decision stands.
 
 Acknowledge the platform first if it has a deadline (Discord allows
 three seconds). Discord only sends presses to the application that
@@ -142,7 +154,7 @@ lets tests check:
 - a send shows the persona and splits long text;
 - errors never contain the token (grep the error strings for it);
 - button presses: the keyboard, the private notice and the edit that
-  settles the message.
+  settles the message, after a press and through `SettleActions`.
 
 For a library-based adapter, give the library's HTTP client a transport
 that sends every request to the fake: `internal/channel/discord/discord_test.go`

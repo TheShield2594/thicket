@@ -705,18 +705,22 @@ func (e *Engine) sendIDs(ctx context.Context, chatRef string, c *character.Chara
 }
 
 // sendActions is send with buttons under the text, on channels that have
-// them; elsewhere the text alone goes out.
-func (e *Engine) sendActions(ctx context.Context, chatRef string, c *character.Character, text string, actions []channel.Action) error {
+// them; elsewhere the text alone goes out. It returns the id of the
+// message with the buttons ("" if none went out).
+func (e *Engine) sendActions(ctx context.Context, chatRef string, c *character.Character, text string, actions []channel.Action) (string, error) {
 	name, id := splitRef(chatRef)
 	ch := e.channelFor(name)
 	if ch == nil {
-		return fmt.Errorf("no channel %q", name)
+		return "", fmt.Errorf("no channel %q", name)
 	}
 	if s, ok := ch.(channel.ActionSender); ok && len(actions) > 0 {
-		_, err := s.SendActions(ctx, id, e.persona(c), e.Secrets.Redact(text), actions)
-		return err
+		ids, err := s.SendActions(ctx, id, e.persona(c), e.Secrets.Redact(text), actions)
+		if err != nil || len(ids) == 0 {
+			return "", err
+		}
+		return ids[len(ids)-1], nil
 	}
-	return ch.Send(ctx, id, e.persona(c), e.Secrets.Redact(text))
+	return "", ch.Send(ctx, id, e.persona(c), e.Secrets.Redact(text))
 }
 
 // sendToUser posts proactively in the user's DMs and records it in that

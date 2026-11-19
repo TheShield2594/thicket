@@ -25,6 +25,8 @@ type fakeDiscord struct {
 	// hookApp is the application_id of webhooks it creates ("" means a
 	// webhook no application owns).
 	hookApp string
+	// msg is what fetching a message returns.
+	msg map[string]any
 }
 
 type request struct {
@@ -38,10 +40,12 @@ func (f *fakeDiscord) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v"+discordgo.APIVersion)
 	f.mu.Lock()
 	f.reqs = append(f.reqs, request{r.Method, path, r.URL.RawQuery, body})
-	app := f.hookApp
+	app, msg := f.hookApp, f.msg
 	f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	switch {
+	case r.Method == "GET" && strings.Contains(path, "/messages/") && msg != nil:
+		json.NewEncoder(w).Encode(msg)
 	case r.Method == "POST" && strings.HasSuffix(path, "/callback"):
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == "GET" && strings.HasSuffix(path, "/webhooks"):
@@ -219,5 +223,66 @@ func TestSettledWithoutEmbeds(t *testing.T) {
 	e := settled(&discordgo.Message{Content: "**Pip:** 🔒 I need your OK"}, "✖️ Denied")
 	if len(*e.Components) != 0 || len(*e.Embeds) != 1 || (*e.Embeds)[0].Description != "✖️ Denied" {
 		t.Fatalf("settled: %+v", e)
+	}
+}
+
+// A message with buttons answered some other way is settled as a press
+// would settle it, through whoever posted it.
+func TestSettleActions(t *testing.T) {
+	ctx := context.Background()
+
+	// Posted by the bot: edited by the bot.
+	a, f := newTest(t)
+	f.msg = map[string]any{"id": "m1", "channel_id": "dm", "embeds": []any{map[string]any{"description": "🔒 I need your OK"}}}
+	if err := a.SettleActions(ctx, "dm", "m1", "✅ Approved"); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.take()
+	if len(reqs) != 2 || reqs[0].method != "GET" || reqs[0].path != "/channels/dm/messages/m1" ||
+		reqs[1].method != "PATCH" || reqs[1].path != "/channels/dm/messages/m1" {
+		t.Fatalf("requests: %+v", reqs)
+	}
+	edit, _ := json.Marshal(reqs[1].body)
+	if !strings.Contains(string(edit), `"components":[]`) || !strings.Contains(string(edit), `"footer":{"text":"✅ Approved"}`) ||
+		!strings.Contains(string(edit), "I need your OK") {
+		t.Fatalf("edit: %s", edit)
+	}
+
+	// Posted by the persona webhook: edited through it, in a thread too.
+	b, f2 := newTest(t)
+	f2.hookApp = "app"
+	b.chanInfo["thread"] = &discordgo.Channel{ID: "thread", Type: discordgo.ChannelTypeGuildPublicThread, ParentID: "guild"}
+	f2.msg = map[string]any{"id": "w1", "channel_id": "guild", "webhook_id": "h1", "content": "🔒 I need your OK"}
+	if err := b.SettleActions(ctx, "guild", "w1", "Expired"); err != nil {
+		t.Fatal(err)
+	}
+	reqs = f2.take()
+	last := reqs[len(reqs)-1]
+	if last.method != "PATCH" || last.path != "/webhooks/h1/htok/messages/w1" || last.query != "" {
+		t.Fatalf("not edited through the webhook: %+v", reqs)
+	}
+	edit, _ = json.Marshal(last.body)
+	if !strings.Contains(string(edit), `"components":[]`) || !strings.Contains(string(edit), `"description":"Expired"`) {
+		t.Fatalf("edit: %s", edit)
+	}
+	if err := b.SettleActions(ctx, "thread", "w1", "Expired"); err != nil {
+		t.Fatal(err)
+	}
+	reqs = f2.take()
+	if last = reqs[len(reqs)-1]; last.path != "/webhooks/h1/htok/messages/w1" || last.query != "thread_id=thread" {
+		t.Fatalf("thread edit: %+v", reqs)
+	}
+
+	// Someone else's webhook: left alone.
+	f2.mu.Lock()
+	f2.msg = map[string]any{"id": "w1", "channel_id": "guild", "webhook_id": "other", "content": "🔒 I need your OK"}
+	f2.mu.Unlock()
+	if err := b.SettleActions(ctx, "guild", "w1", "Expired"); err == nil {
+		t.Fatal("edited another webhook's message")
+	}
+	for _, r := range f2.take() {
+		if r.method == "PATCH" {
+			t.Fatalf("edited another webhook's message: %+v", r)
+		}
 	}
 }

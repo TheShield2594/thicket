@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,23 @@ type buttonChannel struct {
 	bmu     sync.Mutex
 	actions [][]channel.Action // per SendActions call
 	press   channel.PressHandler
+	settled []settle // per SettleActions call
+}
+
+// settle is a message settled without a press.
+type settle struct{ chat, msg, outcome string }
+
+func (b *buttonChannel) SettleActions(ctx context.Context, chatID, messageID, outcome string) error {
+	b.bmu.Lock()
+	defer b.bmu.Unlock()
+	b.settled = append(b.settled, settle{chatID, messageID, outcome})
+	return nil
+}
+
+func (b *buttonChannel) settles() []settle {
+	b.bmu.Lock()
+	defer b.bmu.Unlock()
+	return append([]settle(nil), b.settled...)
 }
 
 func (b *buttonChannel) SendActions(ctx context.Context, chatID string, p channel.Persona, text string, acts []channel.Action) ([]string, error) {
@@ -140,13 +158,108 @@ func TestApprovalButtonsStillAcceptTyping(t *testing.T) {
 	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
 	a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk)
 	e.HandleIncoming(ctx, dm("remember my dog is called Biscuit"))
-	acts := bc.lastActions()
+	acts, prompt := bc.lastActions(), bc.lastPost()
 	e.HandleIncoming(ctx, dm("approve"))
 	if mems, _ := a.DB.AllMemories(ctx, owner.ID); len(mems) != 1 {
 		t.Fatalf("typed approval didn't run: %+v", mems)
 	}
+	// The prompt's buttons come off, showing how it went.
+	eventually(t, "the prompt settled", func() bool { return len(bc.settles()) == 1 })
+	if got := bc.settles()[0]; got != (settle{"dm-owner", prompt, "✅ Approved"}) {
+		t.Fatalf("settled: %+v", got)
+	}
 	if r := bc.press(ctx, channel.Press{Channel: "discord", ChatID: "dm-owner", UserID: "owner", ActionID: acts[0].ID}); r.Outcome != "✅ Approved" {
 		t.Fatalf("stale button: %+v", r)
+	}
+	// Settled once: the sweep has nothing left to do.
+	e.SettleApprovals(ctx)
+	if got := bc.settles(); len(got) != 1 {
+		t.Fatalf("settled twice: %+v", got)
+	}
+}
+
+// Answered from the dashboard, or never answered, the prompt's buttons
+// come off too; a button that was pressed is settled by the press alone.
+func TestApprovalButtonsSettleOtherwise(t *testing.T) {
+	bc := &buttonChannel{fakeChannel: &fakeChannel{}}
+	a, _, ctx := setupWith(t, bc)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm("hi"))
+	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("cd34", 16)))
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	a.DB.SetToolLevel(ctx, store.AllSprigs, "remember", store.LevelAsk)
+	ask := func(what string) (int64, string) {
+		t.Helper()
+		e.HandleIncoming(ctx, dm("remember "+what))
+		bc.take()
+		aps, _ := a.DB.PendingApprovals(ctx, owner.ID, time.Hour)
+		if len(aps) == 0 {
+			t.Fatal("no approval asked")
+		}
+		return aps[0].ID, bc.lastPost()
+	}
+
+	// From the dashboard.
+	id, prompt := ask("my dog is called Biscuit")
+	if err := e.DecideApproval(ctx, owner, id, false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the prompt settled", func() bool { return len(bc.settles()) == 1 })
+	if got := bc.settles()[0]; got != (settle{"dm-owner", prompt, "✖️ Denied"}) {
+		t.Fatalf("settled: %+v", got)
+	}
+
+	// Never answered: the sweep settles it once it expires.
+	id, prompt = ask("my dog is called Pebble")
+	e.SettleApprovals(ctx)
+	if got := bc.settles(); len(got) != 1 {
+		t.Fatalf("a waiting approval was settled: %+v", got)
+	}
+	if _, err := a.DB.DB().ExecContext(ctx, "UPDATE approvals SET created_at = created_at - 7200 WHERE id = ?", id); err != nil {
+		t.Fatal(err)
+	}
+	e.SettleApprovals(ctx)
+	if got := bc.settles(); len(got) != 2 || got[1] != (settle{"dm-owner", prompt, "Expired"}) {
+		t.Fatalf("expired prompt: %+v", got)
+	}
+	if ap, _ := a.DB.ApprovalByID(ctx, id); ap.Status != "expired" {
+		t.Fatalf("status: %s", ap.Status)
+	}
+
+	// Pressed: the press settles it, and nothing else does.
+	id, _ = ask("my dog is called Bubbles")
+	if r := bc.press(ctx, channel.Press{Channel: "discord", ChatID: "dm-owner", UserID: "owner", IsDM: true, ActionID: fmt.Sprintf("approval:%d:deny", id)}); r.Outcome != "✖️ Denied" {
+		t.Fatalf("press: %+v", r)
+	}
+	eventually(t, "the sprig's acknowledgement", func() bool { return len(bc.peek()) == 1 })
+	e.SettleApprovals(ctx)
+	if got := bc.settles(); len(got) != 2 {
+		t.Fatalf("a pressed prompt was settled again: %+v", got)
+	}
+}
+
+// A tap in the moment before the approval opens is told to try again,
+// and settles nothing.
+func TestButtonBeforeApprovalOpens(t *testing.T) {
+	bc := &buttonChannel{fakeChannel: &fakeChannel{}}
+	a, _, ctx := setupWith(t, bc)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm("hi"))
+	e.HandleIncoming(ctx, dm("sk-or-v1-"+strings.Repeat("cd34", 16)))
+	owner, _ := a.DB.UserByExternal(ctx, "discord", "owner")
+	id, err := a.DB.ReserveApproval(ctx, store.Approval{UserID: owner.ID, Character: "juniper", ChatRef: "discord:dm-owner", Tool: "remember", Args: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	press := channel.Press{Channel: "discord", ChatID: "dm-owner", UserID: "owner", IsDM: true, ActionID: fmt.Sprintf("approval:%d:approve", id)}
+	if r := bc.press(ctx, press); r.Outcome != "" || !strings.Contains(r.Notice, "Tap again") {
+		t.Fatalf("reserved: %+v", r)
+	}
+	if err := a.DB.OpenApproval(ctx, id, "out-9"); err != nil {
+		t.Fatal(err)
+	}
+	if r := bc.press(ctx, press); r.Outcome != "✅ Approved" {
+		t.Fatalf("opened: %+v", r)
 	}
 }
 

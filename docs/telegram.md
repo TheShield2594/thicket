@@ -70,7 +70,10 @@ Approval prompts come with **Approve** and **Deny** buttons. Tapping one
 answers the request: the buttons disappear and the outcome is added
 under the prompt, so it can't be answered twice. In a group, only the
 person who was asked can tap them; anyone else gets a private "this isn't
-yours to approve". Replying **approve** or **deny** still works.
+yours to approve". Replying **approve** or **deny** still works, and so
+does answering from the dashboard: either way the buttons come off and
+the outcome is shown, as they do when a request expires. (A prompt sent
+before Thicket restarted only loses its buttons.)
 
 When a message looks like a key or password, Thicket deletes it. Telegram
 lets bots do this in private chats, unlike Discord.
