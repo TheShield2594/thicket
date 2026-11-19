@@ -375,7 +375,8 @@ one by one: `thicket memory runs`, then `thicket memory rollback RUN_ID`
 Share a sprig with `thicket export-sprig pip`: one `pip.sprig` file with
 its character, routines, the skills it uses, avatar and voice tests. Add
 someone else's with `thicket import-sprig pip.sprig`, or send the file to
-Juni in chat. Memories, secrets and chats never travel with a sprig;
+Juni in chat. Secrets and chats never travel with a sprig, and memories
+only when you add `--memories` (for moving a sprig to a new Thicket);
 imported sprigs start at draft and lose integration and admin access until
 you grant it. See [Sharing a sprig](docs/characters.md#sharing-a-sprig).
 

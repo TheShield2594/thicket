@@ -127,6 +127,11 @@ func (e *Engine) toolImportSprig(ctx context.Context, t *turn, args json.RawMess
 	if err != nil {
 		return "", err
 	}
+	if n := len(p.Memories); n > 0 {
+		// Memories from a package are someone's private life: they're
+		// brought in only on the server, where they're listed first.
+		preview += fmt.Sprintf("It carries %d memories, which aren't imported in chat (on the server, `thicket import-sprig` lists them and asks).\n", n)
+	}
 	b, _ := json.Marshal(sprigImportArgs{File: file, ID: a.ID, Name: a.Name, Package: base64.StdEncoding.EncodeToString(raw), Plans: plans})
 	name := p.Char.DisplayName()
 	msg := fmt.Sprintf("📦 Here's everything %s will get from %s. Nothing is written until you say so.\n%s"+

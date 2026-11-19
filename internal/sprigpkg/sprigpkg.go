@@ -3,9 +3,11 @@
 // it uses, its avatar settings and picture, and its voice tests, so it can
 // be given to someone else's Thicket.
 //
-// What never goes in, whatever the sprig: memories, secrets and their
-// values, conversations, the trail, inbox items, permission levels and
-// integration credentials. Export only reads the files and rows listed
+// What never goes in, whatever the sprig: secrets and their values,
+// conversations, the trail, inbox items, permission levels and integration
+// credentials. Memories go in only when the person exporting asks
+// (Source.Memories, `export-sprig --memories`): their own memories with
+// the sprig, and family memory only if asked too, never anyone else's. Export only reads the files and rows listed
 // here (an allowlist of paths), clears what belongs to this install from
 // the character file (who it belongs to, kids and parents), and refuses
 // to write the package if anything in it looks like a secret.
@@ -37,6 +39,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/memory"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/store"
 
@@ -45,9 +48,11 @@ import (
 
 const (
 	// Kind and Format identify the package format. A newer format is
-	// refused with a message to update Thicket.
+	// refused with a message to update Thicket. Format 2 adds
+	// memories.json; a package without memories is still written as 1,
+	// so older Thickets read it.
 	Kind   = "thicket-sprig"
-	Format = 1
+	Format = 2
 	// Ext is the package file's extension (a gzipped tar).
 	Ext = ".sprig"
 
@@ -56,7 +61,9 @@ const (
 	maxFiles       = 200
 	maxRoutines    = 20
 	maxSkills      = 20
+	maxMemories    = 500
 	manifestName   = "manifest.json"
+	memoriesName   = "memories.json"
 	characterName  = "character.md"
 	skillsName     = "skills.json"
 	routinesName   = "routines.json"
@@ -80,7 +87,7 @@ var sprigFile = regexp.MustCompile(`^(avatar\.json|voice_tests/[A-Za-z0-9][A-Za-
 // allowed reports whether path may appear in a package.
 func allowed(p string) bool {
 	switch p {
-	case manifestName, characterName, skillsName, routinesName, pictureName:
+	case manifestName, characterName, skillsName, routinesName, pictureName, memoriesName:
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, sprigDirPrefix); ok {
@@ -115,6 +122,23 @@ type Skill struct {
 	Body        string `json:"body"`
 }
 
+// Memory scopes in a package.
+const (
+	MemorySprig  = "sprig"  // between the person and this sprig
+	MemoryShared = "shared" // the person's shared memories
+	MemoryFamily = "family" // the household's family memory
+)
+
+// Memory is one memory carried in a package: the exporting person's, so
+// on import it becomes the importing person's.
+type Memory struct {
+	Scope   string    `json:"scope"`
+	Kind    string    `json:"kind"`
+	Content string    `json:"content"`
+	Locked  bool      `json:"locked,omitempty"`
+	Due     time.Time `json:"due,omitempty"`
+}
+
 // Package is a sprig package in memory.
 type Package struct {
 	Manifest Manifest
@@ -126,6 +150,8 @@ type Package struct {
 	Avatar   []byte
 	Skills   []Skill
 	Routines []Routine
+	// Memories travel only when the exporter asked for them.
+	Memories []Memory
 	// Omitted says what export left out and why (paused routines, a
 	// picture it couldn't clean), for the person exporting.
 	Omitted []string
@@ -143,6 +169,10 @@ type Source struct {
 	// ExtraSkills are skill ids to include even if not mentioned.
 	ExtraSkills []string
 	Version     string
+	// Memories are the exporting person's memories to include (already
+	// chosen: the sprig's, and shared or family memory if asked). None
+	// by default: a package is often shared with strangers.
+	Memories []store.Memory
 	// LooksSecret reports secret-shaped text (stored secrets' values and
 	// credential patterns). Required.
 	LooksSecret func(string) bool
@@ -227,7 +257,29 @@ func Export(src Source) (*Package, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	p.Manifest = Manifest{Kind: Kind, Format: Format, ID: c.ID, Name: c.DisplayName(), ThicketVersion: src.Version, CreatedAt: now.UTC()}
+	for _, m := range src.Memories {
+		if !m.ExpiresAt.IsZero() && !m.ExpiresAt.After(now) {
+			continue
+		}
+		scope := MemoryShared
+		switch {
+		case m.Household:
+			scope = MemoryFamily
+		case m.Character == src.ID:
+			scope = MemorySprig
+		case m.Character != "":
+			continue // another sprig's
+		}
+		p.Memories = append(p.Memories, Memory{Scope: scope, Kind: m.Kind, Content: m.Content, Locked: m.Locked, Due: m.DueAt.UTC()})
+	}
+	if len(p.Memories) > maxMemories {
+		return nil, fmt.Errorf("%d memories; a package holds at most %d", len(p.Memories), maxMemories)
+	}
+	format := 1
+	if len(p.Memories) > 0 {
+		format = Format
+	}
+	p.Manifest = Manifest{Kind: Kind, Format: format, ID: c.ID, Name: c.DisplayName(), ThicketVersion: src.Version, CreatedAt: now.UTC()}
 	entries, err := p.entries()
 	if err != nil {
 		return nil, err
@@ -294,6 +346,10 @@ func (p *Package) entries() (map[string][]byte, error) {
 	if len(p.Routines) > 0 {
 		b, _ := json.MarshalIndent(p.Routines, "", "  ")
 		out[routinesName] = b
+	}
+	if len(p.Memories) > 0 {
+		b, _ := json.MarshalIndent(p.Memories, "", "  ")
+		out[memoriesName] = b
 	}
 	for name := range out {
 		if !allowed(name) {
@@ -479,6 +535,21 @@ func Read(r io.Reader) (*Package, error) {
 			if err := json.Unmarshal(b, &p.Routines); err != nil {
 				return nil, fmt.Errorf("routines.json: %w", err)
 			}
+		case name == memoriesName:
+			if err := json.Unmarshal(b, &p.Memories); err != nil {
+				return nil, fmt.Errorf("memories.json: %w", err)
+			}
+		}
+	}
+	if len(p.Memories) > maxMemories {
+		return nil, errors.New("the package has too many memories")
+	}
+	for _, m := range p.Memories {
+		if m.Scope != MemorySprig && m.Scope != MemoryShared && m.Scope != MemoryFamily {
+			return nil, fmt.Errorf("memories.json: unknown scope %q", m.Scope)
+		}
+		if n := len([]rune(strings.TrimSpace(m.Content))); n < 3 || n > 300 {
+			return nil, errors.New("memories.json: every memory needs 3-300 characters of content")
 		}
 	}
 	if len(p.Skills) > maxSkills || len(p.Routines) > maxRoutines {
@@ -720,8 +791,108 @@ func (p *Package) Preview(skills []SkillPlan, stripped []string, canWriteSkills 
 	if len(stripped) > 0 {
 		fmt.Fprintf(&b, "Not given (grant in chat if you want them): %s\n", strings.Join(stripped, ", "))
 	}
-	b.WriteString("Every tool starts at draft. No memories, chats or secrets come with it.\n")
+	if len(p.Memories) > 0 {
+		fmt.Fprintf(&b, "Every tool starts at draft. It carries %d memories; no chats or secrets come with it.\n", len(p.Memories))
+	} else {
+		b.WriteString("Every tool starts at draft. No memories, chats or secrets come with it.\n")
+	}
 	return b.String(), nil
+}
+
+// MemoryPreview lists the memories a package carries, as they would be
+// kept for the importing person.
+func (p *Package) MemoryPreview() string {
+	if len(p.Memories) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Memories (%d), from the person who exported it; they become the importing person's:\n", len(p.Memories))
+	for _, m := range p.Memories {
+		scope := map[string]string{MemorySprig: "with " + p.Char.DisplayName(), MemoryShared: "shared", MemoryFamily: "family"}[m.Scope]
+		extra := ""
+		if m.Locked {
+			extra = ", set by them"
+		}
+		if !m.Due.IsZero() {
+			extra += ", follow up " + m.Due.Format("2 Jan 2006")
+		}
+		fmt.Fprintf(&b, "- [%s, %s%s] %s\n", scope, m.Kind, extra, m.Content)
+	}
+	return b.String()
+}
+
+// MemoryResult is what InstallMemories did.
+type MemoryResult struct {
+	Added   int
+	Skipped []string
+}
+
+// InstallMemories keeps the package's memories for userID with the
+// installed sprig: locked (as if the person set them: automatic review
+// never changes them) or reviewable. Family memory needs an adult
+// (family false skips it), near-duplicates of what the person already
+// has are skipped, and so is anything invalid or past.
+func (p *Package) InstallMemories(ctx context.Context, db *store.Store, userID int64, locked, family bool, now time.Time) (MemoryResult, error) {
+	var res MemoryResult
+	existing, err := db.AllMemories(ctx, userID)
+	if err != nil {
+		return res, err
+	}
+	fam, err := db.FamilyMemories(ctx, "")
+	if err != nil {
+		return res, err
+	}
+	existing = append(existing, fam...)
+	var adds []store.MemoryChange
+	for _, m := range p.Memories {
+		content := strings.Join(strings.Fields(m.Content), " ")
+		mem := store.Memory{UserID: userID, Kind: m.Kind, Content: content, Source: "auto"}
+		switch m.Scope {
+		case MemorySprig:
+			mem.Character = p.Char.ID
+		case MemoryFamily:
+			if !family {
+				res.Skipped = append(res.Skipped, "family memory (only an adult's import keeps it): "+content)
+				continue
+			}
+			mem.Household = true
+		}
+		if !memory.Kinds[m.Kind] {
+			res.Skipped = append(res.Skipped, fmt.Sprintf("unknown kind %q: %s", m.Kind, content))
+			continue
+		}
+		if m.Kind == "followup" {
+			if m.Due.IsZero() || m.Due.Before(now) {
+				res.Skipped = append(res.Skipped, "a follow-up that's already past: "+content)
+				continue
+			}
+			mem.DueAt = m.Due
+		}
+		if m.Kind == "context" {
+			mem.ExpiresAt = now.Add(memory.ContextTTL)
+		}
+		if locked {
+			mem.Source, mem.Locked = "user", true
+		}
+		dup := false
+		for _, e := range existing {
+			if e.Character == mem.Character && e.Household == mem.Household && memory.Similarity(e.Content, content) >= 0.75 {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			res.Skipped = append(res.Skipped, "already known: "+content)
+			continue
+		}
+		existing = append(existing, mem)
+		adds = append(adds, store.MemoryChange{Action: "add", Memory: mem})
+	}
+	if _, err := db.ApplyMemoryChanges(ctx, 0, adds); err != nil {
+		return res, err
+	}
+	res.Added = len(adds)
+	return res, nil
 }
 
 // NewFileDiff is a unified diff that creates path with content.

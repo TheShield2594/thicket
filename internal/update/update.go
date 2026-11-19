@@ -27,7 +27,8 @@ import (
 // dataChecks are the doctor findings an update is judged by: the ones
 // about the data it just changed. A model server or chat app that's
 // unreachable is reported but doesn't undo an update.
-var dataChecks = map[string]bool{"config": true, "database": true, "secrets": true}
+// A migration that loses memory fails "memory", so it rolls back too.
+var dataChecks = map[string]bool{"config": true, "database": true, "secrets": true, "memory": true}
 
 type Updater struct {
 	Cfg *config.Config

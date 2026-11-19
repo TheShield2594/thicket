@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/app"
@@ -19,16 +20,26 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-const exportSprigUsage = `usage: thicket export-sprig ID [-o FILE] [--skill ID]...
+const exportSprigUsage = `usage: thicket export-sprig ID [-o FILE] [--skill ID]... [--memories [--shared] [--family]] [--user ID]
 
 Writes one shareable file: the sprig's character, routines, the skills it
-mentions (add others with --skill), avatar and voice tests. Memories,
-secrets, chats, the trail, the inbox and permission levels never go in.`
+mentions (add others with --skill), avatar and voice tests. Secrets, chats,
+the trail, the inbox and permission levels never go in.
 
-const importSprigUsage = `usage: thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--yes]
+Memories go in only with --memories: what the sprig knows between it and
+one person (the owner, or --user ID). --shared adds that person's shared
+memories, --family the household's family memory. Leave them out of a
+package you give to someone else.`
+
+const importSprigUsage = `usage: thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--memories locked|review|skip] [--yes]
 
 Shows everything the sprig will get before anything is written. Every tool
-starts at draft; routines are scheduled for the owner (or --user).`
+starts at draft; routines are scheduled for the owner (or --user).
+
+A package with memories lists them first. They're kept for the owner (or
+--user) either locked (as if that person set them: automatic review never
+changes them) or reviewable (the memory review may update or expire them),
+or skipped. Without --memories you're asked; with --yes they're skipped.`
 
 type multiFlag []string
 
@@ -41,9 +52,16 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	file := fs.String("o", "", "")
 	var extra multiFlag
 	fs.Var(&extra, "skill", "")
+	withMem := fs.Bool("memories", false, "")
+	withShared := fs.Bool("shared", false, "")
+	withFamily := fs.Bool("family", false, "")
+	userID := fs.Int64("user", 0, "")
 	pos, err := parseFlags(fs, args)
 	if err != nil || len(pos) != 1 {
 		return errors.New(exportSprigUsage)
+	}
+	if (*withShared || *withFamily || *userID != 0) && !*withMem {
+		return errors.New("--shared, --family and --user choose which memories go in: add --memories\n\n" + exportSprigUsage)
 	}
 	db, err := openStore(cfg)
 	if err != nil {
@@ -67,7 +85,33 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	p, err := sprigpkg.Export(sprigpkg.Source{CharsDir: cfg.CharactersDir, ID: id, Jobs: jobs, Library: lib, ExtraSkills: extra, Version: version, LooksSecret: looks})
+	var mems []store.Memory
+	var who *store.User
+	if *withMem {
+		if who, err = memoryPerson(ctx, db, *userID); err != nil {
+			return err
+		}
+		visible, err := db.VisibleMemories(ctx, who.ID, id)
+		if err != nil {
+			return err
+		}
+		for _, m := range visible {
+			if m.Character == id || *withShared {
+				mems = append(mems, m)
+			}
+		}
+		if *withFamily {
+			if who.IsKid() {
+				return errors.New("family memory goes in only with an adult's memories")
+			}
+			fam, err := db.FamilyMemories(ctx, id)
+			if err != nil {
+				return err
+			}
+			mems = append(mems, fam...)
+		}
+	}
+	p, err := sprigpkg.Export(sprigpkg.Source{CharsDir: cfg.CharactersDir, ID: id, Jobs: jobs, Library: lib, ExtraSkills: extra, Version: version, LooksSecret: looks, Memories: mems})
 	if err != nil {
 		return err
 	}
@@ -87,8 +131,29 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	for _, o := range p.Omitted {
 		fmt.Fprintln(out, "Left out:", o)
 	}
-	fmt.Fprintln(out, "No memories, secrets, chats or permission levels are in it.")
+	if len(p.Memories) > 0 {
+		fmt.Fprintf(out, "It holds %d of %s's memories: share it only with someone who should have them. No secrets, chats or permission levels are in it.\n", len(p.Memories), userLabel(who))
+	} else {
+		fmt.Fprintln(out, "No memories, secrets, chats or permission levels are in it.")
+	}
 	return nil
+}
+
+// memoryPerson is whose memories an export or import is about: --user, or
+// the owner.
+func memoryPerson(ctx context.Context, db *store.Store, userID int64) (*store.User, error) {
+	if userID != 0 {
+		u, err := db.UserByID(ctx, userID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("there's no user %d", userID)
+		}
+		return u, err
+	}
+	u, err := db.Owner(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, errors.New("there's no owner yet to keep memories for; finish setup first, or pass --user ID")
+	}
+	return u, err
 }
 
 // writeNew creates path, refusing to replace a file that's there, and
@@ -171,9 +236,15 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	name := fs.String("name", "", "")
 	userID := fs.Int64("user", 0, "")
 	yes := fs.Bool("yes", false, "")
+	memMode := fs.String("memories", "", "")
 	pos, err := parseFlags(fs, args)
 	if err != nil || len(pos) != 1 {
 		return errors.New(importSprigUsage)
+	}
+	switch *memMode {
+	case "", "locked", "review", "skip":
+	default:
+		return errors.New("--memories is locked, review or skip\n\n" + importSprigUsage)
 	}
 	p, err := sprigpkg.ReadFile(pos[0])
 	if err != nil {
@@ -225,15 +296,37 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "Importing %s from %s (made with Thicket %s). This is everything it will get:\n\n%s\n", p.Char.DisplayName(), pos[0], orUnknown(p.Manifest.ThicketVersion), preview); err != nil {
+	if _, err := fmt.Fprintf(out, "Importing %s from %s (made with Thicket %s). This is everything it will get:\n\n%s\n%s", p.Char.DisplayName(), pos[0], orUnknown(p.Manifest.ThicketVersion), preview, p.MemoryPreview()); err != nil {
 		return fmt.Errorf("couldn't show the preview, so nothing was imported: %w", err)
 	}
+	if len(p.Memories) > 0 && owner == nil && *memMode != "skip" && *memMode != "" {
+		return errors.New("there's no user to keep the memories for yet; finish setup first, pass --user ID, or --memories skip")
+	}
+	stdin := bufio.NewReader(in)
 	if !*yes {
 		fmt.Fprintf(out, "Import %s? [y/N] ", p.Char.DisplayName())
-		line, _ := bufio.NewReader(in).ReadString('\n')
+		line, _ := stdin.ReadString('\n')
 		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
 			fmt.Fprintln(out, "Nothing was written.")
 			return nil
+		}
+	}
+	mode := *memMode
+	switch {
+	case len(p.Memories) == 0 || owner == nil:
+		mode = "skip"
+	case mode == "" && *yes:
+		mode = "skip"
+	case mode == "":
+		fmt.Fprintf(out, "Keep its %d memories for %s locked (as if %s set them), reviewable (the memory review may change them), or skip them? [l/r/S] ", len(p.Memories), userLabel(owner), userLabel(owner))
+		line, _ := stdin.ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "l", "locked":
+			mode = "locked"
+		case "r", "review", "reviewable":
+			mode = "review"
+		default:
+			mode = "skip"
 		}
 	}
 	var ownerID int64
@@ -250,6 +343,21 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	}
 	if len(res.Skills) > 0 {
 		fmt.Fprintln(out, "Skills:", strings.Join(res.Skills, ", "))
+	}
+	if len(p.Memories) > 0 {
+		if mode == "skip" {
+			fmt.Fprintln(out, "Memories: none kept.")
+			return nil
+		}
+		mr, err := p.InstallMemories(ctx, db, owner.ID, mode == "locked", !owner.IsKid(), time.Now())
+		if err != nil {
+			return fmt.Errorf("the sprig was imported, but its memories weren't saved: %w", err)
+		}
+		how := map[string]string{"locked": "locked", "review": "reviewable"}[mode]
+		fmt.Fprintf(out, "Memories: %d kept for %s, %s.\n", mr.Added, userLabel(owner), how)
+		for _, s := range mr.Skipped {
+			fmt.Fprintln(out, "Not kept:", s)
+		}
 	}
 	return nil
 }

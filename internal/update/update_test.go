@@ -289,3 +289,43 @@ func TestUpdateRefusals(t *testing.T) {
 		t.Fatalf("downgrade across a schema change: %v", err)
 	}
 }
+
+// A migration that loses memory fails doctor's memory check, and the
+// update puts everything back.
+func TestMigrationThatLosesMemoryRollsBack(t *testing.T) {
+	ctx := context.Background()
+	cfg := install(t)
+	db, err := store.OpenExisting(ctx, filepath.Join(cfg.DataDir, "thicket.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO users (id, channel, external_id, name, role, created_at) VALUES (1, 'discord', 'sam', 'Sam', 'owner', 1);
+		INSERT INTO memories (user_id, character, kind, content, source, locked, created_at, updated_at) VALUES
+		(1, 'pip', 'fact', 'Likes the dentist on Tuesdays.', 'auto', 0, 1, 1),
+		(1, '', 'person', 'Has a sister called Maya.', 'user', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	before := fingerprint(t, cfg)
+
+	defer store.InjectMigration("DELETE FROM memories WHERE character = 'pip';")()
+	var out bytes.Buffer
+	u := updater(cfg, &out)
+	u.Doctor = (&doctor.Doctor{Cfg: cfg, DataOnly: true}).Run
+	res, err := u.Run(ctx)
+	if err == nil || res.Outcome != "rolled back" || !strings.Contains(res.Detail, "memory: lost in the migration") || !strings.Contains(res.Detail, "1 of 1 missing") {
+		t.Fatalf("result %+v, err %v\n%s", res, err, out.String())
+	}
+	if !strings.Contains(out.String(), "[FAIL] memory") {
+		t.Fatalf("the failing check isn't shown:\n%s", out.String())
+	}
+	after := fingerprint(t, cfg)
+	if len(before) != len(after) {
+		t.Fatalf("files differ after the rollback:\nbefore %v\nafter  %v", before, after)
+	}
+	for k, v := range before {
+		if after[k] != v {
+			t.Fatalf("%s changed after the rollback", k)
+		}
+	}
+}
