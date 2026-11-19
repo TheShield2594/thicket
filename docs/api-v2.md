@@ -54,6 +54,7 @@ Replies arrive on the event stream (or poll the history).
 | `GET /api/v2/calendars` | connected calendars (own and shared) |
 | `POST /api/v2/calendars` | connect one: see [Calendar](calendar.md) |
 | `DELETE /api/v2/calendars/{id}` | disconnect one of yours |
+| `DELETE /api/v2/calendar/outputs/{event_id}` | take a sprig output off the calendar: your own, or a shared one (adults). Items the person may remove have `"removable": true`. Returns `{"title", "trail_id"}`; undo the trail entry to put it back |
 
 ## Household
 

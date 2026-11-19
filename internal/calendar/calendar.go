@@ -46,8 +46,10 @@ type Item struct {
 	Details     string `json:"details,omitempty"`
 	SourceLabel string `json:"source_label,omitempty"`
 	SourceURL   string `json:"source_url,omitempty"`
-	// TrailID undoes a sprig output.
-	EventID int64 `json:"event_id,omitempty"`
+	// EventID names a sprig output; Removable says the person may take it
+	// off the calendar (DELETE /api/v2/calendar/outputs/{event_id}).
+	EventID   int64 `json:"event_id,omitempty"`
+	Removable bool  `json:"removable,omitempty"`
 }
 
 // Filter picks what the view shows. Empty Layers means all of them;
@@ -159,7 +161,8 @@ func (s *Service) View(ctx context.Context, u *store.User, from, to time.Time, f
 				continue
 			}
 			items = append(items, Item{Layer: LayerOutputs, ID: fmt.Sprintf("out%d", o.ID), EventID: o.ID, Title: o.Title, Start: o.StartsAt, End: o.EndsAt,
-				AllDay: o.AllDay, Sprig: o.Character, Kind: o.Kind, Details: o.Details, SourceLabel: o.SourceLabel, SourceURL: o.SourceURL, Shared: o.Shared})
+				AllDay: o.AllDay, Sprig: o.Character, Kind: o.Kind, Details: o.Details, SourceLabel: o.SourceLabel, SourceURL: o.SourceURL, Shared: o.Shared,
+				Removable: o.RemovableBy(u)})
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })

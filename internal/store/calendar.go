@@ -26,6 +26,13 @@ type SprigEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// RemovableBy says whether a person may take this event off the calendar,
+// or put it back: one on their own calendar, or a shared one when they're
+// an adult. Kids can't change the calendar.
+func (e *SprigEvent) RemovableBy(u *User) bool {
+	return u != nil && !u.IsKid() && (e.UserID == u.ID || e.Shared)
+}
+
 const sprigEventCols = "id, user_id, character, kind, title, starts_at, ends_at, all_day, details, source_label, source_url, shared, created_at"
 
 func scanSprigEvent(r interface{ Scan(...any) error }) (*SprigEvent, error) {

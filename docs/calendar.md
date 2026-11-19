@@ -17,7 +17,10 @@ sees shared household items only.
 **Calendar**, under Household in the sidebar, shows a week at a time:
 toggle the layers (events, sprig jobs, sprig outputs) and each sprig on or
 off (the choices are remembered), step between weeks, and follow an
-output's link back to its source. Below it, connect and disconnect your
+output's link back to its source. **Remove** takes a sprig output off the
+calendar: one of your own, or a shared household one. It goes in the
+[trail](household.md#the-trail), so undo it under **Changes** on the
+dashboard to put it back. Below it, connect and disconnect your
 calendars.
 
 ## Connecting a calendar
@@ -57,5 +60,6 @@ These act by default, like scheduling a job; set the sprig's level to
 ## In the app
 
 `GET /api/v2/calendar?from=2026-11-16&to=2026-11-23&layers=events,outputs&hide=hal`
-returns the merged items with each sprig's name, avatar and colour. See
-[API v2](api-v2.md).
+returns the merged items with each sprig's name, avatar and colour.
+`DELETE /api/v2/calendar/outputs/{event_id}` removes a sprig output (the
+ones marked `"removable": true`). See [API v2](api-v2.md).
