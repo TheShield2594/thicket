@@ -30,7 +30,11 @@ the same memories, from both:
    within 15 minutes.
 
 Proactive messages (job results, follow-ups, check-ins, alerts) go to
-whichever app you last wrote from.
+the app you last wrote from, preferring Telegram or Discord over the web
+app when you have both. To choose, tell a sprig "reach me on Telegram"
+(or "Pip should write on Discord" for one sprig; "auto" goes back to the
+default). If sending there fails, your other linked apps are tried
+before the message waits in the inbox.
 
 An account that already has its own memories, jobs or owner role can't be
 folded into another profile. Codes are single use, and a few wrong codes
@@ -66,6 +70,14 @@ everything in a group, turn privacy mode off: in @BotFather, use
 `/setprivacy`, then remove and re-add the bot to the group. List those
 group ids in `THICKET_TELEGRAM_CHATS` to have sprigs answer every message
 there. Group ids are negative numbers, such as `-1001234567890`.
+
+## Reactions
+
+React with ✍ on any message to have it remembered for good, as if you'd
+replied "remember this" (Telegram's reactions don't include 🧠). Thicket
+asks Telegram for reaction updates only for this. In a private chat they
+always arrive; in a group, Telegram tells bots about reactions only when
+the bot is an administrator there.
 
 ## Settings
 

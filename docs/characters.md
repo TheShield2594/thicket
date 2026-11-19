@@ -181,7 +181,23 @@ left out and listed) and the skills it uses (`skills.json`: library skills
 named in its character file or routines, plus any `--skill ID`). An
 existing file is never overwritten: pick another with `-o`.
 
-Never included: memories, secrets or their values, conversations, the
+Memories are left out unless you ask: `--memories` adds what the sprig
+knows between it and one person (the owner, or `--user ID`),
+`--shared` adds that person's shared memories and `--family` the
+household's family memory. They go in `memories.json` (package format 2;
+a package without memories is still format 1). Leave them out of a
+package you give to someone else; the export says whose memories it
+holds. `import-sprig` lists every memory before anything is written and
+asks whether to keep them **locked** (as if the importing person set
+them: the memory review never changes them), **reviewable** (the review
+may update or expire them) or not at all (`--memories
+locked|review|skip`; with `--yes` and no `--memories` they're skipped).
+They become the importing person's (the owner, or `--user ID`), go with
+the sprig's new id if it's renamed, skip anything that person already
+knows, and family memory is kept only for an adult. A package sent in
+chat never brings its memories in.
+
+Never included: secrets or their values, conversations, the
 trail, inbox items, permission levels, integration credentials and
 webhook jobs. Whose sprig it was (`belongs_to`) is cleared, so it arrives
 as a family sprig. If anything in the package looks like a secret (a

@@ -24,6 +24,8 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	updates []map[string]any
 	sent    []map[string]any
+	// allowed is the allowed_updates of the last getUpdates.
+	allowed []any
 	// rejectHTML makes sendMessage refuse parse_mode HTML once.
 	rejectHTML bool
 }
@@ -52,6 +54,7 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 		case "deleteWebhook", "sendChatAction", "deleteMessage":
 			ok(true)
 		case "getUpdates":
+			f.allowed, _ = p["allowed_updates"].([]any)
 			ups := f.updates
 			f.updates = nil
 			if ups == nil {
@@ -304,5 +307,59 @@ func TestAlbumMaxWait(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("album never sent")
+	}
+}
+
+func TestReactions(t *testing.T) {
+	a, f := newTest(t)
+	react := func(id int, user map[string]any, old, new []string) map[string]any {
+		list := func(es []string) []any {
+			var out []any
+			for _, e := range es {
+				out = append(out, map[string]any{"type": "emoji", "emoji": e})
+			}
+			return out
+		}
+		return map[string]any{"update_id": id, "message_reaction": map[string]any{"chat": map[string]any{"id": 42, "type": "private"},
+			"message_id": 77, "user": user, "date": 1, "old_reaction": list(old), "new_reaction": list(new)}}
+	}
+	sam := map[string]any{"id": 42, "first_name": "Sam"}
+	f.updates = []map[string]any{
+		react(1, sam, nil, []string{"✍"}),
+		react(2, sam, []string{"✍"}, []string{"✍", "🔥"}),                      // only 🔥 is new
+		react(3, sam, []string{"🔥"}, nil),                                     // a removal
+		react(4, map[string]any{"id": 5, "is_bot": true}, nil, []string{"✍"}), // a bot
+	}
+	got := make(chan channel.Reaction, 10)
+	a.OnReaction(func(_ context.Context, r channel.Reaction) { got <- r })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx, func(context.Context, channel.Incoming) {})
+	var emojis []string
+	deadline := time.After(5 * time.Second)
+	for len(emojis) < 2 {
+		select {
+		case r := <-got:
+			if r.ChatID != "42" || r.MessageID != "77" || r.UserID != "42" || !r.IsDM || r.ChatRef() != "telegram:42" {
+				t.Fatalf("reaction: %+v", r)
+			}
+			emojis = append(emojis, r.Emoji)
+		case <-deadline:
+			t.Fatalf("reactions never arrived: %v", emojis)
+		}
+	}
+	select {
+	case r := <-got:
+		t.Fatalf("unexpected reaction %+v", r)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if strings.Join(emojis, ",") != "✍,🔥" {
+		t.Fatalf("reactions: %v", emojis)
+	}
+	f.mu.Lock()
+	allowed := f.allowed
+	f.mu.Unlock()
+	if len(allowed) != 2 || allowed[1] != "message_reaction" {
+		t.Fatalf("allowed_updates %v", allowed)
 	}
 }

@@ -54,6 +54,25 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 		return false, nil
 	}
 	reply := in.ReplyTo != ""
+	who := addressed
+	if who == nil {
+		who = e.sprigForChat(in.ChatRef())
+	}
+	// "remember this", and "forget this" on its confirmation.
+	if handled, ack, memID, err := e.rememberMessageCommand(ctx, in, user, text, who); handled || err != nil {
+		if err != nil || ack == "" || who == nil {
+			return true, err
+		}
+		return true, e.confirmRemember(ctx, in.ChatRef(), user, who, ack, memID)
+	}
+	if reply && forgetMsgRe.MatchString(text) {
+		if ack, handled, err := e.forgetRemembered(ctx, in, user); handled || err != nil {
+			if err != nil || who == nil {
+				return true, err
+			}
+			return true, e.send(ctx, in.ChatRef(), who, ack)
+		}
+	}
 	var do func() (string, error)
 	switch {
 	case pinRe.MatchString(text):
@@ -74,10 +93,6 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 		do = func() (string, error) { return e.deleteLast(ctx, in, user, addressed) }
 	default:
 		return false, nil
-	}
-	who := addressed
-	if who == nil {
-		who = e.chatSprig(in.ChatRef())
 	}
 	// The caller holds the chat's lock, so no reply is mid-way through
 	// reading the history this changes.

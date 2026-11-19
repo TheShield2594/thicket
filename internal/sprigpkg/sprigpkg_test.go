@@ -283,7 +283,7 @@ func TestReadRefusesTampering(t *testing.T) {
 		"secret store":  func(f map[string]string) { f["secret.key"] = "x" },
 		"no manifest":   func(f map[string]string) { delete(f, "manifest.json") },
 		"newer format": func(f map[string]string) {
-			f["manifest.json"] = strings.Replace(f["manifest.json"], `"format": 1`, `"format": 2`, 1)
+			f["manifest.json"] = strings.Replace(f["manifest.json"], `"format": 1`, `"format": 3`, 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

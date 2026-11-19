@@ -270,6 +270,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus
 	a.Web.Pin = a.Engine.PinWebMessage
+	a.Web.Remember = a.Engine.RememberWebMessage
 	a.Web.OIDC = a.oidcLogin(ctx)
 	a.Web.Household = a.Engine
 	a.Web.Admin = a.Engine
@@ -636,6 +637,9 @@ func (a *App) maintenance(ctx context.Context) {
 			a.Log.Error("sweep memories", "err", err)
 		} else if n > 0 {
 			a.Log.Info("expired memories removed", "count", n)
+			// In the activity log too: doctor's memory check then knows
+			// counts changed since a migration for a good reason.
+			_ = a.DB.LogActivity(ctx, store.Activity{Level: "info", Kind: "memory", Summary: fmt.Sprintf("%d expired memories removed for good", n)})
 		}
 		if _, err := a.DB.PruneMessages(ctx, a.Cfg.MessageRetention); err != nil {
 			a.Log.Error("prune messages", "err", err)

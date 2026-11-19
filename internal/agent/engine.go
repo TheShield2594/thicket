@@ -106,14 +106,20 @@ type Engine struct {
 	activity sync.Map // sprig id -> *busy (for live avatar state)
 	// pendingPkgs: user id -> *pendingPackages (sprig packages sent in chat)
 	pendingPkgs sync.Map
-	linkMu      sync.Mutex
-	links       map[string]linkCode    // code -> pending link
-	linkFails   map[string][]time.Time // channel:user -> failed attempts
+	// rememberAsks: user id -> rememberAsk ("just for you, or for the
+	// family?" waiting for an answer)
+	rememberAsks sync.Map
+	linkMu       sync.Mutex
+	links        map[string]linkCode    // code -> pending link
+	linkFails    map[string][]time.Time // channel:user -> failed attempts
 }
 
 func (e *Engine) AddChannel(c channel.Channel) {
 	if w, ok := c.(channel.DeleteWatcher); ok {
 		w.OnDelete(e.HandleDeleted)
+	}
+	if w, ok := c.(channel.ReactionWatcher); ok {
+		w.OnReaction(e.HandleReaction)
 	}
 	e.chanMu.Lock()
 	defer e.chanMu.Unlock()
@@ -219,8 +225,9 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 	_ = e.DB.TouchUser(ctx, user.ID)
 	// Proactive messages go to the app the user last wrote from (never
-	// to an internal channel like the API, which can't receive them).
-	if in.UserRef == 0 && (user.Channel != in.Channel || user.ExternalID != in.UserID) {
+	// to an internal channel like the API, which can't receive them), so
+	// each chat app account keeps when it was last used (presence.go).
+	if in.UserRef == 0 {
 		_ = e.DB.UseIdentity(ctx, user.ID, in.Channel, in.UserID)
 	}
 	// A stop request comes before the rate limit: someone sending a burst
@@ -631,16 +638,16 @@ func (e *Engine) sendNotice(ctx context.Context, u *store.User, c *character.Cha
 }
 
 func (e *Engine) deliverToUser(ctx context.Context, u *store.User, c *character.Character, text string, takeOver bool) error {
-	ch := e.channelFor(u.Channel)
-	if ch == nil {
-		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
-	}
 	text = e.Secrets.Redact(text)
-	chatID, err := ch.SendDirect(ctx, u.ExternalID, e.persona(c), text)
+	// Where the person wants to be reached, falling back to their other
+	// apps (presence.go).
+	ref, err := e.directTo(ctx, u, c, text)
 	if err != nil {
 		return err
 	}
-	ref := u.Channel + ":" + chatID
+	if takeOver { // a sprig reaching out, not an operational notice
+		defer e.suggestChatApp(ctx, u, ref)
+	}
 	if takeOver {
 		e.active.Store(ref, c.ID)
 	}

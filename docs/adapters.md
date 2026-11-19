@@ -39,6 +39,7 @@ Optional interfaces add features when the platform supports them:
 |---|---|
 | `channel.Poster` (`SendIDs`) | the ids of what a send posted, so "delete that" and pins work on sprig replies |
 | `channel.DeleteWatcher` (`OnDelete`) | deleting a message in the app deletes it from Thicket's history |
+| `channel.ReactionWatcher` (`OnReaction`) | reactions as one-tap commands: 🧠, 📌 or ✍ on a message remembers it |
 | `channel.Identity` (`Bot`) | the bot's name and "add me" link, shown when it's connected in chat |
 | `channel.Checker` (`Check`) | test a token without connecting, so a bad one is refused before anything changes |
 

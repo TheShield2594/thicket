@@ -134,10 +134,12 @@ func (s *Store) CreateUser(ctx context.Context, channel, ext, name, role string)
 type Identity struct {
 	Channel    string
 	ExternalID string
+	// LastSeenAt is when they last wrote from it (zero if never).
+	LastSeenAt time.Time
 }
 
 func (s *Store) Identities(ctx context.Context, userID int64) ([]Identity, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT channel, external_id FROM identities WHERE user_id = ? ORDER BY id", userID)
+	rows, err := s.db.QueryContext(ctx, "SELECT channel, external_id, last_seen_at FROM identities WHERE user_id = ? ORDER BY id", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +147,11 @@ func (s *Store) Identities(ctx context.Context, userID int64) ([]Identity, error
 	var out []Identity
 	for rows.Next() {
 		var i Identity
-		if err := rows.Scan(&i.Channel, &i.ExternalID); err != nil {
+		var seen sql.NullInt64
+		if err := rows.Scan(&i.Channel, &i.ExternalID, &seen); err != nil {
 			return nil, err
 		}
+		i.LastSeenAt = timeOf(seen)
 		out = append(out, i)
 	}
 	return out, rows.Err()

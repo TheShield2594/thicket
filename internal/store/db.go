@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -142,12 +143,38 @@ func loadMigrations() ([]migration, error) {
 		out = append(out, migration{v, name, string(b)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	injectedMu.Lock()
+	for i, q := range injected {
+		v := len(out) + 1
+		out = append(out, migration{v, fmt.Sprintf("%04d_injected_%d.sql", v, i+1), q})
+	}
+	injectedMu.Unlock()
 	for i, m := range out {
 		if m.version != i+1 {
 			return nil, fmt.Errorf("migrations must be numbered 1..n without gaps; found %s at position %d", m.name, i+1)
 		}
 	}
 	return out, nil
+}
+
+var (
+	injectedMu sync.Mutex
+	injected   []string
+)
+
+// InjectMigration adds a migration after the ones this binary carries,
+// until the returned function is called. It exists for tests of what
+// happens when a migration goes wrong (doctor's memory check, `thicket
+// update` rolling back); nothing else calls it.
+func InjectMigration(sqlText string) (remove func()) {
+	injectedMu.Lock()
+	defer injectedMu.Unlock()
+	injected = append(injected, sqlText)
+	return func() {
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		injected = injected[:0]
+	}
 }
 
 // SchemaVersion returns the current applied schema version.

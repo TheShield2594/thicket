@@ -36,6 +36,16 @@ type fakeChannel struct {
 	failIf   func(text string) bool
 	posted   int // ids handed out by SendIDs
 	onDelete func(ctx context.Context, d channel.Deletion)
+	onReact  func(ctx context.Context, r channel.Reaction)
+}
+
+func (f *fakeChannel) OnReaction(fn func(ctx context.Context, r channel.Reaction)) { f.onReact = fn }
+
+// lastPost is the id SendIDs handed out last.
+func (f *fakeChannel) lastPost() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fmt.Sprintf("out-%d", f.posted)
 }
 
 // SendIDs is Send, naming each post "out-N" (like a chat app's ids).
@@ -406,6 +416,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("mcp_ha__get_state", map[string]any{"entity": "light.kitchen"}), nil
 	case strings.Contains(u, "what needs me"):
 		return toolCall("needs_you", map[string]any{}), nil
+	case strings.HasPrefix(u, "reach me on "):
+		// "reach me on APP" or "reach me on APP for SPRIG"
+		app, sprig, _ := strings.Cut(strings.TrimPrefix(u, "reach me on "), " for ")
+		return toolCall("set_reach", map[string]any{"app": strings.TrimSpace(app), "sprig": strings.TrimSpace(sprig)}), nil
 	case strings.Contains(u, "what do you remember"):
 		return toolCall("list_memories", map[string]any{}), nil
 	case strings.HasPrefix(u, "forget memory "):

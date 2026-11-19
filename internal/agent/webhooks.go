@@ -66,11 +66,7 @@ func (e *Engine) sendHookURL(ctx context.Context, u *store.User, c *character.Ch
 	fmt.Fprintf(&b, "POST anything to it (JSON or text, up to %d KB) and the task runs with that as its input. For example:\n", MaxWebhookPayload>>10)
 	fmt.Fprintf(&b, "```\ncurl -X POST -H 'Content-Type: application/json' -d '{\"event\":\"test\"}' %s\n```\n", url)
 	b.WriteString("Keep it private: anyone with the URL can trigger the job. If it leaks, ask for a new URL and the old one stops working.")
-	ch := e.channelFor(u.Channel)
-	if ch == nil {
-		return fmt.Errorf("no channel %q for user %d", u.Channel, u.ID)
-	}
-	_, err := ch.SendDirect(ctx, u.ExternalID, e.persona(c), b.String())
+	_, err := e.directTo(ctx, u, c, b.String())
 	return err
 }
 

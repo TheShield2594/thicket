@@ -143,6 +143,19 @@ history as a block after the summary (1,500 characters each, 6,000 in
 all, taken from the history budget). Pins are conversation-scoped: a new
 conversation starts with none.
 
+"Remember this" (`agent/remember.go`) is matched the same way, before
+the pin commands: a reply, the newest message, or the text after
+"remember this:" becomes a locked memory with `source = user`
+("<name> said: “…”"), never through the model. A reaction
+(`channel.ReactionWatcher`: Discord's `MessageReactionAdd`, Telegram's
+`message_reaction` update, which is polled only when someone listens) or
+the web app's button (`POST /api/chats/{chat}/messages/{id}/remember`)
+do the same for the message they're on. The sprig's confirmation is sent
+with `SendIDs` and its ids are kept in `remember_acks`, so "forget this"
+in reply to it deletes the memory. In a family sprig's chat an adult is
+asked "just for you, or for the family?" once (a `notices` claim); the
+answer is `users.remember_scope`.
+
 ## Memory
 
 - Written directly when a sprig calls `remember` (memories the user asked
@@ -161,8 +174,11 @@ conversation starts with none.
   is "shared" (every sprig that person talks to), a sprig id is between
   that person and that sprig, and `household` marks family memory, which
   family sprigs see with every adult (and kid sprigs a parent allowed).
-  Family memory is only created by `remember` with scope `family`; the
-  background review never creates it.
+  Family memory is created by `remember` with scope `family`, and by the
+  background review of a conversation between an adult and family sprigs
+  only (`Reviewer.familyConversation`): then the review sees family memory
+  as scope `family`, may propose `family` adds, and de-duplicates them
+  against family memory. Kid and solo sprig conversations never write it.
   The prompt labels each memory `shared`, `yours` or `family`.
 
 ## Webhook jobs
@@ -496,8 +512,17 @@ contain the token (Telegram's file URLs do).
 
 A user can have several identities, one per app account
 (`identities` table). `UserByExternal` resolves any of them;
-`users.channel/external_id` hold the one the user last wrote from, which
-is where proactive messages go. Linking uses a one-time code issued by
+`users.channel/external_id` hold the one the user last wrote from, and
+each identity keeps its own `last_seen_at`. Proactive messages
+(`deliverToUser`, `dmAs`) go through `directTo` (`agent/presence.go`),
+which tries the person's accounts in order: the app they chose with
+`set_reach` (`reach_prefs`: `character = ''` for every sprig, a sprig id
+to override it), then the last-used account if it's a phone app
+(Telegram, Discord), then other phone apps by recency, then the rest
+(the web app). A failed send moves on to the next; only when all fail
+does the caller fall back to the inbox. A web-only person is told once
+(a `notices` claim) that linking a chat app would bring these to their
+phone. Linking uses a one-time code issued by
 `link_account` (DMed by code, held in memory for 15 minutes) and redeemed
 by DMing it from the new account. `LinkIdentity` never merges two
 histories and never changes a role: an account with its own memories,

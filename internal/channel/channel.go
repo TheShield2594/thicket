@@ -121,3 +121,22 @@ type Identity interface {
 type Checker interface {
 	Check(ctx context.Context) error
 }
+
+// Reaction is an emoji someone added to a message in a chat app.
+type Reaction struct {
+	Channel   string
+	ChatID    string
+	MessageID string
+	UserID    string // channel-specific user id
+	Emoji     string
+	IsDM      bool
+}
+
+// ChatRef is the reaction's channel-qualified chat id.
+func (r Reaction) ChatRef() string { return r.Channel + ":" + r.ChatID }
+
+// ReactionWatcher is implemented by channels that hear about reactions
+// (Discord and Telegram), for one-tap commands like "remember this".
+type ReactionWatcher interface {
+	OnReaction(func(ctx context.Context, r Reaction))
+}

@@ -12,6 +12,7 @@ broken:
 ```
 [ok  ] config           required settings present
 [ok  ] database         schema v10, integrity ok
+[ok  ] memory           212 memories; by person: Sam 180, Kim 32; by sprig: Pip 41, Fern 12
 [ok  ] secrets          all stored secrets decrypt
 [ok  ] model server     OpenRouter reachable, key accepted
 [ok  ] discord token    valid, bot thicket
@@ -22,6 +23,14 @@ broken:
 [ok  ] live scheduler   last tick 2026-11-16T19:44:10Z
 ```
 
+- **memory**: counts memories per person and per sprig, and fails if
+  any belong to a person who no longer exists, or a memory someone set
+  ("remember this") isn't locked any more. Memories of a sprig whose file
+  is gone are listed, not failed. Straight after a migration, while
+  Thicket hasn't run since, it also compares with the `.pre-vN` snapshot
+  the migration took: a layer with fewer memories (or fewer locked ones)
+  fails the check and is named, e.g. `lost in the migration to v21:
+  Pip's memories of Sam: 2 of 5 missing`.
 - **model server**: `GET /models` on the configured server, and on
   OpenRouter, the stored key checked against `/key`.
 - **discord token / telegram token**: one REST call each (`/users/@me`,
@@ -356,7 +365,8 @@ starting it. The command:
    format as `thicket backup`.
 3. Applies the migrations.
 4. Runs the doctor's checks. The ones about your data (configuration,
-   database integrity, stored secrets) decide the outcome; a model server
+   database integrity, memory, stored secrets) decide the outcome, so a
+   migration that drops or unlocks memories is rolled back; a model server
    or chat app that can't be reached is shown as a warning and doesn't
    undo anything.
 

@@ -174,8 +174,12 @@ your sessions under the key button or on the dashboard.
 Your web account *is* your Discord account when you sign in through a
 link from Discord or as the owner, so sprigs remember the same things in
 both places. Proactive messages (follow-ups, routine results, alerts) go
-to where your account lives: Discord for Discord users, the sprig's thread
-for web-only users.
+to the chat app you last wrote from, preferring Telegram or Discord over
+the web app when you have both; say "reach me on Telegram" to choose (for
+every sprig, or one). If that app fails, your other linked apps are
+tried. Web-only users get them in the sprig's thread (with a browser
+notification if turned on), and Juni mentions once that a chat app would
+bring them to their phone.
 
 To use it away from home, put it behind a reverse proxy with HTTPS and set
 `THICKET_PUBLIC_URL` so links point at the right address. Sessions last 30
@@ -290,6 +294,13 @@ cookies (`Secure` over HTTPS).
   to 10 pins). **What's pinned?**, **unpin this** and **unpin all** do what
   they say. Pins end with the conversation; for anything longer, ask a
   sprig to remember it.
+- Remember what matters for good: reply to any message with **remember
+  this** (or say **remember this: …**), react with 🧠 or 📌 on Discord or
+  ✍ on Telegram, or tap the brain button in the web app. It becomes a
+  locked memory you set, without the sprig having to decide; reply
+  **forget this** to the sprig's confirmation to undo it. In a family
+  sprig's chat you're asked once whether these are just yours or the
+  family's; kids' always stay their own.
 - Take things back: reply to a message with **forget this** and it's gone
   from the conversation sprigs see (a sprig's message is deleted from the
   chat too). **Delete that** deletes the sprig's last message. Deleting
@@ -375,7 +386,8 @@ one by one: `thicket memory runs`, then `thicket memory rollback RUN_ID`
 Share a sprig with `thicket export-sprig pip`: one `pip.sprig` file with
 its character, routines, the skills it uses, avatar and voice tests. Add
 someone else's with `thicket import-sprig pip.sprig`, or send the file to
-Juni in chat. Memories, secrets and chats never travel with a sprig;
+Juni in chat. Secrets and chats never travel with a sprig, and memories
+only when you add `--memories` (for moving a sprig to a new Thicket);
 imported sprigs start at draft and lose integration and admin access until
 you grant it. See [Sharing a sprig](docs/characters.md#sharing-a-sprig).
 

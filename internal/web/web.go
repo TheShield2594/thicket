@@ -73,6 +73,10 @@ type Adapter struct {
 	// Pin pins or unpins the conversation message behind a web message,
 	// returning what to tell the user (the engine's PinWebMessage).
 	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)
+	// Remember keeps the conversation message behind a web message as a
+	// locked memory, returning what the sprig said (the engine's
+	// RememberWebMessage).
+	Remember func(ctx context.Context, userID int64, chatRef, platformID string) (string, error)
 	// OIDC is the single sign-on provider, if one is configured.
 	OIDC *OIDCLogin
 	// For API v2: the engine's household operations, the calendar, kid
@@ -340,6 +344,7 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chats/{chat}/messages", a.auth(a.post))
 	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
 	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
+	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/remember", a.auth(a.rememberMessage))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
 	// The calendar and kid chats screens (same handlers as API v2).
 	mux.HandleFunc("GET /api/calendar", a.auth(a.v2Calendar))
@@ -771,6 +776,30 @@ func (a *Adapter) pinMessage(w http.ResponseWriter, r *http.Request, u *store.Us
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pinned": m.Pinned, "note": note})
+}
+
+// rememberMessage keeps a message as a locked memory ("remember this").
+func (a *Adapter) rememberMessage(w http.ResponseWriter, r *http.Request, u *store.User) {
+	chatID := r.PathValue("chat")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	if a.Remember == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remembering isn't available")
+		return
+	}
+	if _, err := a.DB.WebMessageByID(r.Context(), chatID, id); err != nil {
+		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	note, err := a.Remember(r.Context(), u.ID, ChannelName+":"+chatID, strconv.FormatInt(id, 10))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "couldn't remember it")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"note": note})
 }
 
 func (a *Adapter) events(w http.ResponseWriter, r *http.Request, u *store.User) {

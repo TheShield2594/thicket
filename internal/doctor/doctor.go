@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
@@ -42,6 +44,9 @@ type Doctor struct {
 	// ServerURL is the running server's base URL; empty means
 	// http://127.0.0.1<THICKET_HTTP_ADDR>.
 	ServerURL string
+	// DataOnly checks only the data (config, database, memory, secrets),
+	// with no network calls.
+	DataOnly bool
 }
 
 func (d *Doctor) client() *http.Client {
@@ -77,6 +82,7 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	} else {
 		add(Check{Name: "database", OK: true, Detail: fmt.Sprintf("schema v%d, integrity ok", ver)})
 	}
+	add(d.Memory(ctx, db))
 
 	red := secrets.NewRedactor()
 	red.Add(d.Cfg.ModelAPIKey)
@@ -106,6 +112,9 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 		d.Cfg = &cfg
 	}
 
+	if d.DataOnly {
+		return out
+	}
 	add(d.model(ctx, settings.New(db, d.Cfg), sec, red))
 	if d.Cfg.DiscordToken != "" {
 		add(d.discord(ctx, red))
@@ -311,4 +320,105 @@ func (d *Doctor) server(ctx context.Context) []Check {
 		out = append(out, Check{Name: "live " + strings.TrimPrefix(n, "channel."), OK: c.OK, Optional: c.Optional, Detail: detail})
 	}
 	return out
+}
+
+// Memory checks that memory survived: counts per person and sprig, no
+// memories of people who no longer exist, every memory a person set still
+// locked, and, right after a migration, nothing lost compared with the
+// snapshot taken before it. A drop fails the check and names the layer.
+func (d *Doctor) Memory(ctx context.Context, db *store.Store) Check {
+	c := Check{Name: "memory"}
+	now, err := db.MemoryCensus(ctx)
+	if err != nil {
+		c.Detail = "couldn't count memories: " + err.Error()
+		return c
+	}
+	reg := character.NewRegistry(d.Cfg.CharactersDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_ = reg.Load()
+	name := func(id string) string {
+		if ch, ok := reg.Get(id); ok {
+			return ch.DisplayName()
+		}
+		return id
+	}
+	var problems, notes []string
+	if now.OrphanUsers > 0 {
+		problems = append(problems, fmt.Sprintf("%d memories belong to people who no longer exist", now.OrphanUsers))
+	}
+	if now.Unlocked > 0 {
+		problems = append(problems, fmt.Sprintf("%d memories a person set are no longer locked", now.Unlocked))
+	}
+	sprigs := now.SprigsWithMemories()
+	ids := make([]string, 0, len(sprigs))
+	for id := range sprigs {
+		if _, ok := reg.Get(id); !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		// A sprig file removed by hand leaves its memories behind: worth
+		// knowing, not a failure (the migration comparison below catches
+		// a migration that moved them).
+		notes = append(notes, fmt.Sprintf("%d memories belong to sprig %q, which has no character file", sprigs[id], id))
+	}
+	if n, err := d.compareSnapshot(ctx, db, now, name); err != nil {
+		notes = append(notes, "couldn't compare with the pre-migration snapshot: "+err.Error())
+	} else {
+		problems = append(problems, n.lost...)
+		if n.note != "" {
+			notes = append(notes, n.note)
+		}
+	}
+	c.OK = len(problems) == 0
+	parts := append(problems, now.Summary(name))
+	c.Detail = strings.Join(append(parts, notes...), "; ")
+	return c
+}
+
+type snapshotResult struct {
+	lost []string
+	note string
+}
+
+// compareSnapshot compares memory with the snapshot taken before the
+// latest migration, while Thicket hasn't been used since (people forget
+// memories in ordinary use, which isn't a loss).
+func (d *Doctor) compareSnapshot(ctx context.Context, db *store.Store, now *store.MemoryCensus, name func(string) string) (snapshotResult, error) {
+	var res snapshotResult
+	applied, err := db.AppliedMigrations(ctx)
+	if err != nil || len(applied) == 0 {
+		return res, err
+	}
+	last := applied[len(applied)-1]
+	snaps, _ := filepath.Glob(db.Path() + ".pre-v" + strconv.Itoa(last.Version) + ".*.bak")
+	if len(snaps) == 0 {
+		return res, nil
+	}
+	sort.Strings(snaps) // the stamp sorts by time
+	snap := snaps[len(snaps)-1]
+	used, err := db.UsedSince(ctx, last.AppliedAt.Unix())
+	if err != nil {
+		return res, err
+	}
+	if used {
+		res.note = fmt.Sprintf("Thicket has run since the migration to v%d, so memory is compared with its snapshot only straight after a migration", last.Version)
+		return res, nil
+	}
+	old, err := store.OpenSnapshot(ctx, snap)
+	if err != nil {
+		return res, err
+	}
+	defer old.Close()
+	before, err := old.MemoryCensus(ctx)
+	if err != nil {
+		return res, err
+	}
+	for _, l := range store.MemoryLoss(before, now, name) {
+		res.lost = append(res.lost, fmt.Sprintf("lost in the migration to v%d: %s", last.Version, l))
+	}
+	if len(res.lost) == 0 {
+		res.note = fmt.Sprintf("all %d memories from before the migration to v%d are there", before.Total(), last.Version)
+	}
+	return res, nil
 }

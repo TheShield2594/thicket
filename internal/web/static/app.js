@@ -83,6 +83,7 @@ const ICONS = {
   sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2 2M15 8l2 2"/>',
   pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
+  brain: '<path d="M9.5 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 5.5 1.5V5.5A2.5 2.5 0 0 0 9.5 4z"/><path d="M14.5 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-5.5 1.5"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
   clip: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
@@ -1471,6 +1472,7 @@ function messageEl(m, cont, animate) {
       'aria-label': m.pinned ? 'Unpin message' : 'Pin message', 'aria-pressed': m.pinned ? 'true' : 'false',
       onclick: () => togglePin(m),
     }, icon('pin')),
+    h('button.msg-act', { title: 'Remember: keep it as a memory, for good', 'aria-label': 'Remember this message', onclick: () => rememberMessage(m) }, icon('brain')),
     h('button.msg-act', { title: 'Delete: remove it here and from what sprigs remember of this conversation', 'aria-label': 'Delete message', onclick: () => deleteMessage(m) }, icon('trash')));
   const pinMark = m.pinned && h('span.pin-mark', { title: 'Pinned for this conversation' }, icon('pin'));
   if (m.role === 'user') {
@@ -1496,6 +1498,13 @@ async function togglePin(m) {
     if (!changed && r.note) toast(r.note);
     else toast(m.pinned ? 'Pinned for the rest of this conversation' : 'Unpinned');
   } catch (e) { toast('Couldn’t change the pin: ' + e.message); }
+}
+
+async function rememberMessage(m) {
+  try {
+    const r = await api(`/api/chats/${encodeURIComponent(m.chat)}/messages/${m.id}/remember`, { method: 'POST' });
+    toast(r.note || 'Remembered');
+  } catch (e) { toast('Couldn’t remember it: ' + e.message); }
 }
 
 async function deleteMessage(m) {
