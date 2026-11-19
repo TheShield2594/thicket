@@ -94,6 +94,8 @@ type Adapter struct {
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration
+	// Memories serves the memory screen (the engine).
+	Memories MemoryKeeper
 
 	onDelete func(ctx context.Context, d channel.Deletion)
 
@@ -354,6 +356,7 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/calendar/outputs/{id}", a.auth(a.v2RemoveOutput))
 	mux.HandleFunc("GET /api/kid-sprigs/{id}/chats", a.auth(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/kid-sprigs/{id}/access", a.auth(a.v2KidAccess))
+	a.memoryRoutes(mux, "/api", a.auth)
 	return securityHeaders(mux)
 }
 

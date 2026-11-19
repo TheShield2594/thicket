@@ -275,6 +275,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.Web.Household = a.Engine
 	a.Web.Admin = a.Engine
 	a.Chars.OnLoad(a.Web.RosterChanged)
+	a.Web.Memories = a.Engine
 	a.Web.Calendar = a.Calendar
 	a.Web.BaseURL = cfg.WebBaseURL()
 	a.Web.Joined = a.Engine.WebJoined
@@ -309,7 +310,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			}
 			return a.Engine.Resume(ctx, u, sprig, "from the dashboard")
 		},
-		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {

@@ -40,7 +40,21 @@ var signInTmpl = template.Must(template.New("signin").Parse(`<!doctype html><htm
 <p class="muted small">No password yet? Ask Juni for a web app link ("send me a web app link"), or run <code>thicket web link</code> on the server.</p>
 </section></main></body></html>`))
 
-var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+// memTmpl is one memory on the memory screen: edit, lock, undo, delete.
+const memTmpl = `{{define "mem"}}{{$p := .Page}}{{with .Mem}}<li>{{.Content}} <span class="tag">{{.Kind}}</span>{{if .Person}}<span class="tag">{{.Person}}</span>{{end}}{{if .Locked}}<span class="tag" title="Automatic review never changes it">kept as you said</span>{{end}}{{if .Due}}<span class="tag">follow up {{.Due}}</span>{{end}}
+<br><span class="muted small">From {{.From}} · {{.When}}</span>
+<div class="actions"><details><summary class="small">Edit</summary><form method="post" action="/dashboard/act" class="actions"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="kind" value="memory"><input type="hidden" name="id" value="{{.ID}}">
+<input name="content" maxlength="300" required value="{{.Content}}" aria-label="Memory"><select name="mkind" aria-label="Kind">{{$k := .Kind}}{{range $p.MemKinds}}<option value="{{.}}"{{if eq . $k}} selected{{end}}>{{.}}</option>{{end}}</select><button class="primary" name="action" value="edit">Save</button></form></details>
+<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="kind" value="memory"><input type="hidden" name="id" value="{{.ID}}">{{if .Locked}}<button name="action" value="unlock" title="Let the automatic review update it">Unlock</button>{{else}}<button name="action" value="lock" title="Keep it as it is: the automatic review won't change it">Lock</button>{{end}}{{if .Undoable}} <button name="action" value="undo">Undo</button>{{end}} <button name="action" value="delete">Delete</button></form></div></li>{{end}}{{end}}`
+
+type memArgsT struct {
+	Page *pageData
+	Mem  memView
+}
+
+var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
+	"memArgs": func(p *pageData, m memView) memArgsT { return memArgsT{p, m} },
+}).Parse(memTmpl + `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="thicket-csrf" content="{{.CSRF}}"><title>Thicket</title>` + style + `<style>{{.AvatarCSS}}</style></head>
 <body><main>
 <header><h1>🌱 Thicket</h1>
@@ -85,10 +99,19 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <table>{{range .Trail}}<tr><td class="small muted" style="white-space:nowrap">{{.At}}</td><td>{{if .Sprig}}<span class="tag">{{.Sprig}}</span>{{end}}<span class="tag">{{.Kind}}</span></td><td class="{{.Level}}">{{.Summary}}</td></tr>{{else}}<tr><td class="muted">Nothing yet.</td></tr>{{end}}</table></section>
 
 <section id="memories"><h2>What they remember about you <span class="muted small">({{.MemCount}})</span></h2>
-{{range .MemGroup}}<h3>{{.Title}}</h3><ul class="plain">{{range .Memories}}
-<li>{{.Content}} <span class="tag">{{.Kind}}</span>{{if .Locked}}<span class="tag" title="You set this; automatic review never changes it">kept as you said</span>{{end}}{{if .Due}}<span class="tag">follow up {{.Due}}</span>{{end}}</li>{{end}}
-</ul>{{else}}<p class="muted">Nothing yet.</p>{{end}}
-<p class="muted small">Say "forget that" to a sprig to remove something.</p></section>
+<p class="muted small">Facts are what sprigs know about you. Relationship memory is how things are going with each sprig: how you like it to talk to you, what landed, what annoyed you. Sprigs use your changes from their next reply. Edits are kept as you wrote them (locked) and can be undone; deleting forgets for good.</p>
+{{range .MemBlocks}}{{if .Title}}<h3>{{.Title}}</h3><p class="muted small">{{.Note}}</p>{{end}}
+<h3>Relationship</h3>{{range .Rel}}<h4 class="small">{{.Title}}</h4><ul class="plain">{{range .Memories}}{{template "mem" (memArgs $ .)}}{{end}}</ul>{{else}}<p class="muted small">Nothing yet.</p>{{end}}
+<h3>Facts</h3>{{range .Facts}}<h4 class="small">{{.Title}}</h4><ul class="plain">{{range .Memories}}{{template "mem" (memArgs $ .)}}{{end}}</ul>{{else}}<p class="muted small">Nothing yet.</p>{{end}}
+<details><summary class="small">Add a memory</summary>
+<form method="post" action="/dashboard/act" class="actions"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="memory">
+{{if .Sprig}}<input type="hidden" name="sprig" value="{{.Sprig}}">{{else}}<label class="small">With <select name="sprig">{{range .Sprigs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>{{end}}
+{{if .Kids}}<label class="small">About <select name="person">{{range .Kids}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>{{end}}
+<label class="small">Kind <select name="mkind">{{range $.MemKinds}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+<input name="content" maxlength="300" required placeholder="Prefers short answers, no emoji." aria-label="Memory">
+<button class="primary" name="action" value="add">Add</button></form>
+<p class="muted small">tone, likes, dislikes, inside_joke and shared_history are relationship memory: pick the sprig it's with.</p></details>
+{{end}}</section>
 
 <section id="jobs"><h2>Jobs</h2>
 {{range .Jobs}}<h3>#{{.ID}} {{.Name}} <span class="tag">{{.When}}</span><span class="tag">{{.Sprig}}</span>{{if not .Enabled}}<span class="tag warn">paused</span>{{end}}</h3>

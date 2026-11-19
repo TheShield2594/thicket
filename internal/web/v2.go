@@ -79,6 +79,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/kid-sprigs", a.bearer(a.v2CreateKidSprig))
 	mux.HandleFunc("GET /api/v2/kid-sprigs/{id}/chats", a.bearer(a.v2KidChats))
 	mux.HandleFunc("PATCH /api/v2/kid-sprigs/{id}/access", a.bearer(a.v2KidAccess))
+	// Memory: facts and relationship memory, yours or a kid sprig's you set up.
+	a.memoryRoutes(mux, "/api/v2", a.bearer)
 	return mux
 }
 

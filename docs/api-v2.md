@@ -56,6 +56,30 @@ Replies arrive on the event stream (or poll the history).
 | `DELETE /api/v2/calendars/{id}` | disconnect one of yours |
 | `DELETE /api/v2/calendar/outputs/{event_id}` | take a sprig output off the calendar: your own, or a shared one (adults). Items the person may remove have `"removable": true`. Returns `{"title", "trail_id"}`; undo the trail entry to put it back |
 
+## Memory
+
+What sprigs remember about the signed-in person, **facts** apart from
+**relationship** memory (how things are going with one sprig: `tone`,
+`likes`, `dislikes`, `inside_joke`, `shared_history`). Sprigs use a
+change from their next reply.
+
+| | |
+|---|---|
+| `GET /api/v2/memories` | `{"facts": [...], "relationship": [...]}`. `?sprig=juniper` narrows to the shared layer and that sprig's own; for a kid sprig you set up, `?sprig=bramble` shows what it remembers about its kids (403 for anyone else) |
+| `POST /api/v2/memories` | `{"sprig": "juniper", "kind": "tone", "content": "Prefers short answers, no emoji."}`. `sprig` `""` is shared with every sprig (facts only); relationship kinds need a sprig. Parents add to a kid sprig's with its id (and `"person": KID_ID` if it has several kids). Locked unless `"locked": false`; `followup` isn't offered |
+| `PATCH /api/v2/memories/{id}` | `{"content": "…", "kind": "likes"}`: locks it too unless `"locked": false` |
+| `PUT /api/v2/memories/{id}/lock` | `{"locked": true}`: the memory review never changes a locked memory |
+| `POST /api/v2/memories/{id}/undo` | undo the newest change made here (an edit, a lock, or adding it); again to go further back. `{"memory": null}` when it undid the add |
+| `DELETE /api/v2/memories/{id}` | forget it for good, history and all: not undoable |
+
+Each memory is `{"id", "group": "facts" \| "relationship", "kind",
+"content", "scope": "shared" \| "sprig", "sprig", "sprig_name", "person",
+"person_name" (when it isn't yours), "locked", "from" (who it came from,
+in words: "memory review", "Juni, in chat", "you", a name), "origin",
+"due_at", "created_at", "updated_at", "undoable"}`. Someone else's memory
+is a 404, as if it didn't exist. Family memory isn't here: it changes
+through family sprigs. The web app uses the same endpoints under `/api/`.
+
 ## Household
 
 | | |

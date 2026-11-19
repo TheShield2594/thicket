@@ -22,7 +22,52 @@ import (
 var Kinds = map[string]bool{
 	"fact": true, "preference": true, "person": true, "project": true,
 	"inside_joke": true, "shared_history": true, "followup": true, "context": true,
+	"tone": true, "likes": true, "dislikes": true,
 }
+
+// Relationship kinds are how the relationship between one sprig and one
+// person is going, apart from facts about the person: how they like to be
+// spoken to (tone), what lands with them (likes), what annoyed them
+// (dislikes), in-jokes and shared moments. They always belong to one
+// sprig, never the shared layer or family memory, and prompts use them as
+// "how to be with this person", not as facts to recite.
+var Relationship = map[string]bool{
+	"tone": true, "likes": true, "dislikes": true, "inside_joke": true, "shared_history": true,
+}
+
+// Group names for the memory screen.
+const (
+	GroupFacts        = "facts"
+	GroupRelationship = "relationship"
+)
+
+// GroupOf is the memory screen group a kind belongs to.
+func GroupOf(kind string) string {
+	if Relationship[kind] {
+		return GroupRelationship
+	}
+	return GroupFacts
+}
+
+// Split separates relationship memories from the rest.
+func Split(mems []store.Memory) (facts, rel []store.Memory) {
+	for _, m := range mems {
+		if Relationship[m.Kind] {
+			rel = append(rel, m)
+		} else {
+			facts = append(facts, m)
+		}
+	}
+	return facts, rel
+}
+
+// CleanContent normalises a memory's text and refuses empty, overlong or
+// credential-like content.
+func CleanContent(s string) (string, error) { return cleanContent(s) }
+
+// NormKind normalises a kind as the review does ("Inside joke" →
+// "inside_joke"; empty → "fact").
+func NormKind(k string) string { return normKind(k) }
 
 const (
 	MaxContent    = 300
@@ -39,6 +84,9 @@ type Op struct {
 	Kind    string `json:"kind,omitempty"`
 	Content string `json:"content,omitempty"`
 	Due     string `json:"due,omitempty"` // followup: YYYY-MM-DD or YYYY-MM-DDTHH:MM
+	// Rel marks an op the review proposed under "relationship": its adds
+	// must be relationship kinds.
+	Rel bool `json:"-"`
 }
 
 type PlanInput struct {
@@ -107,6 +155,21 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 				p.Skipped = append(p.Skipped, fmt.Sprintf("add: unknown kind %q", op.Kind))
 				continue
 			}
+			if op.Rel && !Relationship[kind] {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("add: %q is a fact, not relationship memory", kind))
+				continue
+			}
+			if Relationship[kind] && char == "" {
+				// Relationship memory is between one sprig and one person,
+				// never shared or family memory.
+				household = false
+				if only := onlyScope(in.Scopes); only != "" {
+					char = only
+				} else {
+					p.Skipped = append(p.Skipped, fmt.Sprintf("add: %s is relationship memory; give the sprig's id as scope", kind))
+					continue
+				}
+			}
 			m := store.Memory{UserID: in.UserID, Character: char, Kind: kind, Content: content, Source: "auto", Household: household}
 			if kind == "followup" && household {
 				p.Skipped = append(p.Skipped, "add: follow-ups are private, not family memory")
@@ -174,6 +237,10 @@ func BuildPlan(in PlanInput, ops []Op) Plan {
 			if effective == "" {
 				effective = old.Kind
 			}
+			if Relationship[effective] && !Relationship[old.Kind] && (old.Character == "" || old.Household) {
+				p.Skipped = append(p.Skipped, fmt.Sprintf("update #%d: a shared memory can't become relationship memory", op.ID))
+				continue
+			}
 			if op.Due != "" {
 				due, err := parseDue(op.Due, in.Now, in.Loc)
 				if err != nil {
@@ -228,6 +295,22 @@ func expiryTransition(ch *store.MemoryChange, from, to string, now time.Time) {
 	case from == "context":
 		ch.SetExpiry, ch.Memory.ExpiresAt = true, time.Time{}
 	}
+}
+
+// onlyScope is the one character in scopes, or "" if there are none or
+// several.
+func onlyScope(scopes map[string]bool) string {
+	only := ""
+	for c, ok := range scopes {
+		if !ok {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = c
+	}
+	return only
 }
 
 func normKind(k string) string {
@@ -355,6 +438,8 @@ func findDuplicate(content, char string, household bool, among []store.Memory) *
 var kindWeight = map[string]float64{
 	"preference": 1.0, "fact": 1.0, "person": 0.9, "project": 0.9, "followup": 0.9,
 	"inside_joke": 0.6, "shared_history": 0.6, "context": 0.5,
+	// How they like to be spoken to matters in every reply.
+	"tone": 2.0, "dislikes": 1.5, "likes": 1.0,
 }
 
 // Select picks the memories most relevant to query for a prompt, within a

@@ -27,7 +27,8 @@ const S = {
   lastRead: load('thicket.read', {}),
   online: true,
   session: 0,          // bumped on sign-out; stale responses are dropped
-  view: null,          // 'calendar' or 'kid:<sprig id>' instead of chats
+  view: null,          // 'calendar', 'memory' or 'kid:<sprig id>' instead of chats
+  memSprig: '',        // the memory screen's sprig filter ('' = all)
   cal: { start: null, layers: load('thicket.cal.layers', { events: true, jobs: true, outputs: true }), hide: load('thicket.cal.hide', {}) },
 };
 
@@ -91,6 +92,7 @@ const ICONS = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  memory: '<path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
 };
 function icon(name, cls) {
@@ -852,6 +854,7 @@ function renderSidebar() {
       return h('button', { role: 'listitem', title: s.role, onclick: () => openChat(chatOf(id)) }, orb(s, 46), h('span', {}, s.name));
     })),
     h('div.sb-scroll', {},
+      !q && memoryRows(),
       !q && householdRows(),
       matches(ROOM) && [h('div.sb-label', {}, 'Rooms'), sprigRow(chatOf(ROOM))],
       ids.length > 0 && [h('div.sb-label', {}, h('span', {}, 'Sprigs'), h('span', {}, String(S.order.length))), ids.map((id) => sprigRow(chatOf(id)))],
@@ -1008,6 +1011,7 @@ function renderView() {
       viewHead('Set things up', 'Setup happens in chat', h('span.view-mark', { 'aria-hidden': 'true' }, icon('leaf'))),
       h('div.view-scroll', {}, h('div.view-inner', {}, setupIdeas())));
   }
+  if (S.view === 'memory') return renderMemory();
   const kid = (S.me.parent_of || []).find((k) => 'kid:' + k.id === S.view);
   if (kid) return renderKidChats(kid);
   return h('section.view', {}, h('div.view-scroll', {}, h('p.d-empty', {}, 'Nothing here.')));
@@ -1290,7 +1294,10 @@ function renderKidChats(kid) {
     viewHead(`${kid.name}’s chats`, `With ${names} · read only`, orb(kid, 38)),
     h('div.view-scroll', {}, h('div.view-inner', {},
       h('div.kid-note', {}, icon('shield'), h('p', {}, `You set up ${kid.name}, so you can read every chat. You won’t get routine notifications, only a safety alert if something worrying comes up. ${names} can’t delete these messages.`)),
-      kidAccess(kid), h('div.section-title', {}, h('h2', {}, 'Chats')), feed)));
+      kidAccess(kid),
+      h('div.section-title', {}, h('h2', {}, `What ${kid.name} remembers`), h('small', {}, `Stays between ${names} and ${kid.name}`)),
+      memoryPanel({ sprig: kid.id, kid }),
+      h('div.section-title', {}, h('h2', {}, 'Chats')), feed)));
   loadKidChats(kid, feed, 0, []);
   return el;
 }
@@ -1349,6 +1356,120 @@ function kidAccess(kid) {
   };
   render();
   return box;
+}
+
+// --- memory ---
+
+// Relationship kinds first: they're the point of this screen.
+const REL_KINDS = ['tone', 'likes', 'dislikes', 'inside_joke', 'shared_history'];
+const FACT_KINDS = ['fact', 'preference', 'person', 'project', 'context'];
+const KIND_LABELS = { tone: 'How to talk to me', likes: 'Likes', dislikes: 'Dislikes', inside_joke: 'In-joke', shared_history: 'Shared moment',
+  fact: 'Fact', preference: 'Preference', person: 'Person', project: 'Project', context: 'For now', followup: 'Follow-up' };
+
+function memoryRows() {
+  return [h('div.sb-label', {}, 'You'), viewRow('memory', 'Memory', 'What sprigs remember, and how things are going', icon('memory'))];
+}
+
+function renderMemory() {
+  const sprig = S.memSprig || '';
+  const el = h('section.view', { 'aria-label': 'Memory' },
+    viewHead('Memory', 'What your sprigs remember, and how things are going with each', h('span.view-mark', { 'aria-hidden': 'true' }, icon('memory'))),
+    h('div.view-scroll', {}, h('div.view-inner', {},
+      h('div.chips.left', { role: 'group', 'aria-label': 'Sprig' },
+        toggleChip('All sprigs', !sprig, () => { S.memSprig = ''; renderMain(); }),
+        S.order.map((id) => { const s = S.sprigs.get(id); return toggleChip(s.name, sprig === id, () => { S.memSprig = id; renderMain(); }, orb(s, 18)); })),
+      memoryPanel({ sprig }))));
+  return el;
+}
+
+// memoryPanel lists memories, relationship apart from facts, each one
+// editable, lockable, undoable and deletable. opts.kid: a kid sprig's
+// memory, for its parent.
+function memoryPanel(opts) {
+  const box = h('div.mem-panel', {}, h('p.d-empty', {}, 'Loading…'));
+  const q = opts.sprig ? '?sprig=' + encodeURIComponent(opts.sprig) : '';
+  const load = async () => {
+    const session = S.session;
+    let res;
+    try { res = await api('/api/memories' + q); }
+    catch (e) { if (session === S.session) box.replaceChildren(h('p.d-empty', {}, 'Couldn’t load memories: ' + e.message)); return; }
+    if (session !== S.session || !box.isConnected) return;
+    const groupBy = (list, key) => {
+      const m = new Map();
+      for (const x of list) { const k = key(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x); }
+      return [...m.entries()].sort((a, b) => (a[0] === '' ? -1 : b[0] === '' ? 1 : a[0].localeCompare(b[0])));
+    };
+    const section = (title, sub, list, label) => h('section.mem-section', {},
+      h('div.section-title', {}, h('h2', {}, title), h('small', {}, sub)),
+      list.length ? groupBy(list, (m) => m.sprig_name || '').map(([who, items]) => h('div.mem-group', {},
+        h('h3', {}, label(who)), items.map((m) => memoryItem(m, load))))
+        : h('p.d-empty', {}, 'Nothing yet.'));
+    box.replaceChildren(
+      section('Relationship', 'How to be with you: tone, what lands, what annoys', res.relationship,
+        (who) => (who ? 'With ' + who : 'Every sprig')),
+      section('Facts', 'What they know about you', res.facts, (who) => (who ? 'Just with ' + who : 'Shared with every sprig')),
+      memoryAdd(opts, load));
+  };
+  load();
+  return box;
+}
+
+function memoryItem(m, reload) {
+  const when = new Date(m.created_at);
+  const changed = m.updated_at !== m.created_at ? ' · changed ' + relTime(m.updated_at) : '';
+  const err = h('p.err', { role: 'alert' });
+  const act = async (fn, msg) => {
+    err.textContent = '';
+    try { await fn(); if (msg) toast(msg); reload(); } catch (e) { err.textContent = e.message; }
+  };
+  const view = h('div.mem-text', {}, m.content);
+  const item = h('div.mem-item' + (m.locked ? '.locked' : ''), {},
+    view,
+    h('div.mem-meta', {},
+      h('span.badge', {}, KIND_LABELS[m.kind] || m.kind),
+      m.person_name && h('span.badge', {}, m.person_name),
+      m.locked && h('span.badge', { title: 'The automatic memory review never changes it' }, 'Kept as you said'),
+      h('span', {}, `From ${m.from} · ${when.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}${changed}`)),
+    h('div.mem-actions', {},
+      h('button.chip', { onclick: () => edit() }, 'Edit'),
+      h('button.chip', { onclick: () => act(() => api(`/api/memories/${m.id}/lock`, { method: 'PUT', body: { locked: !m.locked } }), m.locked ? 'Unlocked: the review may update it' : 'Locked') },
+        m.locked ? 'Unlock' : 'Lock'),
+      m.undoable && h('button.chip', { onclick: () => act(() => api(`/api/memories/${m.id}/undo`, { method: 'POST' }), 'Undone') }, 'Undo'),
+      h('button.chip', { onclick: () => { if (confirm('Forget this for good? It can’t be undone.')) act(() => api(`/api/memories/${m.id}`, { method: 'DELETE' }), 'Forgotten'); } }, 'Delete')),
+    err);
+  const edit = () => {
+    const input = h('textarea.field.mem-input', { rows: 2, maxlength: 300, 'aria-label': 'Memory' });
+    input.value = m.content;
+    const kinds = REL_KINDS.includes(m.kind) || m.sprig ? [...REL_KINDS, ...FACT_KINDS] : FACT_KINDS;
+    const kind = h('select.field.mem-kind', { 'aria-label': 'Kind' }, kinds.concat(kinds.includes(m.kind) ? [] : [m.kind]).map((k) => h('option', { value: k, selected: k === m.kind }, KIND_LABELS[k] || k)));
+    const form = h('form.mem-edit', { onsubmit: (e) => {
+      e.preventDefault();
+      act(() => api(`/api/memories/${m.id}`, { method: 'PATCH', body: { content: input.value.trim(), kind: kind.value } }), 'Saved. Sprigs use it from their next reply.');
+    } }, input, h('div.mem-actions', {}, kind, h('button.chip.primary', { type: 'submit' }, 'Save'), h('button.chip', { type: 'button', onclick: reload }, 'Cancel')));
+    view.replaceWith(form);
+    input.focus();
+  };
+  return item;
+}
+
+function memoryAdd(opts, reload) {
+  const sprigs = opts.kid ? [] : S.order.map((id) => S.sprigs.get(id));
+  const sprig = !opts.kid && h('select.field.mem-kind', { 'aria-label': 'With' },
+    h('option', { value: '' }, 'Every sprig (facts only)'),
+    sprigs.map((s) => h('option', { value: s.id, selected: s.id === opts.sprig }, s.name)));
+  const person = opts.kid && opts.kid.kids.length > 1 && h('select.field.mem-kind', { 'aria-label': 'About' }, opts.kid.kids.map((k) => h('option', { value: k.id }, k.name)));
+  const kind = h('select.field.mem-kind', { 'aria-label': 'Kind' }, [...REL_KINDS, ...FACT_KINDS].map((k) => h('option', { value: k }, KIND_LABELS[k])));
+  const input = h('textarea.field.mem-input', { rows: 2, maxlength: 300, required: true, placeholder: 'Prefers short answers, no emoji.', 'aria-label': 'Memory' });
+  const err = h('p.err', { role: 'alert' });
+  const form = h('form.mem-edit', { onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = '';
+    try {
+      await api('/api/memories', { method: 'POST', body: { sprig: opts.kid ? opts.kid.id : sprig.value, kind: kind.value, content: input.value.trim(), person: person ? Number(person.value) : 0 } });
+      toast('Added. Sprigs use it from their next reply.'); reload();
+    } catch (ex) { err.textContent = ex.message; }
+  } }, input, h('div.mem-actions', {}, sprig, person, kind, h('button.chip.primary', { type: 'submit' }, 'Add')), err,
+  h('p.d-empty', {}, 'How to talk to me, likes, dislikes, in-jokes and shared moments are relationship memory: they’re with one sprig. What you write here is kept as you said it.'));
+  return h('details.cal-add', {}, h('summary', {}, 'Add a memory'), form);
 }
 
 // ---------- panes ----------
@@ -1731,7 +1852,8 @@ function renderDetails() {
     h('div.d-section', {}, h('h4', {}, 'Routines'), routineList),
     initiative.length > 0 && h('div.d-section', {}, h('h4', {}, 'Initiative'), h('div.d-list', {}, initiative.map((t) => h('div.d-item', {}, h('span.ico.idle', {}, icon('clock')), h('div.txt', {}, h('small', { style: { color: 'var(--text-2)', 'font-size': '13px' } }, t)))))),
     s.abilities.length > 0 && h('div.d-section', {}, h('h4', {}, 'Abilities'), h('div.tags', {}, s.abilities.map((t) => h('span.tag', {}, t)))),
-    h('div.d-section', {}, h('h4', {}, 'Tip'), h('p.d-empty', {}, `Ask ${s.name} “what do you remember about me?” or say “forget that” any time.`))));
+    h('div.d-section', {}, h('h4', {}, 'Tip'), h('p.d-empty', {}, `Ask ${s.name} “what do you remember about me?” or say “forget that” any time.`),
+      h('button.chip', { onclick: () => { S.memSprig = s.id; openView('memory'); } }, `See and change what ${s.name} remembers`))));
 }
 
 // ---------- keyboard ----------

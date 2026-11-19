@@ -202,7 +202,10 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	for i := len(history) - 1; i >= 0 && i >= len(history)-4; i-- {
 		query += " " + history[i].Content
 	}
-	selected := memory.Select(mems, query, e.now(), 25, 3500)
+	// Relationship memory has its own room, so facts never crowd out how
+	// the person likes to be spoken to.
+	facts, rel := memory.Split(mems)
+	selected := append(memory.Select(facts, query, e.now(), 25, 3500), memory.Select(rel, query, e.now(), 15, 1500)...)
 	ids := make([]int64, len(selected))
 	for i, m := range selected {
 		ids[i] = m.ID

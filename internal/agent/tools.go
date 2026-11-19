@@ -173,8 +173,8 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- memory (every sprig has its own memory space) ---
 		{
 			Name:        "remember",
-			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks); 'family' = family memory about the whole household (family sprigs only: the household's diet, who lives here, routines), kept apart from anyone's private memories. Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
-			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine","family"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
+			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks); 'family' = family memory about the whole household (family sprigs only: the household's diet, who lives here, routines), kept apart from anyone's private memories. Relationship memory (tone: how they like you to talk to them; likes; dislikes: what annoyed them; inside_joke; shared_history) is always just between you and them. Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
+			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine","family"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context","tone","likes","dislikes"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
 			Run:         e.toolRemember,
 		},
 		{
@@ -581,6 +581,11 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 		char = t.char.ID
 	}
 	family := a.Scope == "family"
+	if memory.Relationship[kind] {
+		// Relationship memory is between this sprig and this person,
+		// never shared or family (and so stays in a kid's sandbox).
+		char, family = t.char.ID, false
+	}
 	if family && !e.writesFamilyMemory(t) {
 		return "", errors.New("only family sprigs talking with an adult keep family memory; use shared or mine")
 	}
@@ -603,7 +608,8 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 			return fmt.Sprintf("Updated memory #%d.", m.ID), nil
 		}
 	}
-	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked, Household: family}
+	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked, Household: family,
+		Origin: store.OriginSprigPrefix + t.char.ID}
 	if a.UserAsked {
 		m.Source = "user"
 	}
@@ -694,6 +700,9 @@ func (e *Engine) toolFollowup(ctx context.Context, t *turn, args json.RawMessage
 		[]memory.Op{{Op: "add", Scope: t.char.ID, Kind: "followup", Content: a.About, Due: a.Due}})
 	if len(plan.Changes) == 0 {
 		return "", errors.New(strings.Join(plan.Skipped, "; "))
+	}
+	for i := range plan.Changes {
+		plan.Changes[i].Memory.Origin = store.OriginSprigPrefix + t.char.ID
 	}
 	if _, err := e.DB.ApplyMemoryChanges(ctx, 0, plan.Changes); err != nil {
 		return "", err
