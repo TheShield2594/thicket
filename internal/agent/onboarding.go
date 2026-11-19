@@ -8,13 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/scheduler"
-	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 
 	"gopkg.in/yaml.v3"
@@ -248,18 +246,19 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		jobIDs = append(jobIDs, j.ID)
 		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
 	}
+	// Its cap, as approved, is in place before it's live.
+	undoCap, err := e.presetCap(ctx, c.ID, p.MonthlyCapUSD)
+	if err != nil {
+		return "", undo(err)
+	}
 	path, err := e.Chars.Write(ctx, c)
 	if err != nil {
+		undoCap()
 		return "", undo(fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err))
 	}
 	e.drafts.Delete(user.ID)
 	if p.MonthlyCapUSD > 0 {
-		// Approved with the proposal, so set as shown.
-		if err := e.Settings.Set(ctx, settings.SprigCap(c.ID, "monthly"), strconv.FormatFloat(p.MonthlyCapUSD, 'f', -1, 64)); err != nil {
-			e.Log.Error("set a new sprig's cap", "err", err)
-		} else {
-			e.trailCap(ctx, user, c, "monthly", 0, p.MonthlyCapUSD)
-		}
+		e.trailCap(ctx, user, c, "monthly", 0, p.MonthlyCapUSD)
 	}
 	e.logActivity(ctx, "info", "character", c.ID, user.ID, fmt.Sprintf("new sprig %s sprouted", c.DisplayName()), path)
 	out := fmt.Sprintf("%s has been created (%s), with every tool at draft. They can now be addressed by name, e.g. \"%s, ...\".", c.DisplayName(), path, c.DisplayName())

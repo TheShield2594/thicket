@@ -5,6 +5,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -186,7 +187,7 @@ func (s *Settings) Set(ctx context.Context, name, value string) error {
 	switch k.Kind {
 	case "float":
 		f, err := strconv.ParseFloat(strings.TrimPrefix(value, "$"), 64)
-		if err != nil || f < 0 {
+		if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
 			return fmt.Errorf("%s needs a non-negative number", name)
 		}
 		value = strconv.FormatFloat(f, 'f', -1, 64)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -114,9 +115,8 @@ func (e *Engine) estimateTurn(ctx context.Context, t *turn, msgs []llm.Message, 
 		if len(t.pdfs) == 1 {
 			label = fmt.Sprintf("%s (%d pages)", t.pdfs[0].Name, pages)
 		}
-		ocr := 0.0
 		if e.Settings.String(ctx, "pdf_engine") == "mistral-ocr" {
-			ocr = float64(pages) * ocrUSDPerPage
+			ocr := float64(pages) * ocrUSDPerPage
 			usd += ocr
 			parts = append(parts, fmt.Sprintf("reading %s with OCR, about %s", label, money(ocr)))
 		} else {
@@ -140,21 +140,22 @@ func orModel(m, def string) string {
 	return def
 }
 
-// overCap says why an estimate can't go ahead: it would cross a cap. ""
-// when it fits.
-func (e *Engine) overCap(ctx context.Context, sprig *character.Character, usd float64) string {
+// overCap says why an estimate can't go ahead: it would cross a cap, the
+// one returned. "" when it fits. What was already spent is in the
+// headroom, so usd is only what's still to come.
+func (e *Engine) overCap(ctx context.Context, sprig *character.Character, usd float64) (string, *llm.BudgetError) {
 	if e.Budget == nil {
-		return ""
+		return "", nil
 	}
 	left, tight, ok, err := e.Budget.Headroom(ctx, sprig.ID)
 	if err != nil || !ok || usd <= left {
-		return ""
+		return "", nil
 	}
 	whose := "the household's " + tight.Period + " cap"
 	if tight.Sprig != "" {
 		whose = sprig.DisplayName() + "'s " + tight.Period + " cap"
 	}
-	return fmt.Sprintf("that would cost about %s, which is %s more than %s has left (%s of %s)", money(usd), money(usd-left), whose, money(left), money(tight.Limit))
+	return fmt.Sprintf("that would cost about %s, which is %s more than %s has left (%s of %s)", money(usd), money(usd-left), whose, money(left), money(tight.Limit)), tight
 }
 
 // checkTurnCost runs before a turn's first model call. A costHold error
@@ -173,11 +174,12 @@ func (e *Engine) checkTurnCost(ctx context.Context, t *turn, msgs []llm.Message,
 		kind = "pdf"
 	}
 	est := store.Estimate{UserID: t.user.ID, Character: t.char.ID, Kind: kind, What: what, EstimateUSD: usd}
-	if why := e.overCap(ctx, t.char, usd); why != "" {
+	if why, tight := e.overCap(ctx, t.char, usd); why != "" {
 		est.Outcome = store.EstimateRefused
 		_, _ = e.DB.AddEstimate(ctx, est)
 		e.logActivity(ctx, "warn", "budget", t.char.ID, t.user.ID, "refused a costly reply: "+why, what)
 		if t.user.IsKid() {
+			e.tellParentsCap(ctx, t.char, t.user, tight, resetsWhen(tight, t.user))
 			return &costHold{msg: "That's too big a job for my allowance right now. Ask a grown-up if you need it!"}
 		}
 		return &costHold{msg: fmt.Sprintf("I didn't start on that: %s, %s. You can raise the cap, or ask me something smaller.", what, why)}
@@ -248,11 +250,12 @@ func (e *Engine) meterTurn(ctx context.Context, t *turn) (context.Context, func(
 
 // estimateTool is what one tool call is expected to cost (0 = not
 // estimated).
-func (e *Engine) estimateTool(ctx context.Context, t *turn, name string, args json.RawMessage) (float64, string) {
+// who is the sprig whose caps it counts against: the one doing the work.
+func (e *Engine) estimateTool(ctx context.Context, t *turn, name string, args json.RawMessage) (usd float64, what string, who *character.Character) {
 	switch name {
 	case "web_search":
 		if p, err := e.searchProvider(ctx); err == nil && p == "openrouter" {
-			return webSearchUSD, "a web search"
+			return webSearchUSD, "a web search", t.char
 		}
 	case "delegate_task":
 		a, _ := decode[struct {
@@ -272,29 +275,24 @@ func (e *Engine) estimateTool(ctx context.Context, t *turn, name string, args js
 				usd += 3 * webSearchUSD // a research task searches a few times
 			}
 		}
-		return usd, fmt.Sprintf("%s's background task (%s)", target.DisplayName(), truncate(a.Task, 80))
+		return usd, fmt.Sprintf("%s's background task (%s)", target.DisplayName(), truncate(a.Task, 80)), target
 	}
-	return 0, ""
+	return 0, "", t.char
 }
 
 // costGate checks a tool call's estimate before it runs. ok is false when
 // it was refused (over a cap) or the person is being asked; msg is then
 // what the model is told.
 func (e *Engine) costGate(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok bool) {
-	usd, what := e.estimateTool(ctx, t, tool.Name, args)
+	usd, what, who := e.estimateTool(ctx, t, tool.Name, args)
 	if usd <= 0 {
 		return "", true
 	}
-	est := store.Estimate{UserID: t.user.ID, Character: t.char.ID, Kind: tool.Name, What: what, EstimateUSD: usd}
-	if tool.Name == "delegate_task" {
-		est.Kind = "task"
-	} else if tool.Name == "web_search" {
-		est.Kind = "search"
-	}
-	if why := e.overCap(ctx, t.char, t.toolUSD+usd); why != "" {
+	est := toolEstimate(t, tool, who, usd, what)
+	if why, _ := e.overCap(ctx, who, usd); why != "" {
 		est.Outcome = store.EstimateRefused
 		_, _ = e.DB.AddEstimate(ctx, est)
-		e.logActivity(ctx, "warn", "budget", t.char.ID, t.user.ID, "refused "+tool.Name+": "+why, what)
+		e.logActivity(ctx, "warn", "budget", who.ID, t.user.ID, "refused "+tool.Name+": "+why, what)
 		return fmt.Sprintf("Error: %s was NOT run: %s. Tell the user plainly, with the figures.", what, why), false
 	}
 	t.toolUSD += usd
@@ -313,13 +311,55 @@ func (e *Engine) costGate(ctx context.Context, t *turn, tool *Tool, args json.Ra
 	return "", true
 }
 
+// toolEstimate is the estimate row for a tool call.
+func toolEstimate(t *turn, tool *Tool, who *character.Character, usd float64, what string) store.Estimate {
+	est := store.Estimate{UserID: t.user.ID, Character: who.ID, Kind: tool.Name, What: what, EstimateUSD: usd}
+	switch tool.Name {
+	case "delegate_task":
+		est.Kind = "task"
+	case "web_search":
+		est.Kind = "search"
+	}
+	return est
+}
+
+// approvedCost checks a tool call the person already said yes to, right
+// before it runs: never asked again, but refused if the caps have closed
+// in since. It records the estimate, for the tool run to be measured
+// against (t.toolEstimate).
+func (e *Engine) approvedCost(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) string {
+	t.toolEstimate = 0
+	usd, what, who := e.estimateTool(ctx, t, tool.Name, args)
+	if usd <= 0 {
+		return ""
+	}
+	est := toolEstimate(t, tool, who, usd, what)
+	if why, _ := e.overCap(ctx, who, usd); why != "" {
+		est.Outcome = store.EstimateRefused
+		_, _ = e.DB.AddEstimate(ctx, est)
+		return "Error: it wasn't run after all: " + why + "."
+	}
+	t.toolEstimate, _ = e.DB.AddEstimate(ctx, est)
+	return ""
+}
+
+// resetsWhen says when a cap resets, in the person's timezone.
+func resetsWhen(be *llm.BudgetError, u *store.User) string {
+	if be == nil || be.Resets.IsZero() {
+		return "it resets"
+	}
+	return be.Resets.In(u.Location()).Format("Monday 2 January")
+}
+
 // kidCapReply is what a kid hears when their sprig hits a cap, and the
 // parents are told once per cap and period.
 func (e *Engine) kidCapReply(ctx context.Context, t *turn, be *llm.BudgetError) string {
-	when := "it resets"
-	if !be.Resets.IsZero() {
-		when = be.Resets.In(t.user.Location()).Format("Monday 2 January")
+	if be.Period == "" {
+		// Not a cap (spend can't be recorded right now): nothing for the
+		// parents to raise.
+		return "I can't help right now, sorry. Try again a bit later!"
 	}
+	when := resetsWhen(be, t.user)
 	e.tellParentsCap(ctx, t.char, t.user, be, when)
 	if be.Period == "daily" {
 		return "I've used up my allowance for today, so I need a rest until tomorrow. A grown-up can give me more if it's important!"
@@ -330,6 +370,9 @@ func (e *Engine) kidCapReply(ctx context.Context, t *turn, be *llm.BudgetError) 
 // tellParentsCap tells a kid sprig's parents (else the admins) that it hit
 // a cap, once per cap and period.
 func (e *Engine) tellParentsCap(ctx context.Context, c *character.Character, kid *store.User, be *llm.BudgetError, when string) {
+	if be == nil || be.Period == "" {
+		return
+	}
 	key := fmt.Sprintf("kidcap:%s:%s:%s", c.ID, be.Period, be.Resets.Format("2006-01-02"))
 	if ok, err := e.DB.ClaimNotice(ctx, key, 40*24*time.Hour); err != nil || !ok {
 		return
@@ -338,13 +381,13 @@ func (e *Engine) tellParentsCap(ctx context.Context, c *character.Character, kid
 	if !ok {
 		return
 	}
-	cap := "the household's " + be.Period + " cap"
+	capDesc := "the household's " + be.Period + " cap"
 	how := "An admin can raise the household's cap."
 	if be.Sprig != "" {
-		cap = fmt.Sprintf("its %s cap of %s", be.Period, money(be.Limit))
+		capDesc = fmt.Sprintf("its %s cap of %s", be.Period, money(be.Limit))
 		how = fmt.Sprintf("To give it more, tell me \"set %s's %s cap to $%s\" (only a parent can raise it).", c.DisplayName(), be.Period, strconv.FormatFloat(be.Limit*2, 'f', -1, 64))
 	}
-	text := fmt.Sprintf("%s has used %s, so it's resting until %s. I told %s plainly. %s", c.DisplayName(), cap, when, nameOr(kid.Name, "your kid"), how)
+	text := fmt.Sprintf("%s has used %s, so it's resting until %s. I told %s plainly. %s", c.DisplayName(), capDesc, when, nameOr(kid.Name, "your kid"), how)
 	var told []int64
 	for _, id := range c.Parents {
 		if p, err := e.DB.UserByID(ctx, id); err == nil {
@@ -359,7 +402,7 @@ func (e *Engine) tellParentsCap(ctx context.Context, c *character.Character, kid
 			_ = e.sendNotice(ctx, &a, host, text)
 		}
 	}
-	e.logActivity(ctx, "warn", "budget", c.ID, kid.ID, fmt.Sprintf("%s hit %s; its parents were told", c.DisplayName(), cap), "")
+	e.logActivity(ctx, "warn", "budget", c.ID, kid.ID, fmt.Sprintf("%s hit %s; its parents were told", c.DisplayName(), capDesc), "")
 }
 
 // budgetReply is what an adult hears when a cap stops a reply.
@@ -382,8 +425,8 @@ func (e *Engine) SetSprigCap(ctx context.Context, by *store.User, sprig, period 
 	if period != "daily" && period != "monthly" {
 		return "", errors.New("the cap is daily or monthly")
 	}
-	if usd < 0 {
-		return "", errors.New("a cap can't be negative (0 means no cap)")
+	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
+		return "", errors.New("a cap must be a number of dollars, not negative (0 means no cap)")
 	}
 	c, ok := e.Chars.Get(sprig)
 	if !ok {
@@ -425,21 +468,22 @@ func capText(usd float64) string {
 
 func (e *Engine) trailCap(ctx context.Context, by *store.User, c *character.Character, period string, prev, next float64) {
 	e.addTrail(ctx, userID(by), c.ID, store.TrailCap, fmt.Sprintf("%s's %s cap: %s → %s", c.DisplayName(), period, capText(prev), capText(next)), "",
-		&trailUndo{Type: "cap", Character: c.ID, Tool: period, Level: strconv.FormatFloat(prev, 'f', -1, 64)})
+		&trailUndo{Type: "cap", Character: c.ID, Tool: period, Level: strconv.FormatFloat(prev, 'f', -1, 64), Set: strconv.FormatFloat(next, 'f', -1, 64)})
 	e.logActivity(ctx, "info", "budget", c.ID, userID(by), fmt.Sprintf("%s's %s cap set to %s", c.DisplayName(), period, capText(next)), "")
 }
 
-// startKidCap gives a new kid sprig its starting monthly cap.
-func (e *Engine) startKidCap(ctx context.Context, by *store.User, c *character.Character) {
-	usd := e.Settings.Float(ctx, "budget.kid_monthly_usd")
+// presetCap stores a new sprig's monthly cap before its file is written,
+// so it's never live without it (usd 0: none). undo takes it back if the
+// sprig isn't created after all.
+func (e *Engine) presetCap(ctx context.Context, id string, usd float64) (undo func(), err error) {
 	if usd <= 0 {
-		return
+		return func() {}, nil
 	}
-	if err := e.Settings.Set(ctx, settings.SprigCap(c.ID, "monthly"), strconv.FormatFloat(usd, 'f', -1, 64)); err != nil {
-		e.Log.Error("set a kid sprig's cap", "err", err)
-		return
+	name := settings.SprigCap(id, "monthly")
+	if err := e.DB.SetSetting(ctx, name, strconv.FormatFloat(usd, 'f', -1, 64)); err != nil {
+		return nil, fmt.Errorf("couldn't set its spend cap, so it wasn't created: %w", err)
 	}
-	e.trailCap(ctx, by, c, "monthly", 0, usd)
+	return func() { _ = e.DB.DeleteSetting(context.WithoutCancel(ctx), name) }, nil
 }
 
 func (e *Engine) toolSetSprigCap(ctx context.Context, t *turn, args json.RawMessage) (string, error) {

@@ -296,10 +296,12 @@ func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	env, _ := json.Marshal(nonNilMap(m.Env))
 	hdr, _ := json.Marshal(nonNilMap(m.Headers))
 	// No Undo map keeps what's stored (re-adding an integration doesn't
-	// forget how to undo its tools); an empty one clears it.
+	// forget how to undo its tools); an empty one clears it. One
+	// statement, so it's saved whole or not at all.
+	keep := m.Undo == nil
 	undo, _ := json.Marshal(m.Undo)
-	if m.Undo == nil {
-		undo = nil
+	if keep {
+		undo = []byte("{}")
 	}
 	en, ex := 0, 0
 	if m.Enabled {
@@ -311,11 +313,8 @@ func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers (name, transport, target, args, env, headers, enabled, exec, undo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET transport = excluded.transport, target = excluded.target, args = excluded.args,
 		env = excluded.env, headers = excluded.headers, enabled = excluded.enabled, exec = excluded.exec,
-		undo = CASE WHEN excluded.undo = '' THEN mcp_servers.undo ELSE excluded.undo END`,
-		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, string(undo), s.unix())
-	if err == nil && undo == nil {
-		_, err = s.db.ExecContext(ctx, "UPDATE mcp_servers SET undo = '{}' WHERE name = ? AND undo = ''", m.Name)
-	}
+		undo = CASE WHEN ? THEN mcp_servers.undo ELSE excluded.undo END`,
+		m.Name, m.Transport, m.Target, string(args), string(env), string(hdr), en, ex, string(undo), s.unix(), keep)
 	return err
 }
 

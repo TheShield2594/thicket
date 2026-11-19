@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -32,6 +33,9 @@ type trailUndo struct {
 	// An integration action's undo (Type mcp): the call that reverses it.
 	Server string          `json:"server,omitempty"`
 	Args   json.RawMessage `json:"args,omitempty"`
+	// Set is what a cap change set (Type cap): undo puts the old cap back
+	// only while that's still the cap, so a newer change isn't lost.
+	Set string `json:"set,omitempty"`
 }
 
 func (e *Engine) addTrail(ctx context.Context, userID int64, char, kind, summary, detail string, undo *trailUndo) int64 {
@@ -99,8 +103,14 @@ func listOr(s []string) string {
 	return strings.Join(s, ", ")
 }
 
-// ErrAlreadyUndone means the entry was undone before (or can't be).
-var ErrAlreadyUndone = errors.New("that was already undone, or there's nothing to undo")
+// ErrAlreadyUndone means the entry was undone before.
+var ErrAlreadyUndone = errors.New("that was already undone")
+
+// ErrUndoNotAllowed means the person may not undo that entry.
+var ErrUndoNotAllowed = errors.New("that isn't yours to undo")
+
+// ErrNotUndoable means the entry has nothing that reverses it.
+var ErrNotUndoable = errors.New("there's no undo for that")
 
 // UndoTrail reverses one trail entry. Only admins undo permission changes;
 // a person may undo events a sprig put on their own calendar.
@@ -109,15 +119,18 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	if err != nil {
 		return "", err
 	}
-	if !t.Undoable {
+	if !t.UndoneAt.IsZero() {
 		return "", ErrAlreadyUndone
+	}
+	if !t.Undoable {
+		return "", ErrNotUndoable
 	}
 	var u trailUndo
 	if err := json.Unmarshal(t.Undo, &u); err != nil {
 		return "", fmt.Errorf("unreadable undo for trail entry %d: %w", id, err)
 	}
 	if by.IsKid() {
-		return "", errors.New("kids can't undo changes")
+		return "", fmt.Errorf("%w: kids can't undo changes", ErrUndoNotAllowed)
 	}
 	parentOf := func() bool {
 		c, ok := e.Chars.Get(u.Character)
@@ -143,7 +156,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case (u.Type == "grant" || u.Type == "allow") && parentOf():
 		// a parent undoing a change to their kid's sprig
 	default:
-		return "", errors.New("only the owner or an admin can undo permission changes")
+		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
 	}
 	// Claim the undo first, so two at once can't both run it.
 	if ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID); err != nil || !ok {
@@ -151,7 +164,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	}
 	done, err := e.undo(ctx, by, u)
 	if err != nil {
-		_ = e.DB.ClearTrailUndone(ctx, id)
+		_ = e.DB.ClearTrailUndone(context.WithoutCancel(ctx), id) // the undo didn't happen, even if the caller left
 		return "", err
 	}
 	e.addTrail(ctx, by.ID, t.Character, store.TrailUndo, fmt.Sprintf("undid #%d: %s", id, t.Summary), done, nil)
@@ -224,6 +237,12 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 	case "mcp", "job":
 		return e.undoAction(ctx, by, u)
 	case "cap":
+		if u.Set != "" {
+			set, _ := strconv.ParseFloat(u.Set, 64)
+			if cur := e.Settings.Float(ctx, settings.SprigCap(u.Character, u.Tool)); cur != set {
+				return "", fmt.Errorf("that cap was changed again since (it's %s now), so undoing this would undo the newer change too", capText(cur))
+			}
+		}
 		usd, _ := strconv.ParseFloat(u.Level, 64)
 		s, err := e.SetSprigCap(ctx, by, u.Character, u.Tool, usd)
 		if err != nil {

@@ -217,6 +217,7 @@ func (e *Engine) toolAddToCalendar(ctx context.Context, t *turn, args json.RawMe
 	}
 	trailID := e.addTrail(ctx, t.user.ID, t.char.ID, store.TrailEvent, fmt.Sprintf("%s added %q to %s (%s)", t.char.DisplayName(), title, where, when),
 		strings.TrimSpace(a.SourceLabel+" "+a.SourceURL), &trailUndo{Type: "event", EventID: id})
+	sayAction(t, trailID, fmt.Sprintf("I put %q on %s (%s).", title, where, when), "take it off", true)
 	return fmt.Sprintf("Added %q on %s to %s (event_id %d, trail #%d: it can be undone).", title, when, where, id, trailID), nil
 }
 
@@ -234,9 +235,11 @@ func (e *Engine) toolRemoveFromCalendar(ctx context.Context, t *turn, args json.
 	if err != nil || (ev.UserID != t.user.ID && !(ev.Shared && t.char.Tier() == character.TierFamily)) {
 		return "", fmt.Errorf("no event %d on this calendar", a.EventID)
 	}
-	if _, err := e.takeOffCalendar(ctx, t.user.ID, t.char.ID, t.char.DisplayName(), "", ev); err != nil {
+	trailID, err := e.takeOffCalendar(ctx, t.user.ID, t.char.ID, t.char.DisplayName(), "", ev)
+	if err != nil {
 		return "", err
 	}
+	sayAction(t, trailID, fmt.Sprintf("I took %q off the calendar.", ev.Title), "put it back", true)
 	return fmt.Sprintf("Removed %q.", ev.Title), nil
 }
 

@@ -461,12 +461,21 @@ func (a *API) undoTrail(w http.ResponseWriter, r *http.Request, c caller) {
 		return
 	}
 	msg, err := a.Engine.UndoTrail(r.Context(), c.user, id)
-	if err != nil {
-		code := http.StatusBadRequest
-		if errors.Is(err, store.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-		fail(w, code, err.Error())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		fail(w, http.StatusNotFound, "no trail entry "+strconv.FormatInt(id, 10))
+		return
+	case errors.Is(err, agent.ErrAlreadyUndone), errors.Is(err, agent.ErrNotUndoable):
+		fail(w, http.StatusConflict, err.Error())
+		return
+	case errors.Is(err, agent.ErrUndoNotAllowed):
+		fail(w, http.StatusForbidden, err.Error())
+		return
+	case err != nil:
+		// The undo itself failed (an integration, the database): the
+		// entry stays undoable, so it can be tried again.
+		a.Log.Warn("undo through the API failed", "trail", id, "err", err)
+		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": msg})

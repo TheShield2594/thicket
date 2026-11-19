@@ -130,8 +130,8 @@ func buildSystemPrompt(in promptInput) string {
 		b.WriteString(skillOfferGuide)
 	}
 
-	// The setup tour is the owner's (and an admin's set up alongside them):
-	// its steps use admin tools and set the household up. Adults who join
+	// The setup tour is the owner's: its steps use admin tools and set the
+	// household up. Adults who join
 	// an existing household later, admins included, get a short tour of
 	// what's already there instead; kids never talk to the host, and their
 	// kid sprig says hello instead.
@@ -292,11 +292,10 @@ This is the first time you're talking with them. Start with a short, friendly he
 `
 
 // setsUp reports whether a person gets the household setup tour rather
-// than the newcomer's: the owner, or an admin who didn't come through an
-// invite (set up alongside the owner).
-func setsUp(u *store.User) bool {
-	return u.Role == store.RoleOwner || u.IsAdmin() && u.InvitedBy == 0
-}
+// than the newcomer's: only the owner, who sets the household up. Every
+// other adult, admins included however they were added, joins a
+// household that's already there.
+func setsUp(u *store.User) bool { return u.Role == store.RoleOwner }
 
 // familySprigList names the household's family sprigs for the newcomer
 // tour, from the roster (so never anyone's private sprig).

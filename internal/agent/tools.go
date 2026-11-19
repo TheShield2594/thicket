@@ -407,7 +407,7 @@ func (e *Engine) builtinTools() []*Tool {
 			Description: "Show or change when a sprig may message the user unprompted (job and trigger results, check-ins, follow-ups): quiet_hours (\"22:00-08:00\" in the user's timezone, or \"off\") and daily_messages (how many such messages per person per day, 1-50; default 3). " +
 				"Also its check-in presets: morning_brief (a time like \"07:30\", or \"off\": a short brief of today's calendar and anything due), event_reminders (minutes before each calendar event for a heads-up; 0 = off) and due_reminders (true: a reminder when something noted as due is coming up). " +
 				"Held messages go out when quiet hours end or with the next day's budget. Replies, approvals, safety alerts and failures always get through. Omit both to show the current settings. Edits the sprig's character file (never overwrites manual edits).",
-			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50},"morning_brief":{"type":"string","description":"07:30, or off"},"event_reminders":{"type":"integer","minimum":0,"maximum":1440},"due_reminders":{"type":"boolean"}}}`,
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string","description":"sprig id or name; default: you"},"quiet_hours":{"type":"string"},"daily_messages":{"type":"integer","minimum":1,"maximum":50},"morning_brief":{"type":"string","description":"07:30, or off"},"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"0 = off, else 10-1440"},"due_reminders":{"type":"boolean"}}}`,
 			ChatOnly: true,
 			Run:      e.toolSetInitiative,
 		},
@@ -976,7 +976,7 @@ const draftSchema = `{"type":"object","properties":{
 "background":{"type":"string","description":"a short paragraph of backstory and a few example lines"},
 "check_ins":{"type":"boolean"},
 "morning_brief":{"type":"string","description":"a time like 07:30 for a short brief of today's calendar and anything due, if they want one"},
-"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"minutes before each calendar event for a heads-up (0 = none)"},
+"event_reminders":{"type":"integer","minimum":0,"maximum":1440,"description":"minutes before each calendar event for a heads-up, 10-1440 (0 = none)"},
 "due_reminders":{"type":"boolean","description":"remind them when something they noted as due is coming up"},
 "monthly_cap_usd":{"type":"number","minimum":0,"description":"the most it may spend a month on its own, in dollars, as agreed in the interview (0 or left out = no cap of its own)"},
 "routines":{"type":"array","description":"what they do on a schedule, from the interview","items":{"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string","description":"cron, 5 fields, in the user's timezone, e.g. 0 8 * * 1-5"},"task":{"type":"string"}},"required":["name","schedule","task"]}},
@@ -1236,8 +1236,8 @@ func (e *Engine) toolSetInitiative(ctx context.Context, t *turn, args json.RawMe
 		cp.Initiative.MorningBrief = v
 	}
 	if a.EventReminders != nil {
-		if n := *a.EventReminders; n < 0 || n > character.MaxEventReminders {
-			return "", fmt.Errorf("event_reminders is minutes before an event, 1-%d (0 = off)", character.MaxEventReminders)
+		if n := *a.EventReminders; n != 0 && (n < character.MinEventReminders || n > character.MaxEventReminders) {
+			return "", fmt.Errorf("event_reminders is minutes before an event, %d-%d (0 = off)", character.MinEventReminders, character.MaxEventReminders)
 		}
 		cp.Initiative.EventReminders = *a.EventReminders
 	}

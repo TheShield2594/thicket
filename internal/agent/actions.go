@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,38 +68,74 @@ func (e *Engine) inverseFor(ctx context.Context, server, tool string) *store.Inv
 	return nil
 }
 
-// undoNote says, before an action at ask level, whether it can be undone.
-func (e *Engine) undoNote(ctx context.Context, tool *Tool) string {
+const (
+	canUndoNote    = "↩️ You can undo this afterwards."
+	maybeUndoNote  = "↩️ You should be able to undo this afterwards, if it says what it made."
+	cannotUndoNote = "⚠️ This can't be undone once it's done."
+)
+
+// undoNote says, before an action at ask level, whether it can be undone,
+// for the call as proposed (args).
+func (e *Engine) undoNote(ctx context.Context, tool *Tool, args json.RawMessage) string {
 	if !changes(tool) {
 		return ""
 	}
 	if server, ok := strings.CutPrefix(tool.Scope, "mcp:"); ok {
-		if e.inverseFor(ctx, server, tool.Remote) != nil {
-			return "↩️ You can undo this afterwards."
+		inv := e.inverseFor(ctx, server, tool.Remote)
+		if inv == nil {
+			return cannotUndoNote
 		}
-		return "⚠️ This can't be undone once it's done."
+		a := decodeNumbers([]byte(args))
+		fromResult := false
+		for _, v := range inv.Args {
+			for _, m := range placeholderRe.FindAllStringSubmatch(v, -1) {
+				if m[1] == "result" {
+					fromResult = true
+				} else if _, ok := lookup("args", m[2], a, nil, ""); !ok {
+					return cannotUndoNote // the undo needs an argument this call doesn't have
+				}
+			}
+		}
+		if fromResult {
+			return maybeUndoNote
+		}
+		return canUndoNote
 	}
-	if tool.Name == "schedule_job" || tool.Name == "create_webhook" {
-		return "↩️ You can undo this afterwards."
+	switch {
+	case tool.Trailed: // calendar entries: undone from the trail
+		return canUndoNote
+	case tool.Name == "schedule_job" || tool.Name == "create_webhook":
+		return canUndoNote
 	}
-	return ""
+	return cannotUndoNote
 }
 
-// describe turns a finished tool call into an action.
+// decodeNumbers reads a JSON object keeping numbers exact (an id of
+// 9007199254740993 must not become ...992).
+func decodeNumbers(b []byte) map[string]any {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	var m map[string]any
+	if d.Decode(&m) != nil {
+		return nil
+	}
+	return m
+}
+
+// describe turns a finished tool call into an action. out is the tool's
+// raw output: the undo is built from it, and the sentence is redacted.
 func (e *Engine) describe(ctx context.Context, t *turn, tool *Tool, args json.RawMessage, out string) action {
-	var a map[string]any
-	_ = json.Unmarshal(args, &a)
+	a := decodeNumbers(args)
 	if server, ok := strings.CutPrefix(tool.Scope, "mcp:"); ok {
 		act := action{said: fmt.Sprintf("I used %s's %s%s.", server, tool.Remote, argSummary(a))}
 		inv := e.inverseFor(ctx, server, tool.Remote)
 		if inv == nil {
 			return act
 		}
-		var result map[string]any
-		_ = json.Unmarshal([]byte(strings.TrimSpace(out)), &result)
+		result := decodeNumbers([]byte(strings.TrimSpace(out)))
 		if inv.Said != "" {
 			if s, ok := fill(inv.Said, a, result, out); ok {
-				act.said = strings.TrimRight(s, ". ") + "."
+				act.said = e.Secrets.Redact(strings.TrimRight(s, ". ") + ".")
 			}
 		}
 		undoArgs := map[string]any{}
@@ -110,6 +147,9 @@ func (e *Engine) describe(ctx context.Context, t *turn, tool *Tool, args json.Ra
 			undoArgs[k] = val
 		}
 		raw, _ := json.Marshal(undoArgs)
+		if e.Secrets.Redact(string(raw)) != string(raw) {
+			return act // it would need a secret stored in the trail: not offered
+		}
 		act.undo = &trailUndo{Type: "mcp", Character: t.char.ID, Server: server, Tool: inv.Tool, Args: raw}
 		act.label = inv.Label
 		if act.label == "" {
@@ -154,7 +194,7 @@ func argSummary(a map[string]any) string {
 		switch x := a[k].(type) {
 		case string:
 			v = x
-		case float64, bool:
+		case float64, bool, json.Number:
 			v = fmt.Sprint(x)
 		default:
 			continue
@@ -234,14 +274,25 @@ func (e *Engine) recordAction(ctx context.Context, t *turn, tool *Tool, args jso
 	act := e.describe(ctx, t, tool, args, out)
 	detail := e.Secrets.Redact(truncate(string(args), 500))
 	id := e.addTrail(ctx, t.user.ID, t.char.ID, store.TrailAction, act.said, detail, act.undo)
-	if t.chatRef == "" || id == 0 || act.routine && t.char.Actions.Quiet {
+	label := act.label
+	if act.undo == nil {
+		label = ""
+	}
+	sayAction(t, id, act.said, label, act.routine)
+}
+
+// sayAction queues, in a chat, the line saying what a sprig did, for
+// trail entry id: with how to undo it (label, e.g. "remove it"), or that
+// it can't be undone ("" label). A quiet sprig keeps routine work to the
+// trail.
+func sayAction(t *turn, id int64, said, label string, routine bool) {
+	if t.chatRef == "" || id == 0 || routine && t.char.Actions.Quiet {
 		return
 	}
-	text := act.said
-	switch {
-	case act.undo != nil:
-		text += " Reply **undo** to " + act.label + "."
-	case !act.routine:
+	text := said
+	if label != "" {
+		text += " Reply **undo** to " + label + "."
+	} else {
 		text += " This can't be undone from here."
 	}
 	t.afterReply = append(t.afterReply, post{text: text, trailID: id})
@@ -278,6 +329,9 @@ func (e *Engine) undoCommand(ctx context.Context, in channel.Incoming, user *sto
 	if errors.Is(err, ErrAlreadyUndone) {
 		return "That's already been undone.", true, nil
 	}
+	if errors.Is(err, ErrNotUndoable) {
+		return "That one can't be undone from here.", true, nil
+	}
 	if err != nil {
 		return "I couldn't undo that: " + shortErr(err), true, nil
 	}
@@ -289,8 +343,11 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 	switch u.Type {
 	case "job":
 		j, err := e.DB.JobByID(ctx, u.EventID)
-		if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			return "", fmt.Errorf("job #%d is already gone", u.EventID)
+		}
+		if err != nil {
+			return "", err
 		}
 		if err := e.DB.DeleteJob(ctx, j.ID); err != nil {
 			return "", err
@@ -304,9 +361,18 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 		if err := e.paused(ctx, c.ID); err != nil {
 			return "", fmt.Errorf("%w: resume it first", err)
 		}
+		// The sprig's file policy applies as it does to any call: a path
+		// revoked since the action isn't reached by undoing it.
+		for _, st := range e.MCP.Tools() {
+			if st.Server == u.Server && st.Tool.Name == u.Tool && st.Local {
+				if err := e.checkLocalPaths(ctx, c, u.Args); err != nil {
+					return "", err
+				}
+			}
+		}
 		res, err := e.MCP.CallAs(ctx, c.ID, u.Server, u.Tool, u.Args, false, e.execAllowed(ctx, c))
 		if err != nil {
-			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, shortErr(err))
+			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, e.Secrets.Redact(shortErr(err)))
 		}
 		if res.IsError {
 			return "", fmt.Errorf("%s's %s failed: %s", u.Server, u.Tool, truncate(e.Secrets.Redact(res.Text), 200))

@@ -89,11 +89,14 @@ func (e *Engine) Presets(ctx context.Context) {
 	}
 }
 
-// presetSent handles what came of sending a preset message: a message
-// that couldn't go out yet frees its claim, to be tried again later.
+// presetSent handles what came of sending a preset message. Sent, or
+// held back as not worth saying: done. Anything else (held for quiet
+// hours, paused, a model or delivery failure) frees its claim, so a later
+// round tries again. A failed delivery may rarely have arrived after all;
+// a second copy is better than a lost reminder.
 func (e *Engine) presetSent(ctx context.Context, key string, err error) {
-	if errors.Is(err, errHeld) || errors.Is(err, ErrPaused) || errors.Is(err, ErrStopped) || errors.Is(err, errStoppedByPause) {
-		_ = e.DB.ReleaseNotice(ctx, key)
+	if err != nil && !errors.Is(err, errNotWorth) {
+		_ = e.DB.ReleaseNotice(context.WithoutCancel(ctx), key)
 	}
 }
 
@@ -111,18 +114,6 @@ func (e *Engine) calendarFor(ctx context.Context, u *store.User, from, to time.T
 	return items, errs
 }
 
-// visibleDue is the follow-ups this sprig may mention: its own and shared
-// ones, never another sprig's private memory.
-func visibleDue(c *character.Character, mems []store.Memory) []store.Memory {
-	var out []store.Memory
-	for _, m := range mems {
-		if m.Character == "" || m.Character == c.ID {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 func (e *Engine) morningBrief(ctx context.Context, c *character.Character, u *store.User) {
 	at, err := character.ParseClock(c.Initiative.MorningBrief)
 	if err != nil {
@@ -131,7 +122,7 @@ func (e *Engine) morningBrief(ctx context.Context, c *character.Character, u *st
 	loc := u.Location()
 	now := e.now().In(loc)
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	start := day.Add(time.Duration(at) * time.Minute)
+	start := time.Date(now.Year(), now.Month(), now.Day(), at/60, at%60, 0, 0, loc) // the clock time, even on a DST day
 	if now.Before(start) || !now.Before(start.Add(briefWindow)) {
 		return
 	}
@@ -143,11 +134,10 @@ func (e *Engine) morningBrief(ctx context.Context, c *character.Character, u *st
 		return
 	}
 	items, errs := e.calendarFor(ctx, u, day, day.AddDate(0, 0, 1))
-	due, err := e.DB.FollowupsDueBetween(ctx, u.ID, day, day.AddDate(0, 0, 1))
+	due, err := e.DB.FollowupsDueBetween(ctx, u.ID, c.ID, day, day.AddDate(0, 0, 1), e.now(), "")
 	if err != nil {
 		errs = append(errs, "follow-ups: "+err.Error())
 	}
-	due = visibleDue(c, due)
 	var b strings.Builder
 	var news []string
 	fmt.Fprintf(&b, "[Morning brief] It's %s morning for them (%s). ", now.Format("Monday 2 January"), now.Format("15:04"))
@@ -223,13 +213,15 @@ func (e *Engine) eventReminders(ctx context.Context, c *character.Character, u *
 
 func (e *Engine) dueReminders(ctx context.Context, c *character.Character, u *store.User) {
 	now := e.now()
-	due, err := e.DB.FollowupsDueBetween(ctx, u.ID, now.Add(-dueGrace), now.Add(dueLead))
+	// Ones already reminded about are left out before the query's limit,
+	// so a long list is worked through.
+	due, err := e.DB.FollowupsDueBetween(ctx, u.ID, c.ID, now.Add(-dueGrace), now.Add(dueLead), now, "due:")
 	if err != nil {
 		e.Log.Warn("due reminders", "err", err)
 		return
 	}
 	loc := u.Location()
-	for _, m := range visibleDue(c, due) {
+	for _, m := range due {
 		if e.holdReason(ctx, c, u) != "" {
 			return
 		}

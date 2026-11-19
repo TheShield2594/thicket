@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
@@ -175,7 +176,20 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 			return "Error: your access to " + name + " was lowered to " + lv + " since you asked, so it wasn't run."
 		}
 	}
-	out, err := tool.Run(ctx, t, args)
+	// Approved means not asked again, but never past a cap that has
+	// closed in since it was asked.
+	if msg := e.approvedCost(ctx, t, tool, args); msg != "" {
+		return msg
+	}
+	runCtx, finish := ctx, func() {}
+	if id := t.toolEstimate; id != 0 && tool.Name != "delegate_task" { // a background task is measured where it runs
+		var m *budget.Meter
+		runCtx, m = budget.WithMeter(ctx)
+		finish = func() { _ = e.DB.FinishEstimate(context.WithoutCancel(ctx), id, m.USD()) }
+	}
+	out, err := tool.Run(runCtx, t, args)
+	finish()
+	raw := out
 	if err != nil {
 		// Integration errors can quote credentials: redact before logging.
 		out = "Error: " + e.Secrets.Redact(err.Error())
@@ -186,7 +200,7 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 	// Redact before anything else sees it: the model, the DB, the chat.
 	out = e.Secrets.Redact(out)
 	if err == nil {
-		e.recordAction(ctx, t, tool, args, out)
+		e.recordAction(ctx, t, tool, args, raw)
 	}
 	if tool.Untrusted {
 		return wrapUntrusted(name, out)

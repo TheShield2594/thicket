@@ -119,8 +119,13 @@ type Initiative struct {
 	DueReminders bool `yaml:"due_reminders,omitempty"`
 }
 
-// MaxEventReminders is the longest heads-up before an event, in minutes.
-const MaxEventReminders = 24 * 60
+// MinEventReminders and MaxEventReminders bound the heads-up before an
+// event, in minutes. Reminders are checked every few minutes, so a
+// shorter lead could fall between two checks.
+const (
+	MinEventReminders = 10
+	MaxEventReminders = 24 * 60
+)
 
 // ParseClock parses "07:30" into minutes after midnight.
 func ParseClock(s string) (int, error) {
@@ -349,8 +354,8 @@ func (c *Character) Validate() []string {
 			p = append(p, err.Error())
 		}
 	}
-	if n := c.Initiative.EventReminders; n < 0 || n > MaxEventReminders {
-		p = append(p, fmt.Sprintf("initiative.event_reminders is minutes before an event: 1-%d, or leave it off", MaxEventReminders))
+	if n := c.Initiative.EventReminders; n != 0 && (n < MinEventReminders || n > MaxEventReminders) {
+		p = append(p, fmt.Sprintf("initiative.event_reminders is minutes before an event: %d-%d, or leave it off", MinEventReminders, MaxEventReminders))
 	}
 	if n := c.Initiative.DailyMessages; n < 0 || n > MaxDailyMessages {
 		p = append(p, fmt.Sprintf("initiative.daily_messages must be between 1 and %d (leave it off for %d)", MaxDailyMessages, DefaultDailyMessages))

@@ -363,7 +363,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err := e.respond(ctx, t, ""); err != nil {
 		return err
 	}
-	if user.IsKid() && user.OnboardedAt.IsZero() {
+	if user.IsKid() && user.OnboardedAt.IsZero() && t.replied {
 		e.greeted(ctx, user) // their kid sprig said its first hello
 	}
 	return nil
@@ -419,8 +419,16 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		return err
 	}
 	if f := inFlightFrom(ctx); f != nil && f.stopped.Load() {
-		// Stopped: no reply, no approval prompts, no handoff.
+		// Stopped: no reply, no approval prompts, no handoff. What was
+		// already done is still said, so it can be undone.
 		e.stopAck(ctx, t, f)
+		for _, p := range t.afterReply {
+			if p.trailID != 0 {
+				if err := e.postAction(context.WithoutCancel(ctx), t, t.char, p); err != nil {
+					e.Log.Error("say what was done", "err", err)
+				}
+			}
+		}
 		return nil
 	}
 	if err != nil {
@@ -430,7 +438,9 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	if reply != "" {
 		var ids []string
 		var msgID int64
-		if ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply); sendErr == nil && t.conv != nil {
+		ids, sendErr = e.sendIDs(ctx, t.chatRef, t.char, reply)
+		t.replied = sendErr == nil && err == nil // a real reply, not a failure notice
+		if sendErr == nil && t.conv != nil {
 			if id, err := e.DB.AddMessageID(ctx, t.conv.ID, "assistant", t.char.ID, reply); err == nil {
 				msgID = id
 				_ = e.DB.AddMessageRefs(ctx, id, t.chatRef, ids...)
@@ -457,17 +467,7 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 		case p.approval != nil:
 			err = e.deliverApproval(ctx, who, p.approval, p.text)
 		case p.trailID != 0:
-			// What a sprig did: its ids are kept so "undo" in reply finds it.
-			var ids []string
-			if ids, err = e.sendIDs(ctx, t.chatRef, who, p.text); err == nil {
-				_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, ids...)
-				if len(ids) == 0 {
-					_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, fmt.Sprintf("trail-%d", p.trailID))
-				}
-				if t.conv != nil {
-					_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", who.ID, p.text)
-				}
-			}
+			err = e.postAction(ctx, t, who, p)
 		default:
 			err = e.send(ctx, t.chatRef, who, p.text)
 		}
@@ -771,4 +771,21 @@ func quoteJoin(names []string) string {
 		q[i] = "“" + n + "”"
 	}
 	return strings.Join(q, ", ")
+}
+
+// postAction posts the line saying what a sprig did, keeping its ids so
+// "undo" in reply finds the trail entry.
+func (e *Engine) postAction(ctx context.Context, t *turn, who *character.Character, p post) error {
+	ids, err := e.sendIDs(ctx, t.chatRef, who, p.text)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		ids = []string{fmt.Sprintf("trail-%d", p.trailID)}
+	}
+	_ = e.DB.AddTrailAcks(ctx, t.chatRef, p.trailID, t.user.ID, ids...)
+	if t.conv != nil {
+		_ = e.DB.AddMessage(ctx, t.conv.ID, "assistant", who.ID, p.text)
+	}
+	return nil
 }

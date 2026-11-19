@@ -45,8 +45,7 @@ You never see the interview, the preview, the approval or the sprig.
 
 The same short tour happens on the first message of anyone who joins an
 existing household some other way (an id you gave Juni, a chat app
-account added later), admins included: only the owner, and admins set up
-alongside them, get the full setup tour. The family sprigs she introduces
+account added later), admins included: only the owner gets the full setup tour. The family sprigs she introduces
 are listed by Thicket, never anyone's private sprigs. It happens once:
 when they've had it (or skip it), it's done.
 

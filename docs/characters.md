@@ -83,7 +83,7 @@ Pip is a small, round sprig with a pocket watch for a belly...
 | `initiative.quiet_hours` | | `"22:00-08:00"` in your timezone: no proactive messages then. Job and trigger results that finish during quiet hours are held and delivered when they end. |
 | `initiative.daily_messages` | | How many messages the sprig may start itself (job and trigger results, check-ins, follow-ups) per person per day, in that person's timezone: 1-50, default 3. Once it's used up, results wait for the next day. Replies never count. Ask the sprig ("message me at most 5 times a day") to change it, or its quiet hours, in chat. |
 | `initiative.morning_brief` | | A time like `"07:30"` (each person's timezone): a short brief of today's calendar and anything due. Off when left out. See [Briefs and reminders](#briefs-and-reminders). |
-| `initiative.event_reminders` | | Minutes before each calendar event for a one-line heads-up (1-1440). Off when left out. |
+| `initiative.event_reminders` | | Minutes before each calendar event for a one-line heads-up (10-1440; reminders are checked every five minutes). Off when left out. |
 | `initiative.due_reminders` | | `true`: a reminder when something noted as due ("the bill is due Friday") is coming up. |
 | `actions.quiet` | | `true` keeps routine built-in work (scheduling jobs, making webhooks and triggers) to the trail, without a line in the chat. What it does through integrations is always said, with undo where there is one. See [Saying what was done](mcp.md#saying-what-was-done-and-undo). |
 | `model` | | Override the chat model for this sprig (an OpenRouter model id). |

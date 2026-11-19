@@ -218,3 +218,19 @@ func TestQuietSprigKeepsRoutineWorkToTheTrail(t *testing.T) {
 		t.Fatalf("routine work missing from the trail: %+v", trail)
 	}
 }
+
+// Review fixes: replying "undo" to an action with no undo says so (not
+// "already undone"), a routine action with no undo says it can't be
+// undone, and an undo that fails leaves the entry undoable.
+func TestUndoEdgeCases(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	a.DB.SetToolLevel(ctx, "hal", "mcp_ha__turn_on", store.LevelAct)
+	a.Engine.HandleIncoming(ctx, dm("Hal, turn on the light"))
+	fc.take()
+	in := dm("undo")
+	in.ReplyTo = fc.lastPost()
+	a.Engine.HandleIncoming(ctx, in)
+	if out := sentText(fc.take()); !strings.Contains(out, "can't be undone from here") || strings.Contains(out, "already") {
+		t.Fatalf("undo of an action with no undo: %s", out)
+	}
+}

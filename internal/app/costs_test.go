@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -192,4 +193,31 @@ func llmHasFile(req llm.Request, name string) bool {
 		}
 	}
 	return false
+}
+
+// Review fixes: a cap can't be NaN or infinite, and undoing an older cap
+// change doesn't overwrite a newer one.
+func TestSprigCapEdgeCases(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	for _, bad := range []float64{math.NaN(), math.Inf(1)} {
+		if _, err := a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", bad); err == nil {
+			t.Fatalf("cap %v accepted", bad)
+		}
+	}
+	a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 2)
+	a.Engine.SetSprigCap(ctx, h.owner, "bramble", "monthly", 0.5)
+	trail, _ := a.DB.Trail(ctx, 0, 10)
+	var first int64
+	for _, e := range trail {
+		if e.Kind == store.TrailCap && strings.Contains(e.Summary, "→ $2.00") {
+			first = e.ID
+		}
+	}
+	if _, err := a.Engine.UndoTrail(ctx, h.owner, first); err == nil || !strings.Contains(err.Error(), "changed again since") {
+		t.Fatalf("undoing an older cap change: %v", err)
+	}
+	if v := a.Settings.Float(ctx, "budget.character.bramble.monthly_usd"); v != 0.5 {
+		t.Fatalf("the newer cap was overwritten: %v", v)
+	}
 }

@@ -60,6 +60,9 @@ type turn struct {
 	// spokenTo: the message this answers was a voice message (it was
 	// transcribed), so a sprig that speaks when spoken to answers aloud.
 	spokenTo bool
+	// replied: respond posted a real reply (not a failure notice, a
+	// pause or a cost question).
+	replied bool
 
 	// Costs (costs.go): costOK once the person agreed to this turn's
 	// estimate; estimateID is the recorded estimate this turn's spend is
@@ -173,6 +176,13 @@ func (e *Engine) runTurn(ctx context.Context, t *turn, event string) (string, er
 		}
 		if err != nil {
 			return "", err
+		}
+		if i == 0 && !t.jobMode() {
+			// A reply's estimate is for its first model call (with any PDFs):
+			// compared with that call alone, not with the tools it then ran,
+			// which are estimated on their own. A background task is
+			// measured whole.
+			measured()
 		}
 		m := resp.Message
 		if len(m.Annotations) > 0 {
@@ -421,6 +431,7 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	} else {
 		t.done = append(t.done, tool.Label())
 	}
+	raw := out // what the undo is built from (actions.go); never shown as is
 	detail := e.Secrets.Redact(truncate(string(args), 500) + " → " + truncate(out, 500))
 	if e.privateDraft(t, name, args) {
 		detail = "(a private sprig's draft: not logged)" // admins read the activity log
@@ -429,7 +440,7 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	// Tool output goes back to the model: no secret values in it.
 	out = e.Secrets.Redact(out)
 	if err == nil {
-		e.recordAction(ctx, t, tool, args, out)
+		e.recordAction(ctx, t, tool, args, raw)
 	}
 	if tool.Untrusted {
 		t.addTaint(tool.Label())

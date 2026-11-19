@@ -97,11 +97,21 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 	if probs := c.Validate(); len(probs) > 0 {
 		return nil, errors.New(strings.Join(probs, "; "))
 	}
+	// A low cap that only its parents can raise, in place before the
+	// sprig is live.
+	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
+	undoCap, err := e.presetCap(ctx, c.ID, capUSD)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := e.Chars.Write(ctx, c); err != nil {
+		undoCap()
 		return nil, err
 	}
 	e.addTrail(ctx, by.ID, c.ID, store.TrailGrant, fmt.Sprintf("kid sprig %s created for %v, parents %v", c.DisplayName(), c.Kids, c.Parents), "", nil)
-	e.startKidCap(ctx, by, c) // a low cap that only its parents can raise
+	if capUSD > 0 {
+		e.trailCap(ctx, by, c, "monthly", 0, capUSD)
+	}
 	e.logActivity(ctx, "info", "character", c.ID, by.ID, "kid sprig created", "")
 	got, _ := e.Chars.Get(c.ID)
 	return got, nil
