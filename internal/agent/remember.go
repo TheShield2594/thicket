@@ -222,6 +222,9 @@ func (e *Engine) keepMemory(ctx context.Context, chatRef string, user *store.Use
 		return m.ID, "🧠 I already had that: " + quotePreview(m.Content) + ". It's yours now, so I won't change it on my own.", nil
 	}
 	m := store.Memory{UserID: user.ID, Kind: "fact", Content: content, Source: "user", Locked: true, Household: family}
+	if who != nil {
+		m.Origin = store.OriginSprigPrefix + who.ID
+	}
 	ids, err := e.DB.ApplyMemoryChanges(ctx, 0, []store.MemoryChange{{Action: "add", Memory: m}})
 	if err != nil {
 		return 0, "", err

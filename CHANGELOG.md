@@ -6,6 +6,24 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v23)
 
+- Relationship memory, apart from facts: how things are going between
+  you and each sprig. New kinds `tone` (how you like it to talk to you),
+  `likes` and `dislikes` (what annoyed you) sit with the existing
+  in-jokes and shared moments; they always belong to one sprig, never
+  shared or family memory, so a kid's stays in the kid sandbox. The
+  memory review proposes them separately from facts, and the prompt
+  gives them to the sprig as "how to be with this person", not facts to
+  recite.
+- A memory screen: **Memory** in the web app's sidebar and the
+  dashboard's memory section show facts and relationship memory apart,
+  with where each came from and when. Edit, lock, undo or delete any of
+  them, or add your own ("prefers short answers, no emoji"); the next
+  reply follows. Edits go through the memory history and undo one by
+  one; deleting forgets for good. Parents see and change what a kid
+  sprig they set up remembers about its kids. API v2 has the same:
+  `GET/POST /api/v2/memories`, `PATCH`/`DELETE /api/v2/memories/{id}`,
+  `PUT …/lock`, `POST …/undo`. Migration 0025 records where each memory
+  came from and who changed it.
 - "Remember this": reply to any message with **remember this** (or say
   "remember this: …"), react with 🧠 or 📌 on Discord or ✍ on Telegram,
   or tap the new brain button in the web app, and it becomes a locked

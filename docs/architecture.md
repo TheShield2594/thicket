@@ -180,6 +180,23 @@ answer is `users.remember_scope`.
   as scope `family`, may propose `family` adds, and de-duplicates them
   against family memory. Kid and solo sprig conversations never write it.
   The prompt labels each memory `shared`, `yours` or `family`.
+- Relationship memory: the kinds `tone` (how the person likes to be spoken
+  to), `likes`, `dislikes` (what annoyed them), `inside_joke` and
+  `shared_history` (`memory.Relationship`) are how things are going
+  between one sprig and one person, apart from facts. They always carry a
+  sprig id: never shared, never family memory, so a kid's stays in the kid
+  sandbox. The review proposes them in their own `relationship` list
+  (`Op.Rel`), turn selection gives them their own budget (`memory.Split`),
+  and the prompt puts them under "How to be with this person" as guidance
+  for how to talk, not facts to recite.
+- The memory screen (web app, dashboard, `/api/v2/memories`;
+  `agent/memoryscreen.go`) lists a person's memories, facts and
+  relationship apart, with where each came from (`memories.origin`:
+  `review`, `sprig:<id>`, `person:<id>`, `import`). Adds, edits and lock
+  changes go through `memory_events` with `by_user` set, and
+  `store.UndoMemoryChange` undoes them one by one (`undone_at`); deleting
+  scrubs the history as forgetting always has. A kid sprig's parents reach
+  what it remembers about its kids (`store.KidSprigMemories`).
 
 ## Webhook jobs
 

@@ -2,7 +2,7 @@
 
 One page at `/dashboard` with what Thicket knows and does for you. It's
 read-mostly: the only things you can do here are answer what needs you,
-and pause.
+pause, and change what sprigs remember about you.
 
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
@@ -22,7 +22,14 @@ and pause.
   and offers **Resume**. See [Pausing](operations.md#pausing-the-kill-switch).
 - **Trail**: what sprigs did, newest first: tools used, approvals,
   drafts, handoffs between sprigs, jobs.
-- What they remember about you, your jobs and their recent runs, your
+- **What they remember about you**: relationship memory (how things are
+  going with each sprig: how you like it to talk to you, what landed,
+  what annoyed you, in-jokes) apart from facts, each with where it came
+  from and when. Edit, lock or unlock, undo your last change, or delete
+  any of them, and add your own. Edits are kept as you wrote them
+  (locked); deleting forgets for good. Parents also see and change what
+  each kid sprig they set up remembers about its kids.
+- Your jobs and their recent runs, your
   recent background tasks (work one sprig gave another, with how it
   ended: done, nothing found, failed, stopped, or interrupted by a
   restart), and the skill library.

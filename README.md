@@ -131,7 +131,12 @@ by name, and you can open up to three chats side by side (Shift-click a
 sprig, or use the split button on its row). Attach files with the paperclip (or
 drop them on the message box), or tap the microphone to record a voice
 message: tap again to send it, and the sprig answers what you said. The details panel shows what a
-sprig remembers, its routines and how each last run went. It installs as
+sprig remembers, its routines and how each last run went. **Memory** in
+the sidebar shows what sprigs remember about you, relationship memory
+(how you like each sprig to talk to you, what landed, what annoyed you)
+apart from facts, with where each came from; edit, lock, undo or delete
+any of it, and the next reply follows. Parents see a kid sprig's there
+too, on its chats page. It installs as
 an app on phones and desktops (Add to Home Screen / Install), works in
 light and dark, and can notify you when a sprig writes while it's in the
 background.
