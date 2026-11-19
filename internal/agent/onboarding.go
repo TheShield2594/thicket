@@ -223,6 +223,7 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		return "", undo(err)
 	}
 	levelSet = true
+	e.trailLevel(ctx, nil, c.ID, store.AnyTool, "", store.LevelDraft, "a new sprig starts at draft")
 	var made []string
 	for _, r := range p.Routines {
 		j, err := e.DB.CreateJob(ctx, store.Job{UserID: user.ID, Character: c.ID, Name: r.Name, Schedule: r.Schedule, Prompt: r.Task, Kind: store.JobCron})

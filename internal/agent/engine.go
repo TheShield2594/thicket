@@ -167,7 +167,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		return err
 	}
 	// Someone else's sprig: as if no sprig was named.
-	if addressed != nil && !addressed.UsableBy(user.ID) {
+	if addressed != nil && !addressed.UsableBy(user) {
 		addressed, rest = nil, in.Text
 		if !in.IsDM && !in.Mentioned && !in.Listening {
 			return nil
@@ -262,16 +262,19 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	}
 	in.Text = strings.TrimSpace(typed)
 
-	char := host
+	char := e.defaultSprigFor(user)
+	if char == nil {
+		return e.send(ctx, in.ChatRef(), host, "There's no sprig set up for you yet. Ask a grown-up to set one up for you!")
+	}
 	chosen := true // the user picked the sprig: by name, or by its thread
 	if addressed != nil {
 		char = addressed
-	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user.ID) {
+	} else if c, ok := e.Chars.Get(in.Character); ok && in.Character != "" && c.UsableBy(user) {
 		char = c // a per-sprig web thread
 	} else {
 		chosen = false
 		if id, ok := e.active.Load(in.ChatRef()); ok {
-			if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user.ID) {
+			if c, ok := e.Chars.Get(id.(string)); ok && c.UsableBy(user) {
 				char = c
 			}
 		}
@@ -281,7 +284,7 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	if err != nil {
 		return err
 	}
-	if !chosen && e.Settings.Bool(ctx, "auto_route") {
+	if !chosen && e.Settings.Bool(ctx, "auto_route") && !user.IsKid() {
 		char = e.route(ctx, user, conv, char, in.Text)
 	}
 	e.active.Store(in.ChatRef(), char.ID)
@@ -296,6 +299,10 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 		ch.Typing(ctx, in.ChatID)
 	}
 	t := &turn{user: user, char: char, chatRef: in.ChatRef(), conv: conv, isDM: in.IsDM, query: query, images: media.images, pdfs: media.pdfs, userMsgID: msgID}
+	if user.IsKid() {
+		// After the reply, so the kid isn't kept waiting; never blocks it.
+		defer e.safetyCheck(context.WithoutCancel(ctx), user, char, in.Text)
+	}
 	return e.respond(ctx, t, "")
 }
 
@@ -356,13 +363,13 @@ func (e *Engine) respond(ctx context.Context, t *turn, event string) error {
 	}
 	// In the commons, @mentioning another sprig hands over to it.
 	if t.handoff == nil && reply != "" && e.isCommons(t.chatRef) {
-		if c := e.mentionedSprig(reply, t.char); c != nil && c.UsableBy(t.user.ID) {
+		if c := e.mentionedSprig(reply, t.char); c != nil && c.UsableBy(t.user) {
 			t.handoff = &handoffReq{to: c.ID, message: truncate(reply, 500)}
 		}
 	}
 	if h := t.handoff; h != nil && t.depth < maxHandoffDepth {
 		target, ok := e.Chars.Get(h.to)
-		if !ok || !target.UsableBy(t.user.ID) {
+		if !ok || !target.UsableBy(t.user) {
 			return nil
 		}
 		e.logActivity(ctx, "info", "handoff", t.char.ID, t.user.ID, fmt.Sprintf("%s handed off to %s", t.char.DisplayName(), target.DisplayName()), h.message)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -177,7 +178,9 @@ func (s *Store) PruneMessages(ctx context.Context, retention time.Duration) (int
 	cutoff := s.unix() - int64(retention.Seconds())
 	// Also prune conversations review will never close (gave up after 3
 	// failures, or nothing the user said), so retention holds for them too.
-	res, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE last_activity_at < ? AND (
+	// Kids' conversations are kept: their parents can read them any time.
+	res, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE last_activity_at < ?
+		AND user_id NOT IN (SELECT id FROM users WHERE kid = 1) AND (
 		reviewed_at IS NOT NULL OR review_attempts >= 3
 		OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id AND m.role = 'user'))`, cutoff)
 	if err != nil {
@@ -202,4 +205,46 @@ func (s *Store) LastChatRef(ctx context.Context, userID int64) (string, error) {
 		return "", nil
 	}
 	return ref, err
+}
+
+// KidChatMessage is one message from a kid's chats, for their parents.
+type KidChatMessage struct {
+	Message
+	KidID int64 `json:"kid_id"`
+}
+
+// KidChats returns messages, newest first (before an id, 0 = newest), from
+// the conversations the given kids had with a sprig: every conversation
+// the sprig took part in, whole, so parents see what the kid said too.
+func (s *Store) KidChats(ctx context.Context, kids []int64, character string, before int64, limit int) ([]KidChatMessage, error) {
+	if len(kids) == 0 {
+		return nil, nil
+	}
+	q := `SELECT m.id, m.conversation_id, m.role, m.character, m.content, m.created_at, m.pinned, c.user_id
+		FROM messages m JOIN conversations c ON c.id = m.conversation_id
+		WHERE c.user_id IN (` + strings.Repeat("?,", len(kids)-1) + `?)
+		AND m.role IN ('user', 'assistant')
+		AND EXISTS (SELECT 1 FROM messages a WHERE a.conversation_id = c.id AND a.role = 'assistant' AND a.character = ?)
+		AND (? = 0 OR m.id < ?) ORDER BY m.id DESC LIMIT ?`
+	args := []any{}
+	for _, k := range kids {
+		args = append(args, k)
+	}
+	args = append(args, character, before, before, limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KidChatMessage
+	for rows.Next() {
+		var m KidChatMessage
+		var at int64
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Character, &m.Content, &at, &m.Pinned, &m.KidID); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = time.Unix(at, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

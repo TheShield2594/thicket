@@ -484,7 +484,7 @@ func abilities(c *character.Character) []string {
 func (a *Adapter) sprigViews(ctx context.Context, u *store.User) []sprigView {
 	counts, _ := a.DB.CountMemories(ctx, u.ID)
 	var out []sprigView
-	for _, c := range a.Chars.For(u.ID) { // shared sprigs and their own
+	for _, c := range a.Chars.For(u) { // shared sprigs and their own
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), FullName: c.Name, Role: c.Role, Color: c.Color, Avatar: a.avatarURL(c),
 			Host: c.Host, Traits: c.Personality.Traits, Abilities: abilities(c), Memories: counts[c.ID],
 			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours}
@@ -535,7 +535,7 @@ type routineView struct {
 func (a *Adapter) sprig(w http.ResponseWriter, r *http.Request, u *store.User) {
 	ctx := r.Context()
 	c, ok := a.Chars.Get(r.PathValue("id"))
-	if !ok || !c.UsableBy(u.ID) {
+	if !ok || !c.UsableBy(u) {
 		writeErr(w, http.StatusNotFound, "no such sprig")
 		return
 	}
@@ -568,7 +568,7 @@ func (a *Adapter) chatFor(u *store.User, chatID string) (string, bool) {
 		return "", true
 	}
 	c, exists := a.Chars.Get(sprig)
-	return sprig, exists && c.UsableBy(u.ID)
+	return sprig, exists && c.UsableBy(u)
 }
 
 func (a *Adapter) messages(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -635,6 +635,10 @@ func (a *Adapter) deleteMessage(w http.ResponseWriter, r *http.Request, u *store
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if _, ok := a.chatFor(u, chatID); !ok || err != nil {
 		writeErr(w, http.StatusNotFound, "no such message")
+		return
+	}
+	if u.IsKid() {
+		writeErr(w, http.StatusForbidden, "messages in kids' chats are kept for their parents")
 		return
 	}
 	done, err := a.DB.DeleteWebMessage(r.Context(), chatID, id)

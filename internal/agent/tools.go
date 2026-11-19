@@ -125,6 +125,13 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 			}
 		}
 	}
+	if t.char.IsKid() {
+		for name, tool := range out {
+			if !kidMayUse(t.char, tool) {
+				delete(out, name)
+			}
+		}
+	}
 	return out
 }
 
@@ -141,8 +148,8 @@ func (e *Engine) builtinTools() []*Tool {
 		// --- memory (every sprig has its own memory space) ---
 		{
 			Name:        "remember",
-			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks). Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
-			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
+			Description: "Save something worth remembering about the user. scope 'shared' = every sprig may know it (name, family, preferences); 'mine' = just between you and the user (in-jokes, your tasks); 'family' = family memory about the whole household (family sprigs only: the household's diet, who lives here, routines), kept apart from anyone's private memories. Set user_asked=true when the user explicitly asked you to remember it: those memories are locked and never changed automatically.",
+			Params:      `{"type":"object","properties":{"content":{"type":"string","description":"one short third-person sentence"},"scope":{"type":"string","enum":["shared","mine","family"]},"kind":{"type":"string","enum":["fact","preference","person","project","inside_joke","shared_history","context"]},"user_asked":{"type":"boolean"}},"required":["content","scope"]}`,
 			Run:         e.toolRemember,
 		},
 		{
@@ -491,12 +498,16 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 	if a.Scope == "mine" {
 		char = t.char.ID
 	}
-	existing, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	family := a.Scope == "family"
+	if family && !e.writesFamilyMemory(t) {
+		return "", errors.New("only family sprigs talking with an adult keep family memory; use shared or mine")
+	}
+	existing, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
 	for _, m := range existing {
-		if m.Character == char && memory.Similarity(m.Content, content) >= 0.75 {
+		if m.Character == char && m.Household == family && memory.Similarity(m.Content, content) >= 0.75 {
 			if m.Locked && !a.UserAsked {
 				return fmt.Sprintf("Already remembered as #%d (set by the user).", m.ID), nil
 			}
@@ -510,7 +521,7 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 			return fmt.Sprintf("Updated memory #%d.", m.ID), nil
 		}
 	}
-	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked}
+	m := store.Memory{UserID: t.user.ID, Character: char, Kind: kind, Content: content, Source: "auto", Locked: a.UserAsked, Household: family}
 	if a.UserAsked {
 		m.Source = "user"
 	}
@@ -525,7 +536,7 @@ func (e *Engine) toolRemember(ctx context.Context, t *turn, args json.RawMessage
 }
 
 func (e *Engine) toolListMemories(ctx context.Context, t *turn, _ json.RawMessage) (string, error) {
-	mems, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	mems, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
@@ -536,7 +547,10 @@ func (e *Engine) toolListMemories(ctx context.Context, t *turn, _ json.RawMessag
 	var b strings.Builder
 	for _, m := range mems {
 		scope := "shared"
-		if m.Character != "" {
+		switch {
+		case m.Household:
+			scope = "family"
+		case m.Character != "":
 			scope = "just us"
 		}
 		extra := ""
@@ -558,13 +572,14 @@ func (e *Engine) toolForget(ctx context.Context, t *turn, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
-	visible, err := e.DB.VisibleMemories(ctx, t.user.ID, t.char.ID)
+	visible, err := e.memoriesFor(ctx, t)
 	if err != nil {
 		return "", err
 	}
 	ok := map[int64]bool{}
 	for _, m := range visible {
-		ok[m.ID] = true
+		// Family memory is forgotten only through a family sprig, by an adult.
+		ok[m.ID] = !m.Household || e.writesFamilyMemory(t)
 	}
 	var changes []store.MemoryChange
 	var missing []string
@@ -672,7 +687,7 @@ func (e *Engine) toolScheduleJob(ctx context.Context, t *turn, args json.RawMess
 	owner := t.char
 	if a.Owner != "" && a.Owner != t.char.ID {
 		c, ok := e.Chars.Get(a.Owner)
-		if !ok || !c.UsableBy(t.user.ID) {
+		if !ok || !c.UsableBy(t.user) {
 			return "", fmt.Errorf("there's no sprig with id %q", a.Owner)
 		}
 		owner = c
@@ -985,6 +1000,7 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	if err != nil {
 		return "", err
 	}
+	e.trailGrant(ctx, t.user, c, c.Tools, cp.Tools)
 	e.logActivity(ctx, "info", "character", c.ID, t.user.ID, "tool scopes changed", strings.Join(cp.Tools, ", "))
 	return fmt.Sprintf("%s now has: %s.", c.DisplayName(), strings.Join(cp.Tools, ", ")), nil
 }

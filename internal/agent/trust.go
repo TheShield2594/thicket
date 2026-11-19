@@ -130,6 +130,10 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 	if !ok {
 		return "", fmt.Errorf("the sprig %q no longer exists", r.Sprig)
 	}
+	if c.IsKid() {
+		return "", fmt.Errorf("%s is a kid sprig: it's locked to read", c.DisplayName())
+	}
+	prevExact, _ := e.DB.ExactToolLevel(ctx, c.ID, r.Tool)
 	// The level may have changed since the request (lowered, say): only
 	// raise from the level the user was shown. Checked and written in one
 	// transaction; a failed read refuses.
@@ -148,6 +152,7 @@ func (e *Engine) raiseLevel(ctx context.Context, user *store.User, args json.Raw
 	if err != nil {
 		return "", fmt.Errorf("couldn't check %s's current level, so nothing was changed: %w", c.DisplayName(), err)
 	}
+	e.trailLevel(ctx, user, c.ID, r.Tool, prevExact, r.Level, "approved trust request")
 	e.logActivity(ctx, "info", "approval", c.ID, user.ID, fmt.Sprintf("%s raised to %s for %s", r.Tool, r.Level, c.DisplayName()), "was "+r.From)
 	return fmt.Sprintf("%s is now at %s for %s (was %s).", c.DisplayName(), r.Level, r.Tool, r.From), nil
 }

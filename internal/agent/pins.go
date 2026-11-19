@@ -64,6 +64,10 @@ func (e *Engine) handleMessageCommand(ctx context.Context, in channel.Incoming, 
 		do = func() (string, error) { return e.unpinAll(ctx, in, user) }
 	case listPinsRe.MatchString(text):
 		do = func() (string, error) { return e.listPins(ctx, in, user) }
+	case (reply && forgetMsgRe.MatchString(text) || !reply && deleteLastRe.MatchString(text)) && user.IsKid():
+		do = func() (string, error) {
+			return "Messages here stay put, so your grown-ups can see them. I can still forget things about you: just ask me to forget it.", nil
+		}
 	case reply && forgetMsgRe.MatchString(text):
 		do = func() (string, error) { return e.forgetReplied(ctx, in, user) }
 	case !reply && deleteLastRe.MatchString(text):
@@ -304,6 +308,9 @@ func (e *Engine) HandleDeleted(ctx context.Context, d channel.Deletion) {
 		m, err := e.DB.MessageByRef(ctx, d.ChatRef(), id)
 		if err != nil {
 			continue // not one we kept (or already removed)
+		}
+		if u, err := e.DB.UserByID(ctx, m.UserID); err == nil && u.IsKid() {
+			continue // kids' chats are kept for their parents
 		}
 		if err := e.DB.DeleteMessage(ctx, m.ID); err != nil {
 			e.Log.Error("remove deleted message", "err", err)

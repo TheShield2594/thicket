@@ -135,6 +135,8 @@ type fakeModel struct {
 	// say makes Juni reply with exactly this; failMsg is the error text
 	// for failOn.
 	say, failMsg string
+	// safetyCalls counts kid-safety classifier calls.
+	safetyCalls int
 }
 
 func (m *fakeModel) hang(ctx context.Context) (*llm.Response, error) {
@@ -192,6 +194,19 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	m.mu.Unlock()
 	if pdfText == "" {
 		pdfText = "Quarterly revenue rose 12%."
+	}
+	if strings.HasPrefix(req.Messages[0].Content, "You screen messages a child") {
+		m.mu.Lock()
+		m.safetyCalls++
+		m.mu.Unlock()
+		msg := strings.ToLower(req.Messages[1].Content)
+		switch {
+		case strings.Contains(msg, "fail screen"):
+			return nil, &llm.APIError{Status: 503, Message: "upstream overloaded"}
+		case strings.Contains(msg, "where i live"):
+			return text(`{"concern": "stranger_personal_info", "summary": "Someone online asked where they live."}`), nil
+		}
+		return text(`{"concern": "none", "summary": ""}`), nil
 	}
 	if strings.HasPrefix(req.Messages[0].Content, "You pick which character") {
 		in := req.Messages[1].Content
@@ -376,6 +391,8 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		var id int64
 		fmt.Sscanf(u, "forget memory %d", &id)
 		return toolCall("forget", map[string]any{"ids": []int64{id}}), nil
+	case strings.Contains(u, "remember we are vegetarian"):
+		return toolCall("remember", map[string]any{"content": "The household is vegetarian.", "scope": "family", "kind": "preference"}), nil
 	case strings.Contains(u, "remember my dog"):
 		return toolCall("remember", map[string]any{"content": "Has a dog named Biscuit.", "scope": "shared", "kind": "fact", "user_asked": true}), nil
 	case strings.HasPrefix(u, "save skill "):

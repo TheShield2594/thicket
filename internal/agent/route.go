@@ -26,8 +26,8 @@ const (
 // route returns the sprig that should answer, or current.
 func (e *Engine) route(ctx context.Context, user *store.User, conv *store.Conversation, current *character.Character, text string) *character.Character {
 	var cands []*character.Character
-	for _, c := range e.Chars.For(user.ID) {
-		if c.UsableBy(user.ID) {
+	for _, c := range e.Chars.For(user) {
+		if c.UsableBy(user) {
 			cands = append(cands, c)
 		}
 	}

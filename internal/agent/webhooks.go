@@ -88,7 +88,7 @@ func (e *Engine) toolCreateWebhook(ctx context.Context, t *turn, args json.RawMe
 	owner := t.char
 	if a.Owner != "" && a.Owner != t.char.ID {
 		c, ok := e.Chars.Get(a.Owner)
-		if !ok || !c.UsableBy(t.user.ID) {
+		if !ok || !c.UsableBy(t.user) {
 			return "", fmt.Errorf("there's no sprig with id %q", a.Owner)
 		}
 		owner = c

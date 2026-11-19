@@ -427,7 +427,7 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	for _, c := range d.Chars.All() {
 		names[c.ID] = c.DisplayName()
 		// Members see shared sprigs and their own; admins see every sprig.
-		if !u.IsAdmin() && !c.UsableBy(u.ID) {
+		if !u.IsAdmin() && !c.UsableBy(u) {
 			continue
 		}
 		st := states[c.ID]

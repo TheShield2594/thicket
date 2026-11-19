@@ -101,6 +101,17 @@ func LevelRank(level string) int {
 	return -1
 }
 
+// ExactToolLevel returns the level stored for exactly this sprig (or
+// AllSprigs) and tool, "" if none: what an undo restores.
+func (s *Store) ExactToolLevel(ctx context.Context, character, tool string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, "SELECT level FROM tool_levels WHERE character = ? AND tool = ?", character, tool).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
 // SetToolLevel sets a level; an empty level removes it. character is a
 // sprig id or AllSprigs.
 func (s *Store) SetToolLevel(ctx context.Context, character, tool, level string) error {

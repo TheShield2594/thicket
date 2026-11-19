@@ -39,6 +39,9 @@ func granted(t *Tool) bool { return t.Scope != "" && t.Scope != "host" }
 
 // toolLevel returns the level that applies to this sprig and tool.
 func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *Tool) string {
+	if c.IsKid() {
+		return store.LevelRead // whatever is stored: kid sprigs never change anything
+	}
 	lv, err := e.DB.ToolLevel(ctx, c.ID, tool.Name, granted(tool))
 	if err != nil {
 		e.Log.Error("read tool level; asking instead", "tool", tool.Name, "err", err)
@@ -132,7 +135,7 @@ func (e *Engine) toolSetLevel(ctx context.Context, t *turn, args json.RawMessage
 	} else if !store.ValidLevel(level) {
 		return "", errors.New("level must be read, draft, ask, act or default")
 	}
-	if err := e.DB.SetToolLevel(ctx, who, tool, level); err != nil {
+	if err := e.setLevel(ctx, t.user, who, tool, level, "set in chat"); err != nil {
 		return "", err
 	}
 	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, fmt.Sprintf("%s level for %s set to %s", tool, label, a.Level), "")

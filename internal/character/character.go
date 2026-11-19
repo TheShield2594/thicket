@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -24,8 +25,30 @@ const (
 	ScopeCharacters = "characters"
 	ScopeAdmin      = "admin"
 	ScopeWeb        = "web"
+	ScopeCalendar   = "calendar"
 	ScopeMCPPrefix  = "mcp:"
 )
+
+// Household tiers. A solo sprig is one person's (belongs_to); a family
+// sprig is shared by every adult; a kid sprig talks only to the kids it
+// was set up for, and is locked down in code (see agent/kids.go).
+const (
+	TierSolo   = "solo"
+	TierFamily = "family"
+	TierKid    = "kid"
+)
+
+// What a parent can let a kid sprig see (Character.Allow).
+const (
+	AllowFamilyMemory = "family_memory"
+	AllowCalendar     = "calendar"
+)
+
+// Person is someone who might talk to a sprig (store.User).
+type Person interface {
+	PersonID() int64
+	Child() bool
+}
 
 type Personality struct {
 	Traits       []string `yaml:"traits"`
@@ -67,16 +90,64 @@ type Character struct {
 	// BelongsTo makes a sprig one person's (their Thicket user id): only
 	// they talk to it. 0, the default, is a sprig everyone shares.
 	BelongsTo int64 `yaml:"belongs_to,omitempty"`
+	// Household is the sprig's tier: solo, family or kid. Empty means solo
+	// when belongs_to is set, else family.
+	Household string `yaml:"household,omitempty"`
+	// Kids (user ids) a kid sprig talks to, and the Parents (user ids) who
+	// set it up: they can read its chats and get its safety alerts.
+	Kids    []int64 `yaml:"kids,omitempty"`
+	Parents []int64 `yaml:"parents,omitempty"`
+	// Allow lists adult data a parent has let a kid sprig see:
+	// family_memory, calendar. Nothing by default.
+	Allow []string `yaml:"allow,omitempty"`
 
 	Body string `yaml:"-"` // Markdown after the frontmatter
 	Path string `yaml:"-"`
 	Hash string `yaml:"-"` // sha256 of the file bytes as loaded
 }
 
+// Tier is the sprig's household tier: solo, family or kid.
+func (c *Character) Tier() string {
+	switch {
+	case c.Household == TierKid:
+		return TierKid
+	case c.BelongsTo != 0:
+		return TierSolo
+	}
+	return TierFamily
+}
+
+// IsKid reports whether this is a kid sprig.
+func (c *Character) IsKid() bool { return c.Tier() == TierKid }
+
+// UsableBy reports whether a person may talk to this sprig: a family
+// sprig by any adult, a solo sprig by its owner, a kid sprig by the kids
+// it was set up for. Kids talk to kid sprigs only.
+func (c *Character) UsableBy(p Person) bool {
+	if p == nil {
+		return false
+	}
+	switch c.Tier() {
+	case TierKid:
+		return p.Child() && slices.Contains(c.Kids, p.PersonID())
+	case TierSolo:
+		return !p.Child() && c.BelongsTo == p.PersonID()
+	}
+	return !p.Child()
+}
+
+// IsParent reports whether a user set up this kid sprig.
+func (c *Character) IsParent(userID int64) bool {
+	return c.IsKid() && slices.Contains(c.Parents, userID)
+}
+
+// Allows reports whether a parent let this kid sprig see something.
+// Sprigs that aren't kid sprigs are not limited by it.
+func (c *Character) Allows(what string) bool {
+	return !c.IsKid() || slices.Contains(c.Allow, what)
+}
+
 // DisplayName is what users see: the nickname if there is one.
-// UsableBy reports whether a user may talk to this sprig: it's shared,
-// or it's theirs.
-func (c *Character) UsableBy(userID int64) bool { return c.BelongsTo == 0 || c.BelongsTo == userID }
 
 func (c *Character) DisplayName() string {
 	if c.Nickname != "" {
@@ -156,6 +227,7 @@ func (c *Character) Validate() []string {
 	if c.BelongsTo < 0 || (c.Host && c.BelongsTo != 0) {
 		p = append(p, "belongs_to must be a user id, and the host is everyone's (leave it off)")
 	}
+	p = append(p, c.validateHousehold()...)
 	if n := len(c.Personality.Traits); n < 1 || n > 6 {
 		p = append(p, fmt.Sprintf("personality.traits should list 1-6 core traits (has %d)", n))
 	}
@@ -167,10 +239,10 @@ func (c *Character) Validate() []string {
 	}
 	for _, t := range c.Tools {
 		switch {
-		case t == ScopeSchedule, t == ScopeCharacters, t == ScopeAdmin, t == ScopeWeb:
+		case t == ScopeSchedule, t == ScopeCharacters, t == ScopeAdmin, t == ScopeWeb, t == ScopeCalendar:
 		case mcpRe.MatchString(t):
 		default:
-			p = append(p, fmt.Sprintf("unknown tool scope %q (use schedule, web, characters, admin, or mcp:<server>/<tool|*>)", t))
+			p = append(p, fmt.Sprintf("unknown tool scope %q (use schedule, web, calendar, characters, admin, or mcp:<server>/<tool|*>)", t))
 		}
 	}
 	if c.Initiative.QuietHours != "" {
@@ -180,6 +252,65 @@ func (c *Character) Validate() []string {
 	}
 	if len(c.Body) > 8000 {
 		p = append(p, "the description below the frontmatter is too long (max 8000 characters)")
+	}
+	return p
+}
+
+// validateHousehold checks the tier fields. Kid sprigs are checked
+// strictly: what a file can't grant here, code never offers either.
+func (c *Character) validateHousehold() []string {
+	var p []string
+	switch c.Household {
+	case "", TierFamily, TierSolo, TierKid:
+	default:
+		return []string{fmt.Sprintf("household %q must be solo, family or kid", c.Household)}
+	}
+	if c.Household == TierSolo && c.BelongsTo == 0 {
+		p = append(p, "a solo sprig needs belongs_to (whose it is)")
+	}
+	if c.Household == TierFamily && c.BelongsTo != 0 {
+		p = append(p, "a family sprig is everyone's: leave belongs_to off")
+	}
+	if !c.IsKid() {
+		if len(c.Kids) > 0 || len(c.Parents) > 0 || len(c.Allow) > 0 {
+			p = append(p, "kids, parents and allow are only for kid sprigs (household: kid)")
+		}
+		return p
+	}
+	if c.Host || c.BelongsTo != 0 {
+		p = append(p, "a kid sprig can't be the host or belong to one person (use kids and parents)")
+	}
+	if len(c.Kids) == 0 || len(c.Parents) == 0 {
+		p = append(p, "a kid sprig needs kids (who it talks to) and parents (who set it up), as user ids")
+	}
+	for _, id := range append(append([]int64{}, c.Kids...), c.Parents...) {
+		if id <= 0 {
+			p = append(p, "kids and parents must be user ids")
+			break
+		}
+	}
+	for _, k := range c.Kids {
+		if slices.Contains(c.Parents, k) {
+			p = append(p, "someone can't be both a kid and a parent of the same sprig")
+			break
+		}
+	}
+	for _, t := range c.Tools {
+		srv, tool, ok := strings.Cut(strings.TrimPrefix(t, ScopeMCPPrefix), "/")
+		switch {
+		case t == ScopeWeb:
+		case strings.HasPrefix(t, ScopeMCPPrefix) && ok && srv != "" && tool != "*":
+		default:
+			p = append(p, fmt.Sprintf("a kid sprig can only have tools a parent approved one by one: web, or mcp:<server>/<tool> (not %q)", t))
+		}
+	}
+	for _, a := range c.Allow {
+		if a != AllowFamilyMemory && a != AllowCalendar {
+			p = append(p, fmt.Sprintf("allow %q must be family_memory or calendar", a))
+		}
+	}
+	if c.Initiative.CheckIns || c.Initiative.FollowUps {
+		p = append(p, "a kid sprig doesn't check in or follow up: set initiative off")
 	}
 	return p
 }

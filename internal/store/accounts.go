@@ -89,13 +89,14 @@ type Invite struct {
 
 // CreateInvite stores an invite and returns its token.
 func (s *Store) CreateInvite(ctx context.Context, inv Invite, ttl time.Duration) (string, error) {
-	if inv.Role != "admin" {
-		inv.Role = "member"
+	if inv.Role != RoleAdmin && inv.Role != RoleKid {
+		inv.Role = RoleMember
 	}
 	token, hash := NewToken()
 	now := s.unix()
-	_, err := s.db.ExecContext(ctx, "INSERT INTO invites (token_hash, user_id, role, name, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		hash, nullInt(inv.UserID), inv.Role, inv.Name, nullInt(inv.CreatedBy), now+int64(ttl.Seconds()), now)
+	dbr, kid := dbRole(inv.Role)
+	_, err := s.db.ExecContext(ctx, "INSERT INTO invites (token_hash, user_id, role, kid, name, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		hash, nullInt(inv.UserID), dbr, kid, inv.Name, nullInt(inv.CreatedBy), now+int64(ttl.Seconds()), now)
 	return token, err
 }
 
@@ -112,8 +113,12 @@ func (s *Store) inviteByHash(ctx context.Context, q querier, hash string) (*Invi
 	var inv Invite
 	var uid, by sql.NullInt64
 	var exp int64
-	err := q.QueryRowContext(ctx, "SELECT user_id, role, name, created_by, expires_at FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-		hash, s.unix()).Scan(&uid, &inv.Role, &inv.Name, &by, &exp)
+	var kid int
+	err := q.QueryRowContext(ctx, "SELECT user_id, role, kid, name, created_by, expires_at FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+		hash, s.unix()).Scan(&uid, &inv.Role, &kid, &inv.Name, &by, &exp)
+	if kid == 1 {
+		inv.Role = RoleKid
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -144,8 +149,9 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, username, hash stri
 	uid := inv.UserID
 	if uid == 0 {
 		ext, _ := NewToken()
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, created_at) VALUES ('web', ?, ?, ?, ?)",
-			"w-"+ext[:16], inv.Name, inv.Role, now)
+		dbr, kid := dbRole(inv.Role)
+		res, err := tx.ExecContext(ctx, "INSERT INTO users (channel, external_id, name, role, kid, created_at) VALUES ('web', ?, ?, ?, ?, ?)",
+			"w-"+ext[:16], inv.Name, dbr, kid, now)
 		if err != nil {
 			return nil, err
 		}
