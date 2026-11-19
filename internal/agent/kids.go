@@ -165,7 +165,9 @@ func (e *Engine) alertParents(ctx context.Context, kid *store.User, c *character
 		if err != nil || parent.IsKid() {
 			continue
 		}
-		if err := e.sendNotice(context.WithoutCancel(ctx), parent, host, msg); err != nil {
+		// Safety alerts bypass quiet hours and the daily budget.
+		note := e.mustReach(ctx, host, parent, "it's a safety alert about "+name)
+		if err := e.sendNotice(context.WithoutCancel(ctx), parent, host, msg+note); err != nil {
 			e.Log.Error("safety alert not delivered", "parent", pid, "err", err)
 			e.Notify(ctx, fmt.Sprintf("safety-undelivered:%d", pid), time.Hour, "error",
 				fmt.Sprintf("A safety alert about %s couldn't be delivered to one of their parents (%s). Check the trail on the dashboard.", name, shortErr(err)))

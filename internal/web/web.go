@@ -494,6 +494,9 @@ type sprigView struct {
 	CheckIns    bool     `json:"check_ins"`
 	FollowUps   bool     `json:"follow_ups"`
 	QuietHours  string   `json:"quiet_hours,omitempty"`
+	// DailyMessages is the sprig's daily budget of unprompted messages per
+	// person (0 for kid sprigs, which send none).
+	DailyMessages int `json:"daily_messages,omitempty"`
 }
 
 func (a *Adapter) avatarURL(c *character.Character) string {
@@ -533,6 +536,9 @@ func (a *Adapter) sprigViews(ctx context.Context, u *store.User) []sprigView {
 		v := sprigView{ID: c.ID, Name: c.DisplayName(), FullName: c.Name, Role: c.Role, Color: c.Color, Avatar: a.avatarURL(c),
 			Host: c.Host, Traits: c.Personality.Traits, Abilities: abilities(c), Memories: counts[c.ID],
 			CheckIns: c.Initiative.CheckIns, FollowUps: c.Initiative.FollowUps, QuietHours: c.Initiative.QuietHours}
+		if !c.IsKid() {
+			v.DailyMessages = c.DailyBudget()
+		}
 		if v.Color == "" {
 			v.Color = "#7c8cff"
 		}
@@ -603,7 +609,30 @@ func (a *Adapter) sprig(w http.ResponseWriter, r *http.Request, u *store.User) {
 		}
 		routines = append(routines, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"routines": routines})
+	writeJSON(w, http.StatusOK, map[string]any{"routines": routines, "proactive": a.proactiveView(ctx, u, c)})
+}
+
+type heldView struct {
+	Title  string    `json:"title"`
+	Reason string    `json:"reason"` // quiet | budget
+	At     time.Time `json:"at"`
+}
+
+// proactiveView is how much of the sprig's daily budget of unprompted
+// messages u has had today, and what's held for them (nil for kid
+// sprigs, which send none).
+func (a *Adapter) proactiveView(ctx context.Context, u *store.User, c *character.Character) map[string]any {
+	if c.IsKid() {
+		return nil
+	}
+	sent, _ := a.DB.ProactiveSentSince(ctx, u.ID, c.ID, store.LocalDayStart(time.Now(), u.Location()))
+	held := []heldView{}
+	if hs, err := a.DB.HeldMessages(ctx, u.ID, c.ID); err == nil {
+		for _, h := range hs {
+			held = append(held, heldView{Title: h.Title, Reason: h.Reason, At: h.CreatedAt})
+		}
+	}
+	return map[string]any{"daily_messages": c.DailyBudget(), "sent_today": sent, "held": held}
 }
 
 // chatFor checks that the chat belongs to u and names a real sprig.

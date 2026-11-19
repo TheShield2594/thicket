@@ -231,6 +231,7 @@ func (e *Engine) WebhookRefused(ctx context.Context, j store.Job, cause error) {
 	if errors.Is(cause, ErrBadSignature) {
 		msg = fmt.Sprintf("Heads-up: my webhook job “%s” got calls without a valid signature, so I refused them. If you haven't just changed the sender's settings, someone else may have the URL: ask me for a new URL and secret.", j.Name)
 	}
+	msg += e.mustReach(ctx, char, user, "its URL may have leaked")
 	if err := e.sendNotice(ctx, user, char, msg); err != nil {
 		e.Log.Error("report webhook refusal", "job", j.ID, "err", err)
 	}

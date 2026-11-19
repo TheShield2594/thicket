@@ -47,6 +47,7 @@ initiative:
   check_ins: true
   follow_ups: true
   quiet_hours: "22:00-08:00"
+  daily_messages: 3
 created_by: thicket
 ---
 

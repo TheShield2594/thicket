@@ -36,7 +36,7 @@ func TestDefaultJuniperIsValid(t *testing.T) {
 	if probs := c.Validate(); len(probs) > 0 {
 		t.Fatalf("juniper invalid: %v", probs)
 	}
-	if !c.Host || c.DisplayName() != "Juni" || !c.HasScope(ScopeCharacters) {
+	if !c.Host || c.DisplayName() != "Juni" || !c.HasScope(ScopeCharacters) || c.DailyBudget() != 3 {
 		t.Fatalf("unexpected juniper: %+v", c)
 	}
 	if !strings.Contains(c.Body, "watering can") {
@@ -60,9 +60,9 @@ func TestParseErrors(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	c := &Character{ID: "Pip!", Tools: []string{"rm -rf", "mcp:notion/*", "mcp:ha/turn_on"}, Color: "red",
-		Initiative: Initiative{QuietHours: "late"}}
+		Initiative: Initiative{QuietHours: "late", DailyMessages: 500}}
 	probs := strings.Join(c.Validate(), "\n")
-	for _, want := range []string{"id", "name is required", "role is required", "traits", "voice.style", "color", `"rm -rf"`, "quiet_hours"} {
+	for _, want := range []string{"id", "name is required", "role is required", "traits", "voice.style", "color", `"rm -rf"`, "quiet_hours", "daily_messages"} {
 		if !strings.Contains(probs, want) {
 			t.Errorf("missing problem about %q in:\n%s", want, probs)
 		}

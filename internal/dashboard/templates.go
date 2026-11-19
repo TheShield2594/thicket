@@ -53,6 +53,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html la
 <section id="sprigs"><h2>Sprigs</h2><div class="roster">
 {{range .Sprigs}}<div class="sprigcard">{{.Avatar}}<div><b>{{.Name}}</b>{{if .Host}} <span class="tag">host</span>{{end}}{{if .Only}} <span class="tag">{{.Only}}</span>{{end}}
 <div class="state" id="st-{{.ID}}"><b>{{.State}}</b></div><div class="muted small">{{.Role}}</div>
+{{if .Proactive}}<div class="muted small">{{.Proactive}}</div>{{end}}
 <div>{{range .Scopes}}<span class="tag">{{.}}</span>{{else}}<span class="muted small">memory and teamwork only</span>{{end}}</div></div></div>{{end}}
 </div></section>
 

@@ -6,7 +6,9 @@ read-mostly: the only things you can do here are answer what needs you.
 - **Sprigs**: the roster, each with its drawn avatar showing what it's
   doing right now (idle, thinking, working, sleeping in its quiet hours,
   or stuck when it has failed work in your inbox from the last day). The
-  page checks every 5 seconds.
+  page checks every 5 seconds. Each card also shows how many of the
+  sprig's daily unprompted messages you've had today, how many are held
+  for later (quiet hours or the daily limit), and its quiet hours.
 - **Needs you**: requests waiting for your OK (approve or deny), drafts a
   sprig wrote up instead of doing (do it, or dismiss), and failed,
   interrupted or undelivered work (clear it once you've dealt with it).

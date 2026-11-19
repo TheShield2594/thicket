@@ -373,6 +373,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("set_user_profile", map[string]any{"name": strings.TrimSpace(name), "timezone": strings.TrimSpace(tz)}), nil
 	case strings.Contains(u, "that's the tour"):
 		return toolCall("complete_onboarding", map[string]any{}), nil
+	case strings.HasPrefix(u, "message me at most "):
+		var n int
+		fmt.Sscanf(u, "message me at most %d", &n)
+		return toolCall("set_initiative", map[string]any{"daily_messages": n, "quiet_hours": "21:30-07:00"}), nil
 	case strings.Contains(u, "schedule a reminder"):
 		return toolCall("schedule_job", map[string]any{"name": "Reminder", "schedule": "0 9 * * *", "task": "Remind me to stretch."}), nil
 	case strings.Contains(u, "ask for more trust"):
@@ -538,6 +542,24 @@ func setupLogged(t *testing.T, logOut io.Writer, chans ...*fakeChannel) (*App, *
 	}
 	t.Cleanup(a.Close)
 	return a, fm, ctx
+}
+
+// daytime puts a user in a timezone where it's around noon right now, so
+// a test that delivers job output on the real clock isn't held by the
+// sprig's quiet hours when it happens to run at night.
+func daytime(t *testing.T, a *App, userID int64) {
+	t.Helper()
+	off := 12 - time.Now().UTC().Hour() // -11..12 hours from UTC
+	tz := "Etc/GMT"
+	switch {
+	case off > 0:
+		tz = fmt.Sprintf("Etc/GMT-%d", off) // the Etc names' signs are inverted
+	case off < 0:
+		tz = fmt.Sprintf("Etc/GMT+%d", -off)
+	}
+	if err := a.DB.UpdateUserProfile(context.Background(), userID, "", tz); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func dm(text string) channel.Incoming {

@@ -393,7 +393,9 @@ func (e *Engine) requestApproval(ctx context.Context, t *turn, tool *Tool, args 
 	if t.chatRef != "" {
 		// Posted after the reply; registered by respond once delivered.
 		t.afterReply = append(t.afterReply, post{text: msg, approval: a})
-	} else if err := e.deliverApproval(ctx, t.char, a, msg); err != nil {
+	} else if err := e.deliverApproval(ctx, t.char, a, msg+e.mustReach(ctx, t.char, t.user, "it needs your approval")); err != nil {
+		// A job's approval request bypasses quiet hours and the daily
+		// budget: the job is waiting on it.
 		return "Error: couldn't ask the user for approval: " + err.Error()
 	}
 	e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, "approval requested for "+tool.Name, string(args))

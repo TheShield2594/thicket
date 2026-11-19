@@ -89,7 +89,9 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 	switch res.Status {
 	case "ok":
 		e.logActivity(ctx, "info", "job", char.ID, user.ID, fmt.Sprintf("job #%d %q ran", j.ID, j.Name), "")
-		if err := e.sendToUser(ctx, user, char, res.Output); err != nil {
+		// Job and trigger output is proactive: quiet hours and the daily
+		// budget may hold it for later (see gate.go).
+		if _, err := e.deliverProactive(ctx, user, char, res.Output, fmt.Sprintf("job:%d", j.ID), fmt.Sprintf("job “%s”", j.Name)); err != nil {
 			e.Log.Error("deliver job output", "job", j.ID, "err", err)
 			e.logActivity(ctx, "error", "job", char.ID, user.ID, fmt.Sprintf("job #%d ran but its message couldn't be delivered", j.ID), err.Error())
 			e.deadLetter(ctx, store.InboxItem{UserID: user.ID, Character: char.ID, Kind: store.InboxUndelivered, Ref: fmt.Sprintf("job:%d", j.ID),
@@ -123,6 +125,7 @@ func (e *Engine) JobFinished(ctx context.Context, j store.Job, res scheduler.Res
 		if res.Err == nil {
 			msg = fmt.Sprintf("⚠️ My job “%s” didn't work this time.%s", j.Name, when)
 		}
+		msg += e.mustReach(ctx, char, user, "a failed job needs you")
 		if err := e.sendToUser(ctx, user, char, msg); err != nil {
 			e.Log.Error("report job failure", "job", j.ID, "err", err)
 		}
@@ -150,6 +153,7 @@ func (e *Engine) ReportInterruptedRun(ctx context.Context, j store.Job) error {
 	}
 	if ok {
 		msg := fmt.Sprintf("⚠️ Thicket restarted while my job “%s” was running, so it didn't finish. It'll run again at its next time.", j.Name)
+		msg += e.mustReach(ctx, char, user, "an interrupted job may need you")
 		if err := e.sendToUser(ctx, user, char, msg); err != nil {
 			e.Log.Error("tell the user about an interrupted job", "job", j.ID, "err", err) // it's in the inbox regardless
 		}
@@ -168,7 +172,8 @@ func (e *Engine) deadLetter(ctx context.Context, it store.InboxItem) {
 
 // --- light initiative: follow-ups and check-ins ---
 
-// RunInitiative checks for due follow-ups and quiet users every 5 minutes.
+// RunInitiative delivers held messages and checks for due follow-ups and
+// quiet users every 5 minutes.
 func (e *Engine) RunInitiative(ctx context.Context) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -177,6 +182,8 @@ func (e *Engine) RunInitiative(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Held messages are already written: no model needed.
+			e.FlushHeld(ctx)
 			if !e.ModelReady(ctx) || e.Budget.HeartbeatPause(ctx, "") != "" {
 				continue // follow-ups wait; nothing is lost
 			}
@@ -234,8 +241,8 @@ func (e *Engine) FollowUps(ctx context.Context) {
 			expire("neither the sprig that noted it nor the host has follow-ups switched on")
 			continue
 		}
-		if e.quiet(char, user) {
-			continue // try again after quiet hours
+		if e.holdReason(ctx, char, user) != "" {
+			continue // try again after quiet hours, or with tomorrow's budget
 		}
 		if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("followup:%d", m.ID), time.Hour); !ok {
 			continue // attempted recently
@@ -244,6 +251,8 @@ func (e *Engine) FollowUps(ctx context.Context) {
 		err = e.proactive(ctx, user, char, fmt.Sprintf("Earlier you noted you'd follow up with the user about: %q. Send them a short, natural check-in about it now. One or two sentences.", m.Content))
 		if err == nil {
 			expire("")
+		} else if errors.Is(err, errHeld) {
+			_ = e.DB.ReleaseNotice(ctx, fmt.Sprintf("followup:%d", m.ID)) // retry as soon as it may go out
 		}
 	}
 }
@@ -271,7 +280,7 @@ func (e *Engine) CheckIns(ctx context.Context) {
 		}
 		var char *character.Character
 		for _, c := range e.Chars.For(&u) {
-			if c.Initiative.CheckIns && !c.IsKid() && !e.quiet(c, &u) {
+			if c.Initiative.CheckIns && !c.IsKid() && e.holdReason(ctx, c, &u) == "" {
 				char = c
 				break
 			}
@@ -286,19 +295,22 @@ func (e *Engine) CheckIns(ctx context.Context) {
 			continue
 		}
 		err = e.proactive(ctx, &u, char, fmt.Sprintf("The user hasn't talked to any sprig in %d days. Send a brief, warm, low-pressure check-in. If you remember something relevant (a plan, a loose end), mention it lightly. No guilt-tripping.", days))
-		if errors.Is(err, errQuietHours) {
-			// Not sent: free the claim so it goes out after quiet hours.
+		if errors.Is(err, errHeld) {
+			// Not sent: free the claim so it goes out once it may.
 			_ = e.DB.ReleaseNotice(ctx, key)
 		}
 	}
 }
 
-// errQuietHours means generation finished inside quiet hours, so nothing
-// was sent.
-var errQuietHours = errors.New("quiet hours started; not sent")
+// errHeld means generation finished when the gate no longer let the
+// message out (quiet hours started, or the budget was used meanwhile), so
+// nothing was sent.
+var errHeld = errors.New("held by quiet hours or the daily budget; not sent")
 
 // proactive generates and delivers a message the user didn't ask for. It
-// returns nil only if the message was delivered.
+// returns nil only if the message was delivered. Callers check the gate
+// first, so no generation is wasted; nothing is stored here, because what
+// the message is about stays due and is simply tried again.
 func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Character, event string) error {
 	t := &turn{user: u, char: c, query: event, noTools: true}
 	pctx := llm.WithMeta(ctx, llm.Meta{UserID: u.ID, Character: c.ID, Purpose: "proactive"})
@@ -310,11 +322,11 @@ func (e *Engine) proactive(ctx context.Context, u *store.User, c *character.Char
 	if text == "" {
 		return errors.New("model produced no message")
 	}
-	// Generation can take a while: re-check quiet hours right before sending.
-	if e.quiet(c, u) {
-		return errQuietHours
+	// Generation can take a while: re-check the gate right before sending.
+	if e.holdReason(ctx, c, u) != "" {
+		return errHeld
 	}
-	if err := e.sendToUser(ctx, u, c, text); err != nil {
+	if err := e.sendProactive(ctx, u, c, text); err != nil {
 		e.Log.Error("send proactive message", "err", err)
 		return err
 	}

@@ -16,6 +16,7 @@ const S = {
   chats: new Map(),    // chat -> {messages, more, loaded, loading}
   typing: new Map(),   // chat -> timestamp
   routines: new Map(), // sprig id -> routines
+  proactive: new Map(), // sprig id -> {daily_messages, sent_today, held}
   status: {},
   panes: [],           // open chat ids, left to right
   focus: 0,
@@ -607,10 +608,11 @@ async function loadChat(chat, opts = {}) {
 
 async function loadRoutines(id) {
   const session = S.session;
-  let routines = null;
-  try { routines = (await api('/api/sprigs/' + encodeURIComponent(id))).routines; } catch { /* shown as unavailable */ }
+  let routines = null, proactive = null;
+  try { ({ routines, proactive } = await api('/api/sprigs/' + encodeURIComponent(id))); } catch { /* shown as unavailable */ }
   if (session !== S.session) return; // signed out meanwhile
   S.routines.set(id, routines);
+  S.proactive.set(id, proactive || null);
   renderDetails();
 }
 
@@ -735,7 +737,7 @@ function endSession() {
   S.session++;
   S.me = null;
   S.panes = []; S.focus = 0; S.details = false; S.filter = '';
-  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.drafts].forEach((m) => m.clear());
+  [S.sprigs, S.latest, S.chats, S.typing, S.routines, S.proactive, S.drafts].forEach((m) => m.clear());
   S.order = [];
   paneEls.clear();
   $sidebar = $main = null;
@@ -1688,6 +1690,15 @@ function renderDetails() {
   if (s.follow_ups) initiative.push('Follows up on things you mention');
   if (s.check_ins) initiative.push('Checks in after a quiet spell');
   if (s.quiet_hours) initiative.push('Quiet hours ' + s.quiet_hours);
+  const pro = S.proactive.get(s.id);
+  if (pro) {
+    initiative.push(`Unprompted messages today: ${pro.sent_today} of ${pro.daily_messages}`);
+    for (const m of pro.held || []) {
+      initiative.push(`Held: ${m.title} from ${clock(m.at)} (${m.reason === 'budget' ? 'daily limit reached' : 'quiet hours'})`);
+    }
+  } else if (s.daily_messages) {
+    initiative.push(`Up to ${s.daily_messages} unprompted messages a day`);
+  }
 
   el.replaceChildren(head, h('div.details-scroll', {},
     h('div.profile', { style: { '--c': s.color } }, orb(s, 76),
