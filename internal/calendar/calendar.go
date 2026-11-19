@@ -31,7 +31,7 @@ type Item struct {
 	ID       string    `json:"id"`
 	Title    string    `json:"title"`
 	Start    time.Time `json:"start"`
-	End      time.Time `json:"end,omitempty"`
+	End      time.Time `json:"end,omitzero"`
 	AllDay   bool      `json:"all_day,omitempty"`
 	Location string    `json:"location,omitempty"`
 	// Calendar names a connected calendar (events layer).

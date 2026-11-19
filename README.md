@@ -195,7 +195,8 @@ cookies (`Secure` over HTTPS).
   and can be undone. See [Households](docs/household.md).
 - One calendar for the household: connect your calendars (ICS or CalDAV,
   read-only), and see your sprigs' jobs and what they put on the calendar,
-  with toggles per layer and per sprig. See [Calendar](docs/calendar.md).
+  with toggles per layer and per sprig, in the web app or an app. See
+  [Calendar](docs/calendar.md).
 - Schedule things: "Every weekday at 7:30, give me a summary of my day."
 - Routines can fire on events, not just the clock: "When I get an email
   from Maya, summarise it" watches an integration for new items

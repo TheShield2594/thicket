@@ -75,7 +75,12 @@ cover each one.
 
 ## Parents
 
-- **Read the whole chat, any time:** `GET /api/v2/kid-sprigs/bramble/chats`.
+In the web app, each kid sprig you set up appears under Household in the
+sidebar ("Bramble’s chats"). It shows the whole chat, read-only, and what
+the sprig may use: approve or remove tools one by one, and switch family
+memory or the calendar on or off. Every change goes in the trail.
+
+- **Read the whole chat, any time:** in the web app, or `GET /api/v2/kid-sprigs/bramble/chats`.
   Kids' messages are kept: "delete that" and deleting in the chat app
   don't remove them, and message retention doesn't prune kids' chats.
 - **No routine notifications.** Parents aren't told about ordinary chats.

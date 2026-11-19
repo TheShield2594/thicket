@@ -28,6 +28,9 @@ stated.
   outputs (each linking to its source), with filters per layer and per
   sprig. New `calendar` scope with `calendar`, `add_to_calendar` and
   `remove_from_calendar`. New tables `calendar_sources`, `sprig_events`.
+- Web app screens: **Calendar** (a week at a time, toggles per layer and
+  per sprig, connect and disconnect calendars) and, for parents, each kid
+  sprig's chats (read-only) with what it may use.
 - API v2 (`/api/v2`) for apps: token sign-in with a password or one-time
   link, chats (the web app's threads and event stream), the calendar,
   approvals, the trail, levels, and the household (invites, roles, kid

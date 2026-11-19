@@ -34,7 +34,7 @@ type TrailEntry struct {
 	// there's nothing to undo.
 	Undo     json.RawMessage `json:"-"`
 	Undoable bool            `json:"undoable"`
-	UndoneAt time.Time       `json:"undone_at,omitempty"`
+	UndoneAt time.Time       `json:"undone_at,omitzero"`
 }
 
 func (s *Store) AddTrail(ctx context.Context, t TrailEntry) error {

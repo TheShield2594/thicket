@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -364,5 +366,80 @@ func TestDashboardChanges(t *testing.T) {
 	ks, _ := a.DB.CreateWebSession(ctx, h.kid.ID, "test", web.SessionTTL)
 	if _, kbody := getDashboard(t, srv, ks); strings.Contains(kbody, `id="changes"`) {
 		t.Fatal("a kid saw the changes list")
+	}
+}
+
+func TestWebAppHouseholdScreens(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go a.Web.Run(runCtx, a.Engine.HandleIncoming)
+	waitFor(t, "web adapter", a.Web.Connected)
+	srv := httptest.NewServer(a.Web.Handler())
+	defer srv.Close()
+	get := func(u *store.User, method, path string, body string) (int, map[string]any) {
+		t.Helper()
+		session, _ := a.DB.CreateWebSession(ctx, u.ID, "test", web.SessionTTL)
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: "thicket_session", Value: session})
+		req.Header.Set("X-Thicket", "1")
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		out := map[string]any{}
+		json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out
+	}
+	h.kidSays("hello bramble")
+
+	// The sidebar's Household section comes from /api/me.
+	_, me := get(h.owner, "GET", "/api/me", "")
+	po := me["parent_of"].([]any)
+	if len(po) != 1 || po[0].(map[string]any)["id"] != "bramble" || me["calendar"] != true {
+		t.Fatalf("owner's /api/me: parent_of %v calendar %v", me["parent_of"], me["calendar"])
+	}
+	if kids := po[0].(map[string]any)["kids"].([]any); kids[0].(map[string]any)["name"] != "Max" {
+		t.Fatalf("kid names: %v", kids)
+	}
+	_, kimMe := get(h.kim, "GET", "/api/me", "")
+	if len(kimMe["parent_of"].([]any)) != 0 {
+		t.Fatal("Kim isn't a parent of any kid sprig")
+	}
+	_, kidMe := get(h.kid, "GET", "/api/me", "")
+	if kidMe["calendar"] != false || len(kidMe["parent_of"].([]any)) != 0 {
+		t.Fatalf("kid's /api/me: %v", kidMe)
+	}
+
+	// The screens' calls, with the web app's session.
+	if code, out := get(h.owner, "GET", "/api/calendar", ""); code != 200 || out["items"] == nil {
+		t.Fatalf("calendar: %d %v", code, out)
+	}
+	if code, _ := get(h.kid, "GET", "/api/calendar", ""); code != 403 {
+		t.Fatalf("kid calendar: %d", code)
+	}
+	code, out := get(h.owner, "GET", "/api/kid-sprigs/bramble/chats", "")
+	msgs, _ := out["messages"].([]any)
+	if code != 200 || len(msgs) == 0 {
+		t.Fatalf("kid chats: %d %v", code, out)
+	}
+	if m := msgs[len(msgs)-1].(map[string]any); m["role"] != "user" || m["content"] != "hello bramble" || m["at"] == nil {
+		t.Fatalf("kid chat message: %v", m)
+	}
+	if code, _ := get(h.kim, "GET", "/api/kid-sprigs/bramble/chats", ""); code != 403 {
+		t.Fatalf("non-parent kid chats: %d", code)
+	}
+	if code, out := get(h.owner, "PATCH", "/api/kid-sprigs/bramble/access", `{"add_allow":["calendar"]}`); code != 200 || fmt.Sprint(out["allow"]) != "[calendar]" {
+		t.Fatalf("kid access: %d %v", code, out)
+	}
+	// Writes need the web app's CSRF header, like every other write.
+	session, _ := a.DB.CreateWebSession(ctx, h.owner.ID, "test", web.SessionTTL)
+	req, _ := http.NewRequest("PATCH", srv.URL+"/api/kid-sprigs/bramble/access", strings.NewReader(`{"remove_allow":["calendar"]}`))
+	req.AddCookie(&http.Cookie{Name: "thicket_session", Value: session})
+	if res, _ := http.DefaultClient.Do(req); res.StatusCode != 403 {
+		t.Fatalf("write without X-Thicket: %d", res.StatusCode)
 	}
 }

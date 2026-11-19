@@ -12,9 +12,18 @@ hidden, with toggles per sprig:
 Kids don't have the calendar. A kid sprig whose parent allowed `calendar`
 sees shared household items only.
 
+## In the web app
+
+**Calendar**, under Household in the sidebar, shows a week at a time:
+toggle the layers (events, sprig jobs, sprig outputs) and each sprig on or
+off (the choices are remembered), step between weeks, and follow an
+output's link back to its source. Below it, connect and disconnect your
+calendars.
+
 ## Connecting a calendar
 
-Adults connect calendars through the app API (`POST /api/v2/calendars`):
+Adults connect calendars in the web app (Calendar → Connect a calendar)
+or through the app API (`POST /api/v2/calendars`):
 
 - **A calendar feed (ICS):** Google Calendar's "secret address in iCal
   format", iCloud's public calendar link, Outlook's published ICS link,

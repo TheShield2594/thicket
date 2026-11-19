@@ -63,7 +63,7 @@ Replies arrive on the event stream (or poll the history).
 | `POST /api/v2/household/invites` | admins: `{"name": "Ana", "role": "admin" \| "member" \| "kid"}` returns an invite link (7 days) |
 | `PATCH /api/v2/household/members/{id}` | admins: `{"role": "kid"}` |
 | `POST /api/v2/kid-sprigs` | admins: `{"id": "bramble", "name": "Bramble", "role": "A friendly companion for Max.", "kids": [7], "parents": [1, 2]}` |
-| `GET /api/v2/kid-sprigs/{id}/chats?before=ID` | parents: the whole chat, newest first |
+| `GET /api/v2/kid-sprigs/{id}/chats?before=ID` | parents: the whole chat, newest first: `{"id", "role": "user" (the kid) or "assistant", "sprig", "kid_id", "content", "at"}` |
 | `PATCH /api/v2/kid-sprigs/{id}/access` | parents: `{"add_tools": ["mcp:fortnite/player_stats"], "add_allow": ["calendar"], "remove_tools": [], "remove_allow": []}` |
 
 Errors are `{"error": "…"}` with a 4xx status. `/api/v1` (scripts and CI)

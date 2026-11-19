@@ -216,16 +216,41 @@ func userView(u *store.User) map[string]any {
 }
 
 func (a *Adapter) v2Me(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var parentOf []map[string]any
-	for _, c := range a.Chars.All() {
-		if c.IsParent(u.ID) {
-			parentOf = append(parentOf, map[string]any{"id": c.ID, "name": c.DisplayName(), "kids": c.Kids, "tools": c.Tools, "allow": c.Allow, "avatar": a.avatarURL(c)})
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": userView(u), "sprigs": a.sprigViews(r.Context(), u), "parent_of": parentOf,
+		"user": userView(u), "sprigs": a.sprigViews(r.Context(), u), "parent_of": a.parentOf(r.Context(), u),
 		"chats": map[string]string{"room": strconv.FormatInt(u.ID, 10) + "." + roomID, "sprig": strconv.FormatInt(u.ID, 10) + ".<sprig id>"},
 	})
+}
+
+// parentOf lists the kid sprigs a person set up, with their kids' names.
+func (a *Adapter) parentOf(ctx context.Context, u *store.User) []map[string]any {
+	out := []map[string]any{}
+	if u.IsKid() {
+		return out
+	}
+	for _, c := range a.Chars.All() {
+		if !c.IsParent(u.ID) {
+			continue
+		}
+		kids := []map[string]any{}
+		for _, id := range c.Kids {
+			name := "Kid " + strconv.FormatInt(id, 10)
+			if k, err := a.DB.UserByID(ctx, id); err == nil && k.Name != "" {
+				name = k.Name
+			}
+			kids = append(kids, map[string]any{"id": id, "name": name})
+		}
+		tools, allow := c.Tools, c.Allow
+		if tools == nil {
+			tools = []string{}
+		}
+		if allow == nil {
+			allow = []string{}
+		}
+		out = append(out, map[string]any{"id": c.ID, "name": c.DisplayName(), "color": c.Color, "avatar": a.avatarURL(c),
+			"kids": kids, "tools": tools, "allow": allow})
+	}
+	return out
 }
 
 // --- calendar ---
@@ -519,10 +544,19 @@ func (a *Adapter) v2KidChats(w http.ResponseWriter, r *http.Request, u *store.Us
 		writeErr(w, http.StatusForbidden, err.Error())
 		return
 	}
-	if msgs == nil {
-		msgs = []store.KidChatMessage{}
+	type kidMessage struct {
+		ID      int64     `json:"id"`
+		Role    string    `json:"role"` // user (the kid) | assistant (a sprig)
+		Sprig   string    `json:"sprig,omitempty"`
+		KidID   int64     `json:"kid_id"`
+		Content string    `json:"content"`
+		At      time.Time `json:"at"`
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs, "more": len(msgs) == 100})
+	out := make([]kidMessage, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, kidMessage{ID: m.ID, Role: m.Role, Sprig: m.Character, KidID: m.KidID, Content: m.Content, At: m.CreatedAt})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": out, "more": len(msgs) == 100})
 }
 
 func (a *Adapter) v2KidAccess(w http.ResponseWriter, r *http.Request, u *store.User) {

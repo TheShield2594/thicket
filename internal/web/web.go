@@ -308,6 +308,13 @@ func (a *Adapter) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/chats/{chat}/messages/{id}", a.auth(a.deleteMessage))
 	mux.HandleFunc("POST /api/chats/{chat}/messages/{id}/pin", a.auth(a.pinMessage))
 	mux.HandleFunc("GET /api/events", a.auth(a.events))
+	// The calendar and kid chats screens (same handlers as API v2).
+	mux.HandleFunc("GET /api/calendar", a.auth(a.v2Calendar))
+	mux.HandleFunc("GET /api/calendars", a.auth(a.v2Calendars))
+	mux.HandleFunc("POST /api/calendars", a.auth(a.v2AddCalendar))
+	mux.HandleFunc("DELETE /api/calendars/{id}", a.auth(a.v2RemoveCalendar))
+	mux.HandleFunc("GET /api/kid-sprigs/{id}/chats", a.auth(a.v2KidChats))
+	mux.HandleFunc("PATCH /api/kid-sprigs/{id}/access", a.auth(a.v2KidAccess))
 	return securityHeaders(mux)
 }
 
@@ -527,6 +534,8 @@ func (a *Adapter) me(w http.ResponseWriter, r *http.Request, u *store.User) {
 		"latest":          latest,
 		"shared_memories": counts[""],
 		"status":          st,
+		"parent_of":       a.parentOf(ctx, u),
+		"calendar":        a.Calendar != nil && !u.IsKid(),
 	})
 }
 

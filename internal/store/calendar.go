@@ -16,7 +16,7 @@ type SprigEvent struct {
 	Kind        string    `json:"kind"`
 	Title       string    `json:"title"`
 	StartsAt    time.Time `json:"starts_at"`
-	EndsAt      time.Time `json:"ends_at,omitempty"`
+	EndsAt      time.Time `json:"ends_at,omitzero"`
 	AllDay      bool      `json:"all_day,omitempty"`
 	Details     string    `json:"details,omitempty"`
 	SourceLabel string    `json:"source_label,omitempty"`
