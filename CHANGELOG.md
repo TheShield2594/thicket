@@ -41,6 +41,11 @@ stated.
   estimates the cost: above `budget.ask_above_usd` ($0.25) it asks first
   with the figure, and it refuses anything that would cross a cap, saying
   by how much. Estimates are kept next to what things really cost.
+- A permission level set for every sprig no longer reaches solo
+  (private) sprigs, core tools included: only a solo sprig's person
+  decides what it may do. Its own levels and the tool defaults apply.
+  If you relied on an every-sprig level for your own solo sprig, set it
+  on that sprig.
 - Relationship memory, apart from facts: how things are going between
   you and each sprig. New kinds `tone` (how you like it to talk to you),
   `likes` and `dislikes` (what annoyed you) sit with the existing

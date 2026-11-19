@@ -84,7 +84,10 @@ permission levels, trust upgrades, exec, granted paths, and pausing it.
 
 So a member can change their own solo sprigs' levels ("Juni, let Wren
 add to my reading list without asking") but not a family sprig's or
-anyone else's. Every refused attempt goes in the [trail](#the-trail) as
+anyone else's. A level set for every sprig is household policy for
+shared sprigs: it doesn't reach solo sprigs, not even for core tools like
+memory, so it can't change what someone's private sprig may do (yours
+included: set your own solo sprig's levels on the sprig itself). Every refused attempt goes in the [trail](#the-trail) as
 `refused` and in the activity log; one aimed at someone else's private
 sprig doesn't name it. Giving a sprig an integration (`grant_tools` with
 `mcp:…`) stays with admins, since integrations hold the household's

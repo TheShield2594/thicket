@@ -147,3 +147,43 @@ func mustMemories(t *testing.T, a *App, user int64) []store.Memory {
 	}
 	return ms
 }
+
+// A level set for every sprig is household policy for shared sprigs: it
+// doesn't reach a solo sprig, core tools included, so an admin can't
+// change what someone's private sprig may do that way (issue 66). The
+// solo sprig's own levels still apply.
+func TestEverySprigLevelSkipsPrivateSprigs(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	writeSolo(t, a, "wren", h.kim.ID)
+
+	// The owner (an admin) puts remember at ask for every sprig.
+	if err := a.Engine.SetToolLevel(ctx, h.owner, store.AllSprigs, "remember", store.LevelAsk); err != nil {
+		t.Fatal(err)
+	}
+	if lv, _ := a.DB.ToolLevel(ctx, "juniper", "remember", store.LevelFor{}); lv != store.LevelAsk {
+		t.Fatalf("a shared sprig's level = %q, want ask", lv)
+	}
+	if lv, _ := a.DB.ToolLevel(ctx, "wren", "remember", store.LevelFor{Private: true}); lv != "" {
+		t.Fatalf("Kim's private sprig's level = %q, want the default", lv)
+	}
+	// In practice: Juni asks; Kim's Wren just remembers.
+	if out := h.ownerSay("remember my dog is Biscuit"); !strings.Contains(texts(out), "I need your OK") {
+		t.Fatalf("Juni didn't ask: %+v", out)
+	}
+	if mems := mustMemories(t, a, h.owner.ID); len(mems) != 0 {
+		t.Fatalf("Juni remembered without asking: %+v", mems)
+	}
+	h.kimSays("wren, remember my dog is Biscuit")
+	if mems := mustMemories(t, a, h.kim.ID); len(mems) != 1 {
+		t.Fatalf("Kim's private sprig was held by a household level: %+v", mems)
+	}
+
+	// Kim's own level for her sprig still applies.
+	if err := a.Engine.SetToolLevel(ctx, h.kim, "wren", "remember", store.LevelRead); err != nil {
+		t.Fatal(err)
+	}
+	if lv, _ := a.DB.ToolLevel(ctx, "wren", "remember", store.LevelFor{Private: true}); lv != store.LevelRead {
+		t.Fatalf("Kim's own level = %q, want read", lv)
+	}
+}

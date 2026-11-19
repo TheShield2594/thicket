@@ -212,7 +212,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("voice tests: %v %+v", err, tests)
 	}
 	for _, tool := range []string{"web_search", "schedule_job"} {
-		if lv, _ := dst.db.ToolLevel(ctx, "fern", tool, true); lv != store.LevelDraft {
+		if lv, _ := dst.db.ToolLevel(ctx, "fern", tool, store.LevelFor{Granted: true}); lv != store.LevelDraft {
 			t.Fatalf("%s level %q, want draft", tool, lv)
 		}
 	}

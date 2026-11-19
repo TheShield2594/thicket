@@ -66,7 +66,7 @@ func TestMigrateApprovalPoliciesToLevels(t *testing.T) {
 	}
 	defer s.Close()
 	for tool, want := range map[string]string{"mcp_ha__turn_on": LevelAct, "remember": LevelAsk, "other": ""} {
-		if got, _ := s.ToolLevel(ctx, "pip", tool, true); got != want {
+		if got, _ := s.ToolLevel(ctx, "pip", tool, LevelFor{Granted: true}); got != want {
 			t.Errorf("%s: level %q, want %q", tool, got, want)
 		}
 	}
@@ -89,17 +89,17 @@ func TestToolLevelPrecedence(t *testing.T) {
 	if err := s.SetToolLevel(ctx, "pip", "send", LevelRead); err != nil {
 		t.Fatal(err)
 	}
-	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelRead {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", LevelFor{Granted: true}); lv != LevelRead {
 		t.Fatalf("a sprig's own level must win: %q", lv)
 	}
-	if lv, _ := s.ToolLevel(ctx, "juniper", "send", true); lv != LevelAct {
+	if lv, _ := s.ToolLevel(ctx, "juniper", "send", LevelFor{Granted: true}); lv != LevelAct {
 		t.Fatalf("others get the all-sprigs level: %q", lv)
 	}
 	if err := s.SetToolLevel(ctx, "pip", "send", "sudo"); err == nil {
 		t.Fatal("an unknown level was accepted")
 	}
 	s.SetToolLevel(ctx, "pip", "send", "")
-	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelAct {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", LevelFor{Granted: true}); lv != LevelAct {
 		t.Fatalf("clearing the sprig's level falls back: %q", lv)
 	}
 }
@@ -222,14 +222,14 @@ func TestSprigWideLevel(t *testing.T) {
 	ctx := context.Background()
 	s.SetToolLevel(ctx, "pip", AnyTool, LevelDraft)
 	s.SetToolLevel(ctx, AllSprigs, "send", LevelAct)
-	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelDraft {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", LevelFor{Granted: true}); lv != LevelDraft {
 		t.Fatalf("sprig-wide level should beat the all-sprigs one: %q", lv)
 	}
-	if lv, _ := s.ToolLevel(ctx, "pip", "remember", false); lv != "" {
+	if lv, _ := s.ToolLevel(ctx, "pip", "remember", LevelFor{}); lv != "" {
 		t.Fatalf("a core tool picked up the sprig-wide level: %q", lv)
 	}
 	s.SetToolLevel(ctx, "pip", "send", LevelAsk)
-	if lv, _ := s.ToolLevel(ctx, "pip", "send", true); lv != LevelAsk {
+	if lv, _ := s.ToolLevel(ctx, "pip", "send", LevelFor{Granted: true}); lv != LevelAsk {
 		t.Fatalf("the exact tool level should win: %q", lv)
 	}
 	if LevelRank(LevelRead) >= LevelRank(LevelAct) || LevelRank("nope") != -1 {
@@ -258,21 +258,21 @@ func TestInboxAfterResolve(t *testing.T) {
 func TestRaiseToolLevel(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelAsk, LevelAct); err != nil {
+	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", LevelFor{Granted: true}, LevelAsk, LevelAsk, LevelAct); err != nil {
 		t.Fatal(err)
 	}
-	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", true); lv != LevelAct {
+	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", LevelFor{Granted: true}); lv != LevelAct {
 		t.Fatalf("not raised: %q", lv)
 	}
 	s.SetToolLevel(ctx, "hal", "turn_on", LevelRead) // lowered meanwhile
-	if cur, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelAsk, LevelAct); !errors.Is(err, ErrLevelChanged) || cur != LevelRead {
+	if cur, err := s.RaiseToolLevel(ctx, "hal", "turn_on", LevelFor{Granted: true}, LevelAsk, LevelAsk, LevelAct); !errors.Is(err, ErrLevelChanged) || cur != LevelRead {
 		t.Fatalf("stale raise: %q %v", cur, err)
 	}
-	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", true); lv != LevelRead {
+	if lv, _ := s.ToolLevel(ctx, "hal", "turn_on", LevelFor{Granted: true}); lv != LevelRead {
 		t.Fatalf("stale raise applied: %q", lv)
 	}
 	s.Close()
-	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", true, LevelAsk, LevelRead, LevelAct); err == nil || errors.Is(err, ErrLevelChanged) {
+	if _, err := s.RaiseToolLevel(ctx, "hal", "turn_on", LevelFor{Granted: true}, LevelAsk, LevelRead, LevelAct); err == nil || errors.Is(err, ErrLevelChanged) {
 		t.Fatalf("a failed read must refuse: %v", err)
 	}
 }
