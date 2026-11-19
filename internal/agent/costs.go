@@ -639,7 +639,9 @@ func (e *Engine) fileExists(id string) bool {
 // and reloads the registry so it isn't live. Only for a file the create
 // itself wrote (existed is false): never someone's own file. It reports
 // whether the file is gone; if not, the caller keeps the sprig's cap, so
-// a file that may still load never loads uncapped.
+// a file that may still load never loads uncapped. Once its Load returns,
+// no reload that started before the removal can bring the sprig back, so
+// the cap can go.
 func (e *Engine) unpublish(id string, existed bool) bool {
 	if existed {
 		return false

@@ -49,6 +49,13 @@ type Registry struct {
 	errs    []LoadError
 	mtimes  map[string]time.Time
 	onLoad  []func()
+	// Each Load takes a number as it starts; a Load whose result is older
+	// than the one in place (it started before a Load that has already
+	// finished) is dropped, so a slow Load can't put back a sprig whose
+	// file was removed after it started.
+	started, applied uint64
+	// beforeApply, in tests, runs just before a Load applies what it read.
+	beforeApply func()
 }
 
 // OnLoad registers f to run after every successful Load: a sprig was
@@ -160,7 +167,16 @@ func (r *Registry) ensureDefaultFile(id, name string) error {
 
 // Load (re)reads every *.md file in the directory. Invalid files are
 // skipped and reported via Errors; valid ones replace the current set.
+//
+// Once Load returns, what's in place was read after it started: a Load
+// that started earlier and finishes later is dropped. A caller that
+// changes the directory and then calls Load (Write, or removing a file)
+// can rely on no older view coming back.
 func (r *Registry) Load() error {
+	r.mu.Lock()
+	r.started++
+	gen := r.started
+	r.mu.Unlock()
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		return err
@@ -214,7 +230,16 @@ func (r *Registry) Load() error {
 		}
 		errs = append(errs, LoadError{r.dir, []string{"more than one host character (" + strings.Join(hosts, ", ") + "); using " + hosts[0]}})
 	}
+	if r.beforeApply != nil {
+		r.beforeApply()
+	}
 	r.mu.Lock()
+	if gen < r.applied {
+		// A Load that started later has already applied a newer view.
+		r.mu.Unlock()
+		return nil
+	}
+	r.applied = gen
 	r.chars, r.errs, r.mtimes = chars, errs, mtimes
 	r.mu.Unlock()
 	for _, e := range errs {

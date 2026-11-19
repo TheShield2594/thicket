@@ -173,3 +173,54 @@ func TestWriteNeverClobbersUserEdits(t *testing.T) {
 		t.Fatal("proposed file should not shadow the real one")
 	}
 }
+
+// A Load that started before a sprig's file was removed, and finishes
+// after a later Load, doesn't put the sprig back.
+func TestSlowLoadDoesntRestoreARemovedSprig(t *testing.T) {
+	r, dir := newReg(t)
+	if err := r.EnsureDefaults(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	moss := filepath.Join(dir, "moss.md")
+	os.WriteFile(moss, []byte("---\nid: moss\nname: Moss\nrole: r\npersonality: {traits: [a]}\nvoice: {style: [b]}\n---\n"), 0o644)
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.Get("moss"); !ok {
+		t.Fatal("moss didn't load")
+	}
+
+	// The slow Load has read moss and waits before applying it.
+	read, release := make(chan struct{}), make(chan struct{})
+	first := true
+	r.beforeApply = func() {
+		if first {
+			first = false
+			close(read)
+			<-release
+		}
+	}
+	slow := make(chan error)
+	go func() { slow <- r.Load() }()
+	<-read
+	// Meanwhile moss is removed and the registry reloaded.
+	if err := os.Remove(moss); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.Get("moss"); ok {
+		t.Fatal("moss still loaded after its removal")
+	}
+	close(release)
+	if err := <-slow; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.Get("moss"); ok {
+		t.Fatal("the slow Load put moss back")
+	}
+	if r.Changed() {
+		t.Fatal("the view in place doesn't match the directory")
+	}
+}
