@@ -97,6 +97,12 @@ func (s *Settings) String(ctx context.Context, name string) string {
 	return s.defaults()[name]
 }
 
+// Default is the value a setting has until someone changes it.
+func (s *Settings) Default(name string) string { return s.defaults()[name] }
+
+// Choices lists the allowed values of a "choice" setting.
+func Choices(name string) []string { return choices[name] }
+
 // IsSet reports whether a setting was changed in chat (not a default).
 func (s *Settings) IsSet(ctx context.Context, name string) bool {
 	_, ok, err := s.db.Setting(ctx, name)

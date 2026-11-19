@@ -4,8 +4,30 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: households, calendar and the app API (schema v15)
+## Unreleased: households, calendar and the app API (schema v16)
 
+- Settings in the web app. Owners and admins get a **Settings** screen
+  (the sliders button by your name): models, spending caps and the other
+  settings that could only be changed by asking the host, each with a
+  reset to its default; and **Connectors**, to add an MCP server by
+  address (with an optional access token, stored encrypted) or remove
+  one. Services you sign in to (OAuth) are still connected in chat.
+- The web app says that setup happens in chat. The home screen has a
+  **Set things up with Juni** block (bring on a sprig, schedule a
+  routine, connect a service, add a model key); each opens the host's
+  chat with the request started for you to finish, and nothing is sent
+  for you. On phones it's a **Set things up** row in the sidebar. The
+  "No model key" pill is now a button that opens the chat to paste one,
+  and Connectors has **Ask Juni** and **Give access** buttons for the
+  parts that are done in chat.
+- Your account now has your name and timezone, and opens from your name
+  in the sidebar as well as the key button.
+- A new sprig shows up in the sidebar as soon as it's approved (or its
+  file changes), without reloading the page.
+- Previews of a sprig that isn't created yet are labelled in the web app
+  ("Pippa (preview)") instead of showing its bare id (`web_messages.name`,
+  schema v16), and a draft whose look or routines need fixing no longer
+  introduces itself twice.
 - Households. Roles are owner, admin, member and kid (kids are stored as
   members with `users.kid`). Sprigs have a tier, `household: solo |
   family | kid`: solo sprigs are one person's, family sprigs every

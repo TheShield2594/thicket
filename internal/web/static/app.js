@@ -78,6 +78,7 @@ const ICONS = {
   check: '<path d="m5 12 5 5 9-10"/>',
   x: '<path d="M7 7l10 10M17 7 7 17"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2 2M15 8l2 2"/>',
   pin: '<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><path d="M12 15v6"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
@@ -376,6 +377,28 @@ async function showAccount() {
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     },
   }, fields, btn);
+  const me = S.me.user;
+  const [nameL, nameI] = field('Name (what sprigs call you)', { autocomplete: 'name', maxlength: 60, value: me.name || '' });
+  const [tzL, tzI] = field('Timezone', { placeholder: 'America/New_York', autocapitalize: 'none', spellcheck: 'false', value: me.timezone || '', list: 'tz-list' });
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { /* an older browser: type it */ }
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const pErr = h('p.err', { role: 'alert' });
+  const pBtn = h('button.btn', { type: 'submit' }, 'Save');
+  const profile = h('form.signin', {
+    onsubmit: async (ev) => {
+      ev.preventDefault();
+      pBtn.disabled = true; pErr.textContent = '';
+      try {
+        await api('/api/account/profile', { method: 'POST', body: { name: nameI.value.trim(), timezone: tzI.value.trim() } });
+        await refreshMe(); renderSidebar();
+        toast('Saved.');
+      } catch (e) { pErr.textContent = e.message; }
+      pBtn.disabled = false;
+    },
+  }, nameL, tzL, h('datalist', { id: 'tz-list' }, zones.map((z) => h('option', { value: z }))),
+  !me.timezone && here && h('small.hint', {}, 'This device is on ', h('button.linkish', { type: 'button', onclick: () => { tzI.value = here; } }, here), '.'),
+  pErr, pBtn);
   const rows = acct.sessions.map((s) => h('li.session', {},
     h('div', {}, h('b', {}, s.device), s.current && h('span.tag', {}, 'this one'),
       h('small', {}, `${{ link: 'sign-in link', password: 'password', oidc: 'single sign-on', invite: 'invite' }[s.method] || s.method} · active ${relTime(s.last_seen)}`)),
@@ -388,6 +411,8 @@ async function showAccount() {
   const sheet = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Your account', onclick: (ev) => { if (ev.target === sheet) close(); } },
     h('div.sheet-card', {},
       h('div.sheet-head', {}, h('h2', {}, 'Your account'), h('button.icon-btn', { 'aria-label': 'Close', onclick: close }, icon('x'))),
+      profile,
+      h('h3', {}, 'Signing in'),
       acct.username ? h('p.muted', {}, 'Username: ', h('b', {}, acct.username)) : h('p.muted', {}, 'Set a username and password to sign in without a link.'),
       acct.oidc && h('p.muted', {}, 'You can also sign in with single sign-on.'),
       form, err,
@@ -395,7 +420,7 @@ async function showAccount() {
       h('ul.sessions', {}, rows)));
   sheet.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
   document.body.append(sheet);
-  (user || cur || next).focus();
+  (me.name ? user || cur || next : nameI).focus();
 }
 
 function relTime(at) {
@@ -462,7 +487,21 @@ function connect() {
     if (ev.type === 'message') onMessage(ev.chat, ev.message);
     else if (ev.type === 'typing') onTyping(ev.chat);
     else if (ev.type === 'deleted') onDeleted(ev.chat, ev.id);
+    else if (ev.type === 'sprigs') onRoster();
   };
+}
+
+// A sprig was created, changed or removed: reload the roster so it shows
+// up in the sidebar straight away. Several events in a row load once.
+let rosterTimer;
+function onRoster() {
+  clearTimeout(rosterTimer);
+  rosterTimer = setTimeout(async () => {
+    const had = new Set(S.order);
+    try { await refreshMe(); } catch { return; }
+    renderShell();
+    for (const id of S.order) if (!had.has(id)) toast(`${S.sprigs.get(id).name} has joined. Find them in the sidebar.`);
+  }, 300);
 }
 
 async function resync() {
@@ -771,10 +810,14 @@ function renderSidebar() {
   const pills = [];
   pills.push(h('span.pill' + (S.online ? '.ok' : '.bad'), {}, h('i'), S.online ? 'Live' : 'Reconnecting'));
   if (st.channels?.discord !== undefined) pills.push(h('span.pill' + (st.channels.discord ? '.ok' : '.warn'), {}, h('i'), 'Discord'));
-  if (!st.model_key) pills.push(h('span.pill.warn', { title: 'Paste an OpenRouter key to Juni to get started' }, h('i'), 'No model key'));
-
   const u = S.me.user;
   const admin = u.role === 'owner' || u.role === 'admin';
+  if (!st.model_key) {
+    pills.push(admin && hostSprig()
+      ? h('button.pill.warn.act', { title: 'Sprigs can’t reply until there’s a model key', onclick: askKey }, h('i'), 'No model key: add one')
+      : h('span.pill.warn', { title: 'Sprigs can’t reply until the owner adds a model key' }, h('i'), 'No model key'));
+  }
+
   const meter = admin && st.budget_day > 0 && h('div.meter', { title: `Spent this month: $${(st.spend_month || 0).toFixed(2)}${st.budget_month ? ' of $' + st.budget_month : ''}` },
     h('div', { style: { display: 'flex', 'justify-content': 'space-between' } }, h('span', {}, 'Today’s spend'), h('span', {}, `$${(st.spend_day || 0).toFixed(2)} / $${st.budget_day}`)),
     h('div.bar', {}, h('b', { style: { width: Math.min(100, (100 * (st.spend_day || 0)) / st.budget_day) + '%' } })));
@@ -806,9 +849,10 @@ function renderSidebar() {
       meter,
       h('div.me', {},
         h('span.me-avatar', { 'aria-hidden': 'true' }, initials(u.name || 'You')),
-        h('div.who', {}, h('b', {}, u.name || 'You'), h('small', {}, { owner: 'Owner', admin: 'Admin', kid: 'Kid' }[u.role] || 'Member')),
+        h('button.who', { title: 'Your account: name, timezone, password and sessions', onclick: showAccount }, h('b', {}, u.name || 'You'), h('small', {}, { owner: 'Owner', admin: 'Admin', kid: 'Kid' }[u.role] || 'Member')),
+        S.me.settings && h('button.icon-btn', { title: 'Settings: models, spending and connectors', 'aria-label': 'Settings', 'aria-pressed': S.view === 'settings' ? 'true' : 'false', onclick: () => openView('settings') }, icon('sliders')),
         h('button.icon-btn', { title: 'Notifications', 'aria-label': 'Toggle notifications', 'aria-pressed': load('thicket.notify', false) ? 'true' : 'false', onclick: toggleNotify }, icon('bell')),
-        h('button.icon-btn', { title: 'Account: password and sessions', 'aria-label': 'Account', onclick: showAccount }, icon('key')),
+        h('button.icon-btn', { title: 'Account: name, timezone, password and sessions', 'aria-label': 'Account', onclick: showAccount }, icon('key')),
         h('button.icon-btn', { title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, icon('out')))));
   if (refocus !== null) { search.focus(); search.setSelectionRange(refocus, refocus); }
 }
@@ -845,6 +889,49 @@ function greeting() {
   return part + (S.me.user.name ? ', ' + S.me.user.name.split(' ')[0] : '');
 }
 
+// hostSprig is the sprig that does setup in chat (Juni, unless renamed).
+function hostSprig() {
+  return [...S.sprigs.values()].find((s) => s.host);
+}
+
+// askHost opens the host's chat with a request started for the person to
+// finish and send. Nothing is sent for them.
+async function askHost(text, note) {
+  const host = hostSprig();
+  if (!host) return toast('There’s no host sprig to ask.');
+  const chat = chatOf(host.id);
+  if (text) S.drafts.set(chat, text);
+  await openChat(chat);
+  const ta = paneEls.get(chat)?.querySelector('textarea');
+  if (ta) {
+    if (text) { ta.value = text; ta.dispatchEvent(new Event('input')); }
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  if (note) toast(note);
+}
+
+const askKey = () => askHost('', `Paste your OpenRouter key (it starts with sk-or-) to ${hostSprig()?.name || 'the host'}. It’s encrypted, and no model sees it.`);
+
+// What the host sets up in chat, so nobody has to guess that it's asked for.
+function setupIdeas() {
+  const host = hostSprig();
+  const u = S.me.user;
+  if (!host || u.role === 'kid') return null;
+  const admin = u.role === 'owner' || u.role === 'admin';
+  const n = host.name;
+  const ideas = [
+    admin && !S.status.model_key && ['key', 'Add a model key', 'Sprigs can’t think without one. Paste it in the chat.', askKey],
+    ['leaf', 'Bring on a new sprig', 'A helper with its own job, voice and memory.', () => askHost(`${n}, I’d like to bring on a new sprig to help with `)],
+    ['calendar', 'Schedule a routine', 'A morning summary, a weekly nudge, a reminder.', () => askHost(`${n}, can you set up a routine that `)],
+    admin && ['split', 'Connect a service', 'Home Assistant, Notion, Linear and other tools.', () => askHost(`${n}, can you connect `)],
+    S.me.settings && ['sliders', 'Models and spending', 'Change them yourself in Settings.', () => openView('settings')],
+  ].filter(Boolean);
+  return [
+    h('div.section-title', {}, h('h2', {}, `Set things up with ${n}`), h('small', {}, `Setup happens in chat: pick one and finish the sentence`)),
+    h('div.ideas', {}, ideas.map(([ic, title, sub, go]) => h('button.idea', { onclick: go }, h('span.view-mark', { 'aria-hidden': 'true' }, icon(ic)), h('div', {}, h('b', {}, title), h('small', {}, sub))))),
+  ];
+}
+
 function renderHome() {
   const host = S.sprigs.get(S.order[0]);
   const cards = S.order.map((id) => {
@@ -862,7 +949,8 @@ function renderHome() {
     h('div.home-scroll', {}, h('div.home-inner', {},
       h('div.hero', {}, h('div.hero-orb', { 'aria-hidden': 'true' }), h('h1', {}, greeting()), h('p', {}, 'Your sprigs remember you, follow up, and keep each other in the loop. Who would you like to talk to?')),
       h('div.section-title', {}, h('h2', {}, 'Your sprigs'), h('small', {}, 'Shift-click to open side by side')),
-      h('div.cards', {}, cards))),
+      h('div.cards', {}, cards),
+      setupIdeas())),
     box);
 }
 
@@ -874,6 +962,10 @@ function householdRows() {
   for (const k of S.me.parent_of || []) {
     rows.push(viewRow('kid:' + k.id, `${k.name}’s chats`, 'With ' + k.kids.map((x) => x.name).join(', '), orb(k, 42)));
   }
+  // Phones have no home screen (the sidebar is home), so the setup ideas
+  // get a row of their own there.
+  const host = hostSprig();
+  if (MOBILE.matches && host && S.me.user.role !== 'kid') rows.push(viewRow('setup', 'Set things up', `Sprigs, routines and services, with ${host.name}`, icon('leaf')));
   return rows.length ? [h('div.sb-label', {}, 'Household'), rows] : null;
 }
 
@@ -895,6 +987,12 @@ function openView(view) {
 
 function renderView() {
   if (S.view === 'calendar') return renderCalendar();
+  if (S.view === 'settings' && S.me.settings) return renderSettings();
+  if (S.view === 'setup' && hostSprig()) {
+    return h('section.view', { 'aria-label': 'Set things up' },
+      viewHead('Set things up', 'Setup happens in chat', h('span.view-mark', { 'aria-hidden': 'true' }, icon('leaf'))),
+      h('div.view-scroll', {}, h('div.view-inner', {}, setupIdeas())));
+  }
   const kid = (S.me.parent_of || []).find((k) => 'kid:' + k.id === S.view);
   if (kid) return renderKidChats(kid);
   return h('section.view', {}, h('div.view-scroll', {}, h('p.d-empty', {}, 'Nothing here.')));
@@ -1040,6 +1138,123 @@ function calendarSources() {
   h('p.d-empty', {}, 'Read-only: Thicket never changes your calendars. The address and password are stored encrypted.'));
   return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connected calendars')), list,
     h('details.cal-add', {}, h('summary', {}, 'Connect a calendar'), form));
+}
+
+// --- settings (owners and admins) ---
+
+const SETTING_GROUPS = [
+  ['Models', 'Which models your sprigs think with. Ids are OpenRouter model ids, e.g. anthropic/claude-sonnet-4.5.', ['model', 'fallback_model', 'cheap_model', 'transcribe_model', 'model_url']],
+  ['Spending', 'Caps on what models may cost. 0 means no cap.', ['budget.daily_usd', 'budget.monthly_usd']],
+  ['Behaviour', '', ['auto_route', 'consistency_check', 'checkin_days', 'history_tokens']],
+  ['Web and documents', '', ['web_search', 'search_url', 'pdf_engine', 'document_chars']],
+];
+const SETTING_LABELS = {
+  model: 'Main model', fallback_model: 'Fallback model', cheap_model: 'Small model', transcribe_model: 'Voice transcription model', model_url: 'Model server',
+  'budget.daily_usd': 'Daily cap (USD)', 'budget.monthly_usd': 'Monthly cap (USD)',
+  auto_route: 'Pick who answers automatically', consistency_check: 'Personality check', checkin_days: 'Check in after quiet days', history_tokens: 'Conversation history (tokens)',
+  web_search: 'Web search', search_url: 'SearXNG address', pdf_engine: 'PDF reader', document_chars: 'PDF text kept (characters)',
+};
+const upFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function settingRow(s) {
+  const id = 'set-' + s.name.replace(/\W/g, '-');
+  let input;
+  if (s.kind === 'bool') {
+    input = h('select.field', { id }, h('option', { value: 'true' }, 'On'), h('option', { value: 'false' }, 'Off'));
+  } else if (s.kind === 'choice') {
+    input = h('select.field', { id }, (s.choices || []).map((c) => h('option', { value: c }, c)));
+  } else {
+    const num = s.kind === 'int' || s.kind === 'float';
+    input = h('input.field', { id, type: num ? 'number' : s.kind === 'url' ? 'url' : 'text', min: num ? 0 : null, step: s.kind === 'float' ? 'any' : null,
+      inputmode: s.kind === 'int' ? 'numeric' : s.kind === 'float' ? 'decimal' : null, placeholder: s.default || 'Not set', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+  }
+  input.value = s.value;
+  const save = h('button.chip', { type: 'submit', hidden: true }, 'Save');
+  const reset = h('button.chip', { type: 'button', hidden: !s.changed, title: s.default ? 'Back to ' + s.default : 'Clear it' }, 'Reset');
+  const err = h('small.err', { role: 'alert' });
+  const dirty = () => { save.hidden = input.value.trim() === s.value; };
+  input.addEventListener('input', dirty);
+  input.addEventListener('change', dirty);
+  const put = async (value) => {
+    err.textContent = ''; save.disabled = reset.disabled = true;
+    try {
+      s = await api('/api/settings', { method: 'POST', body: { name: s.name, value } });
+      input.value = s.value; reset.hidden = !s.changed; dirty();
+      toast(`${SETTING_LABELS[s.name] || s.name} saved.`);
+      if (s.name.startsWith('budget.')) refreshMe().then(renderSidebar).catch(() => {});
+    } catch (e) { err.textContent = e.message; }
+    save.disabled = reset.disabled = false;
+  };
+  reset.onclick = () => put('');
+  return h('form.set-row', { onsubmit: (e) => { e.preventDefault(); put(input.value.trim()); } },
+    h('div.set-text', {}, h('label', { for: id }, SETTING_LABELS[s.name] || s.name), h('small', {}, upFirst(s.help) + '.'), err),
+    h('div.set-input', {}, input, save, reset));
+}
+
+function settingsList() {
+  const body = h('div', {}, h('p.d-empty', {}, 'Loading…'));
+  (async () => {
+    try {
+      const all = (await api('/api/settings')).settings;
+      const by = new Map(all.map((s) => [s.name, s]));
+      const grouped = new Set(SETTING_GROUPS.flatMap((g) => g[2]));
+      const rest = all.filter((s) => !grouped.has(s.name)).map((s) => s.name);
+      const groups = rest.length ? [...SETTING_GROUPS, ['Other', '', rest]] : SETTING_GROUPS;
+      body.replaceChildren(...groups.map(([title, sub, names]) => h('section.set-group', {},
+        h('div.section-title', {}, h('h2', {}, title)), sub && h('p.d-empty', {}, sub),
+        names.filter((n) => by.has(n)).map((n) => settingRow(by.get(n))))));
+    } catch (e) { body.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the settings: ' + e.message)); }
+  })();
+  return body;
+}
+
+function connectorList() {
+  const hostName = hostSprig()?.name || 'Juni';
+  const list = h('div.cal-list', {}, h('p.d-empty', {}, 'Loading…'));
+  const load = async () => {
+    try {
+      const items = (await api('/api/integrations')).integrations;
+      list.replaceChildren(...(items.length ? items.map((c) => {
+        const ok = c.status.startsWith('connected');
+        return h('div.cal-src', {},
+          h('div', {}, h('b', {}, c.name), h('small', {}, c.target),
+            h('small' + (ok ? '' : '.err'), {}, upFirst(c.status)),
+            h('small', {}, c.used_by.length ? 'Used by ' + c.used_by.join(', ') : `No sprig can use it yet. ${hostName} gives them access.`)),
+          h('button.chip', { title: `Ask ${hostName} which sprigs may use it`, onclick: () => askHost(`${hostName}, give access to the ${c.name} connector to `) }, c.used_by.length ? 'Change access' : 'Give access'),
+          h('button.chip', { onclick: async () => {
+            if (!confirm(`Remove ${c.name}? Sprigs lose its tools.`)) return;
+            try { await api('/api/integrations/' + encodeURIComponent(c.name), { method: 'DELETE' }); toast('Removed'); load(); } catch (e) { toast(e.message); }
+          } }, 'Remove'));
+      }) : [h('p.d-empty', {}, 'No connectors yet.')]));
+    } catch (e) { list.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the connectors: ' + e.message)); }
+  };
+  load();
+  const [nameL, name] = field('Name', { placeholder: 'home_assistant', required: true, pattern: '[a-z0-9]+(_[a-z0-9]+)*', minlength: 2, maxlength: 42, autocapitalize: 'none', spellcheck: 'false', autocomplete: 'off' });
+  const [urlL, url] = field('Address of its MCP server', { type: 'url', placeholder: 'https://…/mcp', required: true, autocomplete: 'off', spellcheck: 'false' });
+  const [tokL, tok] = field('Access token (if it needs one)', { type: 'password', autocomplete: 'new-password' });
+  const err = h('p.err', { role: 'alert' });
+  const btn = h('button.btn', { type: 'submit' }, 'Connect');
+  const form = h('form.cal-form', { onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = ''; btn.disabled = true; btn.textContent = 'Connecting…';
+    try {
+      const c = await api('/api/integrations', { method: 'POST', body: { name: name.value.trim(), url: url.value.trim(), token: tok.value } });
+      form.reset(); toast(`Connected ${c.name}: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}.`); load();
+    } catch (ex) { err.textContent = upFirst(ex.message); }
+    btn.disabled = false; btn.textContent = 'Connect';
+  } }, nameL, h('small.hint', {}, 'Lowercase letters, digits and underscores.'), urlL, tokL, err, btn,
+  h('p.d-empty', {}, 'The token is stored encrypted and never shown to a model. A new connector’s tools are off for every sprig until you give one access.'));
+  const signIn = h('div.cal-src', {},
+    h('div', {}, h('b', {}, 'A service you sign in to'), h('small', {}, `Notion, Linear, Sentry and the like have no token to paste. ${hostName} sends you a sign-in link in chat.`)),
+    h('button.chip.primary', { onclick: () => askHost(`${hostName}, can you connect `) }, `Ask ${hostName}`));
+  return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connectors')),
+    h('p.d-empty', {}, 'Tools from MCP servers you run or point at.'), list,
+    h('details.cal-add', {}, h('summary', {}, 'Add a connector by address'), form), signIn);
+}
+
+function renderSettings() {
+  return h('section.view', { 'aria-label': 'Settings' },
+    viewHead('Settings', 'Models, spending and connectors', h('span.view-mark', { 'aria-hidden': 'true' }, icon('sliders'))),
+    h('div.view-scroll', {}, h('div.view-inner', {}, settingsList(), connectorList())));
 }
 
 // --- kid chats ---
@@ -1240,7 +1455,8 @@ function messageEl(m, cont, animate) {
     return h('div.msg.user' + (cont ? '.cont' : '') + (m.pending ? '.pending' : '') + (m.failed ? '.failed' : '') + (m.pinned ? '.pinned' : ''), {},
       h('div.stack', {}, h('div.bubble', { html: md(m.content) }), retry || h('span.stamp', {}, actions, pinMark, m.pending ? 'Sending…' : clock(m.at))));
   }
-  const s = S.sprigs.get(m.character) || { name: m.character || 'Thicket', color: '#7c8cff' };
+  // m.name is set when the speaker isn't (yet) in the roster: a preview.
+  const s = S.sprigs.get(m.character) || { name: m.name || m.character || 'Thicket', color: '#7c8cff' };
   const el = h('div.msg' + (cont ? '.cont' : '') + (m.pinned ? '.pinned' : ''), { style: { '--c': s.color } },
     orb(s, 30),
     h('div.stack', {}, h('span.who', {}, s.name), h('div.bubble', { html: md(m.content) }), h('span.stamp', {}, clock(m.at), pinMark, actions)));
