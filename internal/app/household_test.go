@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/web"
 )
 
 func kidSprig(kid, parent int64) string {
@@ -334,5 +337,32 @@ func TestTrailUndo(t *testing.T) {
 	}
 	if _, err := a.Engine.UndoTrail(ctx, h.owner, trail[0].ID); !errors.Is(err, agent.ErrAlreadyUndone) {
 		t.Fatalf("undone twice: %v", err)
+	}
+}
+
+func TestDashboardChanges(t *testing.T) {
+	h := setupHousehold(t)
+	a, ctx := h.a, h.ctx
+	if err := a.Engine.SetToolLevel(ctx, h.owner, "hal", "mcp_ha__turn_on", store.LevelAct); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(a.Dashboard.Handler())
+	defer srv.Close()
+	session, _ := a.DB.CreateWebSession(ctx, h.owner.ID, "test", web.SessionTTL)
+	_, body := getDashboard(t, srv, session)
+	if !strings.Contains(body, `id="changes"`) || !strings.Contains(body, "mcp_ha__turn_on for hal: default → act") || !strings.Contains(body, `value="undo"`) {
+		t.Fatalf("changes not shown with an undo button:\n%s", body)
+	}
+	trail, _ := a.DB.Trail(ctx, h.owner.ID, 1)
+	if code, _ := postAct(t, srv, session, url.Values{"csrf": {csrfFrom(t, body)}, "kind": {"trail"}, "id": {itoa(trail[0].ID)}, "action": {"undo"}}); code != 303 {
+		t.Fatalf("undo from the dashboard: %d", code)
+	}
+	if lv, _ := a.DB.ExactToolLevel(ctx, "hal", "mcp_ha__turn_on"); lv != "" {
+		t.Fatalf("level after dashboard undo: %q", lv)
+	}
+	// Kids don't get the changes list.
+	ks, _ := a.DB.CreateWebSession(ctx, h.kid.ID, "test", web.SessionTTL)
+	if _, kbody := getDashboard(t, srv, ks); strings.Contains(kbody, `id="changes"`) {
+		t.Fatal("a kid saw the changes list")
 	}
 }

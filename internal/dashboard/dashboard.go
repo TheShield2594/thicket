@@ -48,6 +48,8 @@ type Dashboard struct {
 	// Decide answers a pending approval; RunDraft has a draft done.
 	Decide   func(ctx context.Context, u *store.User, id int64, approve bool) error
 	RunDraft func(ctx context.Context, u *store.User, id int64) error
+	// Undo reverses a trail entry (permission changes, sprig calendar entries).
+	Undo func(ctx context.Context, u *store.User, id int64) (string, error)
 
 	DB       *store.Store
 	Chars    *character.Registry
@@ -217,6 +219,9 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 	case kind == "approval" && (action == "approve" || action == "deny") && d.Decide != nil:
 		err = d.Decide(ctx, u, id, action == "approve")
 		ok = map[bool]string{true: "approved", false: "denied"}[action == "approve"]
+	case kind == "trail" && action == "undo" && d.Undo != nil:
+		_, err = d.Undo(ctx, u, id)
+		ok, anchor = "undone", "changes"
 	case kind == "inbox" && action == "run" && d.RunDraft != nil:
 		err, ok = d.RunDraft(ctx, u, id), "done"
 	case kind == "inbox" && action == "resolve":
@@ -269,6 +274,7 @@ type pageData struct {
 	Approvals      []approvalView
 	Inbox          []inboxView
 	Trail          []activityView
+	Changes        []changeView
 	Costs          []costRow
 	Models         []costRow
 	User           *store.User
@@ -288,6 +294,14 @@ type pageData struct {
 	Sessions, AllSessions []sessionRow
 	InviteLink            string
 	InviteDays            int
+}
+
+// changeView is one entry of the reversible trail.
+type changeView struct {
+	ID               int64
+	At, Kind, Sprig  string
+	Summary, Detail  string
+	Undoable, Undone bool
 }
 
 type sessionRow struct {
@@ -548,6 +562,20 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	}
 	for _, a := range acts {
 		p.Trail = append(p.Trail, activityView{At: stamp(a.At), Level: a.Level, Kind: a.Kind, Sprig: name(a.Character), Summary: a.Summary})
+	}
+	if !u.IsKid() {
+		who := u.ID
+		if p.Admin {
+			who = 0
+		}
+		changes, err := d.DB.Trail(ctx, who, 50)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range changes {
+			p.Changes = append(p.Changes, changeView{ID: c.ID, At: stamp(c.At), Kind: c.Kind, Sprig: name(c.Character), Summary: c.Summary,
+				Detail: c.Detail, Undoable: c.Undoable, Undone: !c.UndoneAt.IsZero()})
+		}
 	}
 	if !p.Admin {
 		return p, nil

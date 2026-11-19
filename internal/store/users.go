@@ -259,3 +259,26 @@ func (s *Store) TouchUser(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE users SET last_seen_at = ? WHERE id = ?", s.unix(), id)
 	return err
 }
+
+// ErrUserInUse means a user has already used Thicket, so removing them
+// would lose their memories and history.
+var ErrUserInUse = errors.New("they've already used Thicket, so removing them isn't a simple undo")
+
+// DeleteFreshUser removes a user who never used Thicket: no messages,
+// memories or jobs. It undoes an invite.
+func (s *Store) DeleteFreshUser(ctx context.Context, id int64) error {
+	var msgs, mems, jobs int
+	var role string
+	if err := s.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations WHERE user_id = ?), (SELECT COUNT(*) FROM memories WHERE user_id = ?),
+		(SELECT COUNT(*) FROM jobs WHERE user_id = ?), (SELECT role FROM users WHERE id = ?)`, id, id, id, id).Scan(&msgs, &mems, &jobs, &role); err != nil {
+		return err
+	}
+	if role == RoleOwner {
+		return errors.New("the owner can't be removed")
+	}
+	if msgs+mems+jobs > 0 {
+		return ErrUserInUse
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
+	return err
+}

@@ -437,8 +437,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "invite_user",
-			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. To use Thicket from a second app themselves, people use link_account instead.",
-			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"}},"required":["user"]}`,
+			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. kid=true makes them a kid: they only talk to kid sprigs set up for them (an admin creates those; parents choose what they may use). To use Thicket from a second app themselves, people use link_account instead.",
+			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"},"kid":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
@@ -1206,6 +1206,7 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 		User  string `json:"user"`
 		App   string `json:"app"`
 		Admin bool   `json:"admin"`
+		Kid   bool   `json:"kid"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -1232,19 +1233,29 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 			return "", errors.New("pass a Discord user id or @mention")
 		}
 	}
-	role := "member"
-	if a.Admin {
-		role = "admin"
+	role := store.RoleMember
+	switch {
+	case a.Admin && a.Kid:
+		return "", errors.New("a kid can't be an admin")
+	case a.Admin:
+		role = store.RoleAdmin
+	case a.Kid:
+		role = store.RoleKid
 	}
 	if u, err := e.DB.UserByExternal(ctx, app, id); err == nil {
-		if u.Role != "owner" {
-			_ = e.DB.SetUserRole(ctx, u.ID, role)
+		if u.Role == store.RoleOwner {
+			return "They're the owner; their role doesn't change.", nil
+		}
+		if err := e.SetRole(ctx, t.user, u.ID, role); err != nil {
+			return "", err
 		}
 		return "They already have access; role is now " + role + ".", nil
 	}
-	if _, err := e.DB.CreateUser(ctx, app, id, "", role); err != nil {
+	u, err := e.DB.CreateUser(ctx, app, id, "", role)
+	if err != nil {
 		return "", err
 	}
+	e.addTrail(ctx, t.user.ID, "", store.TrailRole, fmt.Sprintf("invited %s user %s as %s", app, id, role), "", &trailUndo{Type: "remove_user", UserID: u.ID})
 	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, "invited "+app+" user "+id+" as "+role, "")
 	return "Invited. When they DM me I'll welcome them; their memories stay separate from yours.", nil
 }

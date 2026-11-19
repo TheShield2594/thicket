@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
@@ -74,6 +75,12 @@ type Adapter struct {
 	Pin func(ctx context.Context, userID int64, chatRef, platformID string, pin bool) (string, error)
 	// OIDC is the single sign-on provider, if one is configured.
 	OIDC *OIDCLogin
+	// For API v2: the engine's household operations, the calendar, kid
+	// sprig creation, and the address invites link to.
+	Household    Household
+	Calendar     *calendar.Service
+	MakeKidSprig KidSprigMaker
+	BaseURL      string
 	// PingEvery is how often an open event stream is kept alive and its
 	// session re-checked (default 25s).
 	PingEvery time.Duration

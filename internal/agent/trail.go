@@ -194,6 +194,11 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		done = fmt.Sprintf("%q is back on the calendar", ev.Title)
+	case "remove_user":
+		if err := e.DB.DeleteFreshUser(ctx, u.UserID); err != nil {
+			return "", err
+		}
+		done = fmt.Sprintf("the invite for user %d is withdrawn", u.UserID)
 	case "role":
 		if err := e.DB.SetUserRole(ctx, u.UserID, u.Role); err != nil {
 			return "", err
