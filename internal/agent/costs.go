@@ -547,8 +547,15 @@ func (e *Engine) setSprigCap(ctx context.Context, by *store.User, sprig, period 
 	if err := e.Settings.Set(ctx, name, value); err != nil {
 		return "", err
 	}
-	if record {
-		e.trailCap(ctx, by, c, period, prev, usd)
+	if record && e.trailCap(ctx, by, c, period, prev, usd) == 0 {
+		// Unrecorded, a later undo couldn't tell this was the newest
+		// change: put the old cap back and fail instead.
+		old := ""
+		if prev > 0 {
+			old = strconv.FormatFloat(prev, 'f', -1, 64)
+		}
+		_ = e.Settings.Set(context.WithoutCancel(ctx), name, old)
+		return "", errors.New("couldn't record the change, so the cap wasn't changed")
 	}
 	return fmt.Sprintf("%s's %s cap is now %s.", c.DisplayName(), period, capText(usd)), nil
 }
@@ -560,10 +567,11 @@ func capText(usd float64) string {
 	return money(usd)
 }
 
-func (e *Engine) trailCap(ctx context.Context, by *store.User, c *character.Character, period string, prev, next float64) {
-	e.addTrail(ctx, userID(by), c.ID, store.TrailCap, fmt.Sprintf("%s's %s cap: %s → %s", c.DisplayName(), period, capText(prev), capText(next)), "",
+func (e *Engine) trailCap(ctx context.Context, by *store.User, c *character.Character, period string, prev, next float64) int64 {
+	id := e.addTrail(ctx, userID(by), c.ID, store.TrailCap, fmt.Sprintf("%s's %s cap: %s → %s", c.DisplayName(), period, capText(prev), capText(next)), "",
 		&trailUndo{Type: "cap", Character: c.ID, Tool: period, Level: strconv.FormatFloat(prev, 'f', -1, 64), Set: strconv.FormatFloat(next, 'f', -1, 64)})
 	e.logActivity(ctx, "info", "budget", c.ID, userID(by), fmt.Sprintf("%s's %s cap set to %s", c.DisplayName(), period, capText(next)), "")
+	return id
 }
 
 // presetCap stores a new sprig's monthly cap before its file is written,

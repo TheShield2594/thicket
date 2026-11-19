@@ -100,6 +100,10 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 	// A low cap that only its parents can raise, in place before the
 	// sprig is live.
 	capUSD := e.Settings.Float(ctx, "budget.kid_monthly_usd")
+	// Under the cap lock until the first cap is in the trail, so a cap
+	// change can't land in between and be undone by undoing this one.
+	e.capMu.Lock()
+	defer e.capMu.Unlock()
 	undoCap, err := e.presetCap(ctx, c.ID, capUSD)
 	if err != nil {
 		return nil, err

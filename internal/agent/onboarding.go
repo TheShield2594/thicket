@@ -246,7 +246,10 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 		jobIDs = append(jobIDs, j.ID)
 		made = append(made, fmt.Sprintf("#%d %s", j.ID, r.Name))
 	}
-	// Its cap, as approved, is in place before it's live.
+	// Its cap, as approved, is in place before it's live, and in the trail
+	// before any other cap change can land (capMu).
+	e.capMu.Lock()
+	defer e.capMu.Unlock()
 	undoCap, err := e.presetCap(ctx, c.ID, p.MonthlyCapUSD)
 	if err != nil {
 		return "", undo(err)
