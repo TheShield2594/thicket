@@ -20,6 +20,7 @@ const (
 	TrailRole   = "role"   // someone's household role changed
 	TrailSafety = "safety" // a safety alert went to a kid's parents
 	TrailUndo   = "undo"   // something above was undone
+	TrailUpdate = "update" // Thicket was updated to a new version
 )
 
 type TrailEntry struct {

@@ -142,6 +142,11 @@ func (s *Store) JobSpendSince(ctx context.Context, jobID int64, since time.Time)
 
 // --- settings ---
 
+// VersionKey is the setting that holds the Thicket version that last ran
+// this database: written at each start and by `thicket update`, which
+// reads it to say what an update changes.
+const VersionKey = "thicket.version"
+
 func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
 	var v string
 	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&v)

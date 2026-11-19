@@ -111,6 +111,9 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		return nil, fmt.Errorf("database: %w", err)
 	}
 	a.DB = db
+	if err := db.SetSetting(ctx, store.VersionKey, version); err != nil {
+		return nil, fmt.Errorf("database: %w", err)
+	}
 	// Whatever is written to the trail, conversations, the inbox and run
 	// history passes through the redactor first.
 	db.SetScrubber(red.Redact)

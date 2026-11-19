@@ -40,41 +40,74 @@ the first sprig.
 
 ## Quick start
 
-**Web app only?** Skip the chat apps: run `docker compose up -d`, then open
-the sign-in link from `docker compose logs thicket` (or run
-`docker compose exec thicket thicket web link`). Juni greets you in the
-browser and asks for a model there. With Discord or Telegram:
+About five minutes, on any machine with Docker: a PC, a NAS, or a
+Raspberry Pi 4 or 5 (the images are built for amd64 and arm64).
 
-1. **Create a bot** on Discord, Telegram, or both.
-   - **Discord:** at <https://discord.com/developers/applications>, make an
-     application, add a bot, and switch on **Message Content Intent**. Copy
-     the bot token. Invite it to your server with the `bot` scope and these
-     permissions: Send Messages, Read Message History, **Manage Webhooks**
-     (so each sprig posts with its own name and avatar).
-   - **Telegram:** message [@BotFather](https://t.me/BotFather), send
-     `/newbot`, and copy the token. See [Telegram](docs/telegram.md).
-2. **Run it.**
+1. **Get the compose file** into a new folder.
 
    ```bash
-   DISCORD_TOKEN=your-bot-token docker compose up -d
+   curl -fsSLO https://raw.githubusercontent.com/TheShield2594/thicket/main/docker-compose.yml
    ```
 
-   (or `TELEGRAM_TOKEN=…`, or both). In Portainer: Stacks → Add stack →
-   paste `docker-compose.yml` → add `DISCORD_TOKEN` and/or `TELEGRAM_TOKEN`
-   as environment variables → Deploy. This pulls
-   `ghcr.io/theshield2594/thicket:latest`, which CI publishes on every push
-   to `main`. (If the package is private, make it public in the repo's
-   Packages settings or log Portainer in to ghcr.io.) The optional
-   variables listed in `docker-compose.yml` can be added the same way.
-   `THICKET_DATA_DIR` and `THICKET_HTTP_ADDR` are fixed inside the image
-   (`/data` and `:8080`): change the volume or port mapping in the compose
-   file instead.
-3. **DM the bot** (on Telegram, open the bot and press Start). Juni says hello and asks for an
-   [OpenRouter](https://openrouter.ai/keys) key. Paste it in the DM: she
-   checks it works and stores it encrypted. Or, to run on your own
-   hardware, send her the address of your Ollama or LM Studio server
-   instead ([Local models](docs/local-models.md)). Then she'll learn your name,
-   your timezone, and what you'd like help with.
+2. **Set it up.** `thicket init` asks a few questions, checks each answer
+   against the real service, and stores keys and tokens encrypted. Every
+   question can be skipped with Enter and answered later.
+
+   ```bash
+   docker compose run --rm thicket init
+   ```
+
+   - **The model:** an [OpenRouter](https://openrouter.ai/keys) key, or
+     the address of your own Ollama or LM Studio server
+     ([Local models](docs/local-models.md)).
+   - **Discord and Telegram tokens** (both optional; without them you use
+     the web app). On Discord: at the
+     [Developer Portal](https://discord.com/developers/applications)
+     create an application, add a bot, switch on **Message Content
+     Intent**, copy the token, and invite it with the `bot` scope and
+     Send Messages, Read Message History and **Manage Webhooks** (so each
+     sprig posts with its own name and avatar). On Telegram: message
+     [@BotFather](https://t.me/BotFather), send `/newbot`, copy the
+     token ([Telegram](docs/telegram.md)).
+   - **Timezone, spend caps, and who the owner is.**
+
+3. **Start it.**
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Say hello.** Open the sign-in link `init` printed (the web app, at
+   `http://localhost:8080`), or DM the bot (on Telegram, open it and press
+   Start). Juni introduces herself and takes it from there.
+
+Prefer not to use a terminal? Skip step 2: paste `docker-compose.yml` into
+Portainer (Stacks → Add stack), deploy, and open the sign-in link from the
+container's log. Juni asks for the model key in chat instead. Tokens can
+also be given as `DISCORD_TOKEN` / `TELEGRAM_TOKEN` environment variables;
+they are stored encrypted on first start, and `thicket init --from-env`
+checks them first. The other variables in `docker-compose.yml` work the
+same way. `THICKET_DATA_DIR` and `THICKET_HTTP_ADDR` are fixed inside the
+image (`/data` and `:8080`): change the volume or port mapping instead.
+
+The compose file runs the newest release (`latest`). To stay on one
+version set `THICKET_VERSION=0.2.0` in a `.env` file beside it; `edge` is
+whatever is on `main`. If the image can't be pulled, the package may still
+be private: make it public in the repository's Packages settings.
+
+### Updating
+
+```bash
+docker compose pull
+docker compose stop thicket
+docker compose run --rm thicket update
+docker compose up -d
+```
+
+`thicket update` shows what changed, takes a full backup, migrates the
+database and checks it. If the check fails it puts everything back exactly
+as it was and tells you to stay on the old version
+([Running Thicket](docs/operations.md#thicket-update)).
 
 The first person to DM the bot becomes the owner, unless you set
 `THICKET_OWNER_DISCORD_ID` or `THICKET_OWNER_TELEGRAM_ID`. Using both apps?

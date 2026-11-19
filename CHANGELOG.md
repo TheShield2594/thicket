@@ -30,6 +30,15 @@ stated.
   Running it again shows what's set (secrets only as "stored") and
   changes what you type. New setting `timezone`: the household's
   timezone, which new people start with, so Juni doesn't ask.
+- `thicket update`: run from the new version with Thicket stopped. It
+  shows the changelog since the version that last ran the data, takes a
+  full backup, migrates, and runs the doctor's data checks. If a
+  migration or check fails, the database files and sprig folders are put
+  back byte for byte. It refuses to run under a live server or to go back
+  across a schema change. Successful updates are in the trail; every
+  attempt is in `update.log` (`thicket update history`). The version that
+  last ran a database is now recorded in it.
+- README quick start rebuilt on the release image and `thicket init`.
 
 ## Unreleased: households, calendar and the app API (schema v16)
 

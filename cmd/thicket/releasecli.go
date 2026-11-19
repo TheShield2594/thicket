@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/changelog"
 	"github.com/theshield2594/thicket/internal/settings"
+	"github.com/theshield2594/thicket/internal/update"
 )
 
 // changelogCmd prints release notes from the CHANGELOG.md this binary was
@@ -79,4 +82,53 @@ func settingsCmd(args []string, out io.Writer) error {
 		return nil
 	}
 	return errors.New("usage: thicket settings [list] | settings set NAME [VALUE]")
+}
+
+// updateCmd moves the data directory to this binary's version, or lists
+// past updates.
+func updateCmd(args []string, in io.Reader, out io.Writer) error {
+	cfg := loadConfig()
+	if len(args) == 1 && args[0] == "history" {
+		hist, err := update.History(cfg.DataDir)
+		if err != nil {
+			return err
+		}
+		if len(hist) == 0 {
+			fmt.Fprintln(out, "No updates recorded yet.")
+		}
+		for _, r := range hist {
+			from := r.From
+			if from == "" {
+				from = "(earlier)"
+			}
+			fmt.Fprintf(out, "%s  %s -> %s  schema v%d -> v%d  %s %s\n", r.At.Format("2006-01-02 15:04"), from, r.To, r.FromSchema, r.ToSchema, r.Outcome, r.Detail)
+		}
+		return nil
+	}
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "don't ask before updating")
+	to := fs.String("to", "", "the version you mean to end up on; refused if this isn't that version")
+	force := fs.Bool("force", false, "allow moving to an older version that has the same schema")
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return errors.New("usage: thicket update [--yes] [--to VERSION] [--force] | thicket update history")
+	}
+	if *to != "" && changelog.Normalize(*to) != changelog.Normalize(version) {
+		return fmt.Errorf("this is Thicket %s, not %s. An update is run from the version you're moving to: set THICKET_VERSION=%s, `docker compose pull`, then `docker compose run --rm thicket update`", version, *to, changelog.Normalize(*to))
+	}
+	u := &update.Updater{Cfg: cfg, Version: version, Changelog: thicket.Changelog, Out: out, Force: *force}
+	if !*yes {
+		rd := bufio.NewReader(in)
+		u.Confirm = func(q string) bool {
+			fmt.Fprint(out, q+" [y/N] ")
+			line, _ := rd.ReadString('\n')
+			ans := strings.ToLower(strings.TrimSpace(line))
+			return ans == "y" || ans == "yes"
+		}
+	}
+	_, err = u.Run(context.Background())
+	return err
 }

@@ -5,7 +5,7 @@ A short tour for contributors.
 ## Layout
 
 ```
-cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, backup, restore, settings, changelog, character, memory, migrate
+cmd/thicket          CLI: serve, check, doctor, healthcheck, costs, inbox, voice-check, init, update, backup, restore, settings, changelog, character, memory, migrate
 internal/app         wires everything together (also used by the smoke test)
 internal/agent       the engine: routing, prompts, tool loop, approvals, onboarding, initiative
 internal/character   character files: parse, validate, load, write without clobbering

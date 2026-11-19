@@ -51,6 +51,33 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	return openDB(ctx, path, 0)
+}
+
+// OpenExisting opens a database that is already there without applying
+// migrations, so `thicket update` can read what it is about to change
+// (its schema version, the version that last ran it) and back it up
+// first. Most of the store's methods assume the current schema: use only
+// SchemaVersion, Setting and SnapshotTo on the result.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	return openDB(ctx, path, -1)
+}
+
+// OpenAtSchema opens the database migrated only as far as version, the
+// way an older Thicket would have left it. It exists for tests of
+// upgrades.
+func OpenAtSchema(ctx context.Context, path string, version int) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return openDB(ctx, path, version)
+}
+
+// openDB opens path and migrates up to limit (-1: not at all).
+func openDB(ctx context.Context, path string, limit int) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -60,7 +87,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// SQLITE_BUSY between our own goroutines.
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, path: path, now: time.Now}
-	if err := s.migrate(ctx); err != nil {
+	if limit >= 0 {
+		err = s.migrateTo(ctx, limit)
+	} else {
+		err = s.Ping(ctx)
+	}
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -125,7 +157,10 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 	return int(v.Int64), err
 }
 
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context) error { return s.migrateTo(ctx, 0) }
+
+// migrateTo applies pending migrations up to version limit (0: all).
+func (s *Store) migrateTo(ctx context.Context, limit int) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)`); err != nil {
 		return err
@@ -133,6 +168,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	migs, err := loadMigrations()
 	if err != nil {
 		return err
+	}
+	if limit > 0 && limit < len(migs) {
+		migs = migs[:limit]
 	}
 	cur, err := s.SchemaVersion(ctx)
 	if err != nil {

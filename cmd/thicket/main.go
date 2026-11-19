@@ -77,6 +77,12 @@ Usage:
   thicket secrets delete NAME         remove a stored secret
   thicket secrets rotate-key [--out FILE]
                                       re-encrypt every stored secret under a new master key
+  thicket update [--yes] [--to VERSION] [--force]
+                                      move the data to this version: shows what changed, backs up,
+                                      migrates and checks; if the check fails, puts everything back.
+                                      Run it from the new version with Thicket stopped
+                                      (docker compose run --rm thicket update)
+  thicket update history              past updates and how each went
   thicket migrate                     apply pending database migrations (startup does this too) and list them
   thicket doctor                      check everything: database, secrets, model server, chat tokens,
                                       each MCP server, and the running server's live connections
@@ -137,6 +143,8 @@ func main() {
 		err = userCmd(args, os.Stdin, os.Stdout)
 	case "secrets", "secret":
 		err = secretsCmd(args, os.Stdin, os.Stdout)
+	case "update", "upgrade":
+		err = updateCmd(args, os.Stdin, os.Stdout)
 	case "migrate":
 		err = migrateCmd(os.Stdout)
 	case "costs", "cost":
