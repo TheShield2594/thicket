@@ -21,6 +21,8 @@ type fakeTodo struct {
 	mu    sync.Mutex
 	items map[int]string
 	next  int
+	// idOverride makes add_item return this string as the new item's id.
+	idOverride string
 }
 
 func (f *fakeTodo) serve(t *testing.T) *httptest.Server {
@@ -56,6 +58,10 @@ func (f *fakeTodo) serve(t *testing.T) *httptest.Server {
 				f.next++
 				f.items[f.next] = fmt.Sprint(req.Params.Arguments["item"])
 				out = fmt.Sprintf(`{"id": %d}`, f.next)
+				if f.idOverride != "" {
+					b, _ := json.Marshal(map[string]string{"id": f.idOverride})
+					out = string(b)
+				}
 			case "delete_item":
 				id, _ := req.Params.Arguments["id"].(float64)
 				delete(f.items, int(id))
@@ -232,5 +238,45 @@ func TestUndoEdgeCases(t *testing.T) {
 	a.Engine.HandleIncoming(ctx, in)
 	if out := sentText(fc.take()); !strings.Contains(out, "can't be undone from here") || strings.Contains(out, "already") {
 		t.Fatalf("undo of an action with no undo: %s", out)
+	}
+}
+
+// Review fixes: an undo that would need a secret (even one JSON escapes)
+// isn't offered or stored, and no action sentence stores a secret.
+func TestActionTrailKeepsSecretsOut(t *testing.T) {
+	a, fc, _, ctx, _, _ := ready(t)
+	const secret = "tok<en-secret-9876"
+	a.Secrets.Remember(secret)
+	todo := &fakeTodo{idOverride: secret}
+	srv := todo.serve(t)
+	s := store.MCPServer{Name: "todo", Transport: "http", Target: srv.URL, Enabled: true,
+		Undo: map[string]store.InverseCall{"add_item": {Tool: "delete_item", Args: map[string]string{"id": "{{result.id}}"}}}}
+	if err := a.DB.PutMCPServer(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.MCP.Connect(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Cfg.CharactersDir, "tod.md"), []byte(tod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Chars.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a.DB.SetToolLevel(ctx, "tod", store.AnyTool, store.LevelAct)
+	// The item's name is the secret too: the default sentence quotes it.
+	a.Engine.HandleIncoming(ctx, dm("Tod, add the hidden item"))
+	out := sentText(fc.take())
+	if todo.count() != 1 {
+		t.Fatalf("the item wasn't added (%d), so this proves nothing: %s", todo.count(), out)
+	}
+	if strings.Contains(out, secret) || strings.Contains(out, "Reply **undo**") || !strings.Contains(out, "can't be undone") {
+		t.Fatalf("chat: %s", out)
+	}
+	var leaked int
+	a.DB.DB().QueryRow("SELECT COUNT(*) FROM trail WHERE summary LIKE ? OR undo LIKE ? OR undo LIKE ?",
+		"%tok<en%", "%tok<en%", "%tok\\u003cen%").Scan(&leaked)
+	if leaked != 0 {
+		t.Fatal("a secret was stored in the trail")
 	}
 }

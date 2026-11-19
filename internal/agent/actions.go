@@ -146,10 +146,12 @@ func (e *Engine) describe(ctx context.Context, t *turn, tool *Tool, args json.Ra
 			}
 			undoArgs[k] = val
 		}
-		raw, _ := json.Marshal(undoArgs)
-		if e.Secrets.Redact(string(raw)) != string(raw) {
-			return act // it would need a secret stored in the trail: not offered
+		for _, v := range undoArgs {
+			if s := fmt.Sprint(v); e.Secrets.Redact(s) != s {
+				return act // it would need a secret stored in the trail: not offered
+			}
 		}
+		raw, _ := json.Marshal(undoArgs)
 		act.undo = &trailUndo{Type: "mcp", Character: t.char.ID, Server: server, Tool: inv.Tool, Args: raw}
 		act.label = inv.Label
 		if act.label == "" {
@@ -272,6 +274,7 @@ func (e *Engine) recordAction(ctx context.Context, t *turn, tool *Tool, args jso
 		return
 	}
 	act := e.describe(ctx, t, tool, args, out)
+	act.said = e.Secrets.Redact(act.said) // whatever wrote it, no secret is stored or shown
 	detail := e.Secrets.Redact(truncate(string(args), 500))
 	id := e.addTrail(ctx, t.user.ID, t.char.ID, store.TrailAction, act.said, detail, act.undo)
 	label := act.label
@@ -363,11 +366,15 @@ func (e *Engine) undoAction(ctx context.Context, by *store.User, u trailUndo) (s
 		}
 		// The sprig's file policy applies as it does to any call: a path
 		// revoked since the action isn't reached by undoing it.
-		for _, st := range e.MCP.Tools() {
-			if st.Server == u.Server && st.Tool.Name == u.Tool && st.Local {
-				if err := e.checkLocalPaths(ctx, c, u.Args); err != nil {
-					return "", err
-				}
+		// Decided from the integration's stored settings, not the live
+		// connection, which may be down and reconnect inside CallAs.
+		local, err := e.storedLocal(ctx, u.Server)
+		if err != nil {
+			return "", err
+		}
+		if local {
+			if err := e.checkLocalPaths(ctx, c, u.Args); err != nil {
+				return "", err
 			}
 		}
 		res, err := e.MCP.CallAs(ctx, c.ID, u.Server, u.Tool, u.Args, false, e.execAllowed(ctx, c))
@@ -387,4 +394,20 @@ func argsMap(raw json.RawMessage) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	return m
+}
+
+// storedLocal reports, from its stored settings (whether or not it's
+// connected now), whether an integration runs on Thicket's own machine
+// (stdio), so paths in its arguments are this machine's.
+func (e *Engine) storedLocal(ctx context.Context, name string) (bool, error) {
+	servers, err := e.DB.MCPServers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, s := range servers {
+		if s.Name == name {
+			return s.Transport == "stdio", nil
+		}
+	}
+	return false, fmt.Errorf("the integration %q is no longer connected", name)
 }

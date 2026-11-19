@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -334,10 +336,28 @@ func (e *Engine) approvedCost(ctx context.Context, t *turn, tool *Tool, args jso
 		return ""
 	}
 	est := toolEstimate(t, tool, who, usd, what)
+	// The figure the person was shown when asked: an approval turn knows
+	// less than the turn that asked (its prompt size, for one), so its own
+	// estimate can come out lower.
+	askedID, asked, err := e.DB.AskedEstimate(ctx, t.user.ID, who.ID, est.Kind, what, e.now().Add(-approvalMaxAge-time.Minute))
+	if err == nil {
+		usd = max(usd, asked)
+		est.EstimateUSD = usd
+	}
 	if why, _ := e.overCap(ctx, who, usd); why != "" {
 		est.Outcome = store.EstimateRefused
-		_, _ = e.DB.AddEstimate(ctx, est)
+		if askedID != 0 {
+			_ = e.DB.SetEstimateOutcome(ctx, askedID, store.EstimateRefused)
+		} else {
+			_, _ = e.DB.AddEstimate(ctx, est)
+		}
 		return "Error: it wasn't run after all: " + why + "."
+	}
+	if askedID != 0 {
+		// The row the person was asked about, now measured.
+		_ = e.DB.SetEstimateOutcome(ctx, askedID, store.EstimateRan)
+		t.toolEstimate = askedID
+		return ""
 	}
 	t.toolEstimate, _ = e.DB.AddEstimate(ctx, est)
 	return ""
@@ -480,10 +500,10 @@ func (e *Engine) SetSprigCap(ctx context.Context, by *store.User, sprig, period 
 	raising := usd == 0 && prev > 0 || prev > 0 && usd > prev
 	switch {
 	case by.IsKid():
-		return "", errors.New("kids can't change spending caps")
+		return "", notAllowed("kids can't change spending caps")
 	case c.IsKid() && raising && !c.IsParent(by.ID):
 		e.refused(ctx, by, c.ID, fmt.Sprintf("tried to raise %s's %s cap", c.DisplayName(), period))
-		return "", fmt.Errorf("only %s's parents can raise its cap", c.DisplayName())
+		return "", notAllowed(fmt.Sprintf("only %s's parents can raise its cap", c.DisplayName()))
 	case c.IsKid() && (c.IsParent(by.ID) || by.IsAdmin()):
 	case !canManage(by, c):
 		return "", e.mayManage(ctx, by, c, "change a spending cap")
@@ -565,4 +585,26 @@ func (e *Engine) toolSetSprigCap(ctx context.Context, t *turn, args json.RawMess
 		out = append(out, s)
 	}
 	return strings.Join(out, " "), nil
+}
+
+// fileExists reports whether a sprig's character file is on disk.
+func (e *Engine) fileExists(id string) bool {
+	_, err := os.Stat(filepath.Join(e.Chars.Dir(), id+".md"))
+	return err == nil
+}
+
+// unpublish removes a new sprig's character file after a failed create,
+// and reloads the registry so it isn't live. Only for a file the create
+// itself wrote (existed is false): never someone's own file.
+func (e *Engine) unpublish(id string, existed bool) {
+	if existed {
+		return
+	}
+	path := filepath.Join(e.Chars.Dir(), id+".md")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		e.Log.Error("remove a half-created sprig", "path", path, "err", err)
+	}
+	if err := e.Chars.Load(); err != nil {
+		e.Log.Error("reload sprigs", "err", err)
+	}
 }

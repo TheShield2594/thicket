@@ -463,9 +463,9 @@ func (a *API) undoTrail(w http.ResponseWriter, r *http.Request, c caller) {
 	msg, err := a.Engine.UndoTrail(r.Context(), c.user, id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		fail(w, http.StatusNotFound, "no trail entry "+strconv.FormatInt(id, 10))
+		fail(w, http.StatusNotFound, "no trail entry "+strconv.FormatInt(id, 10)) // or one about someone's private sprig
 		return
-	case errors.Is(err, agent.ErrAlreadyUndone), errors.Is(err, agent.ErrNotUndoable):
+	case errors.Is(err, agent.ErrAlreadyUndone), errors.Is(err, agent.ErrNotUndoable), errors.Is(err, agent.ErrUndoStale):
 		fail(w, http.StatusConflict, err.Error())
 		return
 	case errors.Is(err, agent.ErrUndoNotAllowed):

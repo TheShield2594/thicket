@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -97,4 +98,16 @@ func (s *Store) ModelRate(ctx context.Context, model string, since time.Time) (u
 		return 0, false, err
 	}
 	return cost / float64(tokens), true, nil
+}
+
+// AskedEstimate is the newest estimate since t that a person was asked
+// about for this action (same person, sprig, kind and description), so an
+// approved action keeps the figure they saw.
+func (s *Store) AskedEstimate(ctx context.Context, userID int64, character, kind, what string, since time.Time) (id int64, usd float64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT id, estimate_usd FROM estimates WHERE user_id = ? AND character = ? AND kind = ? AND what = ?
+		AND outcome = 'asked' AND at >= ? ORDER BY id DESC LIMIT 1`, userID, character, kind, s.clean(what), since.Unix()).Scan(&id, &usd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
+	return id, usd, err
 }

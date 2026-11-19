@@ -104,7 +104,11 @@ func (e *Engine) CreateKidSprig(ctx context.Context, by *store.User, s KidSprigS
 	if err != nil {
 		return nil, err
 	}
+	existed := e.fileExists(c.ID)
 	if _, err := e.Chars.Write(ctx, c); err != nil {
+		// Write can fail after the file is in place (saving its hash):
+		// take the file away first, so it never loads without its cap.
+		e.unpublish(c.ID, existed)
 		undoCap()
 		return nil, err
 	}

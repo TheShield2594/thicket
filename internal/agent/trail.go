@@ -109,6 +109,16 @@ var ErrAlreadyUndone = errors.New("that was already undone")
 // ErrUndoNotAllowed means the person may not undo that entry.
 var ErrUndoNotAllowed = errors.New("that isn't yours to undo")
 
+// ErrUndoStale means what the entry changed was changed again since.
+var ErrUndoStale = errors.New("undo the newer change first")
+
+// notAllowed is a refusal that reads as written but counts as
+// ErrUndoNotAllowed (the API answers it 403).
+type notAllowed string
+
+func (n notAllowed) Error() string        { return string(n) }
+func (n notAllowed) Is(target error) bool { return target == ErrUndoNotAllowed }
+
 // ErrNotUndoable means the entry has nothing that reverses it.
 var ErrNotUndoable = errors.New("there's no undo for that")
 
@@ -139,15 +149,15 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	switch {
 	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
-		return "", fmt.Errorf("no sprig %q", u.Character)
+		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
 	case u.Type == "cap":
 		// Through SetSprigCap's own rules: only a kid sprig's parents
 		// raise its cap, whoever undoes.
 		if e.Chars.PrivateFrom(u.Character, by.ID) {
-			return "", fmt.Errorf("no sprig %q", u.Character)
+			return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
 		}
 	case (u.Type == "mcp" || u.Type == "job") && e.Chars.PrivateFrom(u.Character, by.ID):
-		return "", fmt.Errorf("no sprig %q", u.Character)
+		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
 	case (u.Type == "mcp" || u.Type == "job") && t.UserID == by.ID:
 		// the person it was done for
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
@@ -159,7 +169,11 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 		return "", fmt.Errorf("%w: only the owner or an admin can undo permission changes", ErrUndoNotAllowed)
 	}
 	// Claim the undo first, so two at once can't both run it.
-	if ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID); err != nil || !ok {
+	ok, err := e.DB.MarkTrailUndone(ctx, id, by.ID)
+	if err != nil {
+		return "", fmt.Errorf("couldn't record the undo: %w", err) // a database failure, not a conflict
+	}
+	if !ok {
 		return "", ErrAlreadyUndone
 	}
 	done, err := e.undo(ctx, by, u)
@@ -209,7 +223,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		if !by.IsAdmin() && ev.UserID != by.ID {
-			return "", errors.New("that event isn't yours to undo")
+			return "", fmt.Errorf("%w: that event isn't yours to undo", ErrUndoNotAllowed)
 		}
 		if err := e.DB.DeleteSprigEvent(ctx, u.EventID); err != nil {
 			return "", err
@@ -221,7 +235,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		if !by.IsAdmin() && !ev.RemovableBy(by) {
-			return "", errors.New("that event isn't yours to put back")
+			return "", fmt.Errorf("%w: that event isn't yours to put back", ErrUndoNotAllowed)
 		}
 		if err := e.DB.RestoreSprigEvent(ctx, u.EventID); err != nil {
 			return "", err
@@ -240,7 +254,7 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		if u.Set != "" {
 			set, _ := strconv.ParseFloat(u.Set, 64)
 			if cur := e.Settings.Float(ctx, settings.SprigCap(u.Character, u.Tool)); cur != set {
-				return "", fmt.Errorf("that cap was changed again since (it's %s now), so undoing this would undo the newer change too", capText(cur))
+				return "", fmt.Errorf("that cap was changed again since (it's %s now), so undoing this would undo the newer change too: %w", capText(cur), ErrUndoStale)
 			}
 		}
 		usd, _ := strconv.ParseFloat(u.Level, 64)

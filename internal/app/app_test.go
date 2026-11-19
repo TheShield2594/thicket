@@ -417,6 +417,10 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("create_trigger", map[string]any{"name": "Bad", "task": "x", "integration": "ha", "tool": "turn_on", "owner": "hal"}), nil
 	case strings.Contains(u, "on your computer"):
 		return toolCall("mcp_sandbox__run_command", map[string]any{"command": "echo built > out.txt && cat out.txt"}), nil
+	case u == "add the hidden item":
+		// The model puts a secret in a call by itself (it's in the tool's
+		// arguments, never in what the user typed).
+		return toolCall("mcp_todo__add_item", map[string]any{"item": "tok<en-secret-9876", "list": "groceries"}), nil
 	case strings.HasPrefix(u, "add ") && strings.Contains(u, " to "):
 		// "add ITEM to LIST": the to-do integration.
 		item, list, _ := strings.Cut(strings.TrimPrefix(u, "add "), " to ")

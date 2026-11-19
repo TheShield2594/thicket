@@ -251,8 +251,10 @@ func (e *Engine) createSprig(ctx context.Context, user *store.User, args json.Ra
 	if err != nil {
 		return "", undo(err)
 	}
+	existed := e.fileExists(c.ID)
 	path, err := e.Chars.Write(ctx, c)
 	if err != nil {
+		e.unpublish(c.ID, existed) // it may be in place even though Write failed
 		undoCap()
 		return "", undo(fmt.Errorf("couldn't write %s's file, so nothing was created: %w", c.DisplayName(), err))
 	}
