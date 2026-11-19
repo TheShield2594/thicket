@@ -22,6 +22,7 @@ import (
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/budget"
+	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
@@ -60,6 +61,7 @@ type App struct {
 	Guard     *budget.Guard
 	MCP       *mcp.Registry
 	OAuth     *mcp.OAuth
+	Calendar  *calendar.Service
 	Engine    *agent.Engine
 	Reviewer  *memory.Reviewer
 	Scheduler *scheduler.Scheduler
@@ -194,6 +196,8 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.MCP.OAuth = a.OAuth
 	a.Engine.MCP = a.MCP
 	a.Engine.OAuth = a.OAuth
+	a.Calendar = &calendar.Service{DB: db, Secrets: sec}
+	a.Engine.Calendar = a.Calendar
 	a.Web = web.New(db, a.Chars, log)
 	a.Web.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
 	a.Web.Status = a.webStatus

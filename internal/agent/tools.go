@@ -82,7 +82,10 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				continue
 			}
 		default:
-			if !t.char.HasScope(tool.Scope) {
+			// A kid sprig gets the calendar only when a parent allowed it
+			// (it can't hold the scope itself).
+			kidCalendar := tool.Name == "calendar" && t.char.IsKid() && t.char.Allows(character.AllowCalendar)
+			if !t.char.HasScope(tool.Scope) && !kidCalendar {
 				continue
 			}
 		}
@@ -144,7 +147,7 @@ func decode[T any](args json.RawMessage) (T, error) {
 }
 
 func (e *Engine) builtinTools() []*Tool {
-	return []*Tool{
+	return append([]*Tool{
 		// --- memory (every sprig has its own memory space) ---
 		{
 			Name:        "remember",
@@ -465,7 +468,7 @@ func (e *Engine) builtinTools() []*Tool {
 			AdminOnly:   true,
 			Run:         e.toolMemoryReviews,
 		},
-	}
+	}, e.calendarTools()...)
 }
 
 // --- memory tools ---

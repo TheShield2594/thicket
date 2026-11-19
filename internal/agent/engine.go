@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/theshield2594/thicket/internal/budget"
+	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
@@ -47,9 +48,11 @@ type Engine struct {
 	Secrets  *secrets.Store
 	MCP      *mcp.Registry
 	// OAuth signs in to integrations that use OAuth.
-	OAuth  *mcp.OAuth
-	Budget *budget.Guard
-	Log    *slog.Logger
+	OAuth *mcp.OAuth
+	// Calendar is the household calendar.
+	Calendar *calendar.Service
+	Budget   *budget.Guard
+	Log      *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only

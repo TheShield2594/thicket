@@ -156,6 +156,15 @@ func TestKidSprigBoundaries(t *testing.T) {
 		t.Fatal("raised a kid sprig's level")
 	}
 
+	// A parent allowing the calendar gives it the read-only calendar, nothing that writes.
+	if _, err := a.Engine.KidAccess(ctx, h.owner, "bramble", nil, nil, []string{"calendar"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.kidSays("what's on this week?")
+	if tools := toolNames(h.fm); !tools["calendar"] || tools["add_to_calendar"] || tools["remove_from_calendar"] {
+		t.Fatalf("calendar tools with calendar allowed: %v", tools)
+	}
+
 	// No routines: a job owned by the kid sprig refuses to run.
 	j, err := a.DB.CreateJob(ctx, store.Job{UserID: h.kid.ID, Character: "bramble", Name: "Nightly", Schedule: "0 20 * * *", Prompt: "Say goodnight."})
 	if err != nil {

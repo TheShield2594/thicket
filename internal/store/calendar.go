@@ -72,6 +72,17 @@ func (s *Store) DeleteSprigEvent(ctx context.Context, id int64) error {
 	return nil
 }
 
+// SprigEventAny returns an event, removed or not.
+func (s *Store) SprigEventAny(ctx context.Context, id int64) (*SprigEvent, error) {
+	return scanSprigEvent(s.db.QueryRowContext(ctx, "SELECT "+sprigEventCols+" FROM sprig_events WHERE id = ?", id))
+}
+
+// RestoreSprigEvent puts a removed event back.
+func (s *Store) RestoreSprigEvent(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE sprig_events SET deleted_at = NULL WHERE id = ?", id)
+	return err
+}
+
 // SprigEventsFor returns the events a person sees between from and to:
 // their own, plus shared ones.
 func (s *Store) SprigEventsFor(ctx context.Context, userID int64, from, to time.Time) ([]SprigEvent, error) {

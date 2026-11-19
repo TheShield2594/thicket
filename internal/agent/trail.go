@@ -119,7 +119,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 		return ok && c.IsParent(by.ID)
 	}
 	switch {
-	case u.Type == "event", by.IsAdmin():
+	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
 	case (u.Type == "grant" || u.Type == "allow") && parentOf():
 		// a parent undoing a change to their kid's sprig
 	default:
@@ -182,6 +182,18 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 			return "", err
 		}
 		done = fmt.Sprintf("%q is off the calendar", ev.Title)
+	case "restore_event":
+		ev, err := e.DB.SprigEventAny(ctx, u.EventID)
+		if err != nil {
+			return "", err
+		}
+		if !by.IsAdmin() && ev.UserID != by.ID {
+			return "", errors.New("that event isn't yours to put back")
+		}
+		if err := e.DB.RestoreSprigEvent(ctx, u.EventID); err != nil {
+			return "", err
+		}
+		done = fmt.Sprintf("%q is back on the calendar", ev.Title)
 	case "role":
 		if err := e.DB.SetUserRole(ctx, u.UserID, u.Role); err != nil {
 			return "", err
