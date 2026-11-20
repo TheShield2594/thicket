@@ -131,5 +131,11 @@ func (e *Engine) stopAck(ctx context.Context, t *turn, f *inFlight) {
 	if t.conv != nil {
 		_ = e.DB.AddMessage(ctx, t.conv.ID, "event", "", why)
 	}
+	// A skill the sprig was following here was stopped by the person.
+	if t.chatRef != "" {
+		if _, err := e.DB.StopSkillRuns(ctx, t.char.ID, t.chatRef); err != nil {
+			e.Log.Error("stop skill runs", "err", err)
+		}
+	}
 	e.logActivity(ctx, "info", "system", t.char.ID, t.user.ID, why, strings.Join(t.done, ", "))
 }

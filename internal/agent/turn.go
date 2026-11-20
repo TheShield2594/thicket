@@ -260,7 +260,7 @@ func (e *Engine) buildMessages(ctx context.Context, t *turn, event string) ([]ll
 	}
 	_ = e.DB.MarkMemoriesUsed(ctx, ids)
 
-	skills, err := e.DB.Skills(ctx)
+	skills, err := e.DB.SkillsFor(ctx, t.char.ID)
 	if err != nil {
 		return nil, err
 	}

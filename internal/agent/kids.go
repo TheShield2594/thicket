@@ -35,7 +35,7 @@ import (
 var kidTools = map[string]bool{
 	"remember": true, "list_memories": true, "forget": true, // the kid's own memories
 	"handoff": true, "ask_sprig": true, // other kid sprigs only (UsableBy)
-	"read_skill": true,
+	"read_skill": true, "use_skill": true, "finish_skill": true,
 	"web_search": true, "fetch_page": true, // only with the web scope a parent granted
 	"calendar": true, // only when a parent allowed the calendar
 }

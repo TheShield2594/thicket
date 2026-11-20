@@ -218,6 +218,24 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	}
 
 	a.Engine = &agent.Engine{Cfg: cfg, DB: db, Chars: a.Chars, Settings: a.Settings, Secrets: sec, Log: log, KeyCheck: keyCheck}
+	// Each sprig's own skills (characters/<id>/skills/) are mirrored into
+	// the store now and after every reload; the folder is the source of truth.
+	for _, p := range a.Engine.SyncSprigSkills(ctx) {
+		a.startErr("A sprig's skill file has problems, so I skipped it: " + p.Error())
+	}
+	a.Chars.OnLoad(func() {
+		bg := context.WithoutCancel(ctx)
+		probs := a.Engine.SyncSprigSkills(bg)
+		if len(probs) == 0 {
+			return
+		}
+		// Not while a Load (maybe in someone's turn) waits on us.
+		go func() {
+			for _, p := range probs {
+				a.Engine.Notify(bg, "skillerr:"+p.Error(), time.Hour, "error", "I couldn't load a sprig's skill file: "+p.Error())
+			}
+		}()
+	})
 	if opts.NewChannel != nil {
 		a.Engine.ConnectChat = a.ConnectChat
 	}

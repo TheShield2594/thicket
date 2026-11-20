@@ -71,6 +71,7 @@ Usage:
   thicket skill import FILE           add a skill, or a new version of one with the same id
   thicket skill check FILE...         check skill files without importing them
   thicket skill starter [ID...|all]   list the example skills, or add them
+  thicket skill promote ID            move a sprig's own skill into the shared library
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket user list                   everyone, with their role and how they sign in

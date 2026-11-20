@@ -31,10 +31,13 @@ type Tool struct {
 	// scope (schedule, characters, admin); or "mcp:<server>".
 	Scope     string
 	AdminOnly bool // the user must be an owner/admin
-	JobOnly   bool
-	ChatOnly  bool
-	Risky     bool // needs approval unless a level says otherwise
-	Writes    bool // changes something, but acts by default (see levels.go)
+	// SprigOwner: the user must be an owner/admin, or someone who may
+	// manage this sprig (its own skills: ownership.go).
+	SprigOwner bool
+	JobOnly    bool
+	ChatOnly   bool
+	Risky      bool // needs approval unless a level says otherwise
+	Writes     bool // changes something, but acts by default (see levels.go)
 	// Config: changes Thicket itself (settings, integrations, people,
 	// permissions, skills) rather than something outside it. Levels don't
 	// apply, but in a tainted turn it's held like a changing tool unless
@@ -96,6 +99,9 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 			continue
 		}
 		if tool.AdminOnly && !t.user.IsAdmin() {
+			continue
+		}
+		if tool.SprigOwner && !t.user.IsAdmin() && !canManage(t.user, t.char) {
 			continue
 		}
 		switch tool.Scope {
@@ -349,28 +355,40 @@ func (e *Engine) builtinTools() []*Tool {
 			Untrusted:   true,
 			Run:         e.toolFetchPage,
 		},
-		// --- skills (a shared library of procedures) ---
+		// --- skills (the shared library, and each sprig's own) ---
 		{
 			Name:        "read_skill",
-			Description: "Read a saved skill (a procedure listed under Skills in your instructions) before doing the task it covers. Returns its steps and version.",
+			Description: "Read a saved skill without following it (to show it or revise it). Returns its steps and version.",
 			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
 			Run:         e.toolReadSkill,
 		},
 		{
+			Name:        "use_skill",
+			Description: "Start following a skill listed under Skills in your instructions: returns its steps and a run number. Call finish_skill with that run when you're done or can't go on.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
+			Run:         e.toolUseSkill,
+		},
+		{
+			Name:        "finish_skill",
+			Description: "Record how a skill run you started with use_skill ended.",
+			Params:      `{"type":"object","properties":{"run":{"type":"integer"},"outcome":{"type":"string","enum":["succeeded","failed"]},"note":{"type":"string","description":"one line: what went wrong, or anything worth knowing next time"}},"required":["run","outcome"]}`,
+			Run:         e.toolFinishSkill,
+		},
+		{
 			Name:        "save_skill",
 			Config:      true,
-			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
-			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
-			AdminOnly:   true,
+			Description: "Save a procedure as a skill, once the user agrees: for this_sprig (only you are offered it) or everyone (the shared library; owners and admins only). base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"},"for":{"type":"string","enum":["this_sprig","everyone"],"description":"for a new skill: whose it is (a revision keeps its owner)"},"inputs":{"type":"array","description":"optional: what to ask for before starting","items":{"type":"object","properties":{"name":{"type":"string","description":"lowercase, e.g. destination"},"description":{"type":"string"},"required":{"type":"boolean"}},"required":["name"]}},"success_check":{"type":"string","description":"optional: one line on how to tell it worked"}},"required":["id","name","description","steps","base_version"]}`,
+			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolSaveSkill,
 		},
 		{
 			Name:        "manage_skill",
 			Config:      true,
-			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), or delete a skill.",
-			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
-			AdminOnly:   true,
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins).",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolManageSkill,
 		},

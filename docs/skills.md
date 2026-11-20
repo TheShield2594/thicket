@@ -11,14 +11,21 @@ There are three ways:
 
 - **In chat.** Work through the task with a sprig once. When it's
   something you'll want again, the sprig offers to save it as a skill, or
-  you can ask: "save that as a skill". It shows you a draft first.
+  you can ask: "save that as a skill". It shows you a draft first. Say
+  whether it's for that sprig only ("just for you") or for everyone;
+  owners and admins get a shared skill unless they say otherwise,
+  everyone else a skill of the sprig's own.
 - **From the starter pack.** Thicket ships a few example skills. See
   [Starter skills](#starter-skills).
 - **By hand.** Write a skill file and import it. See
   [The skill file](#the-skill-file).
 
-Only the owner and admins can save, change or delete skills, because a
-skill changes how every sprig works. Anyone's sprigs can use them.
+A skill is either **shared** (in the library every sprig uses) or **a
+sprig's own** (only that sprig is offered it). Only the owner and admins
+can save, change or delete shared skills, because they change how every
+sprig works. A sprig's own skill can also be changed by whoever may
+manage that sprig: a member's private sprig by that member. See
+[A sprig's own skills](#a-sprigs-own-skills).
 
 ## Starter skills
 
@@ -80,9 +87,24 @@ Watch out:
 | `description` | Up to 200 characters. One sentence saying **when** to use it. Sprigs see only this (plus the id and name) until they decide to read the skill, so a vague description means the skill never gets used. |
 | steps | Everything after the closing `---`, up to 8,000 characters. |
 
-Those are the only frontmatter fields. Anything else (`version`,
-`author`, `tags`...) is ignored: Thicket keeps the version history
-itself.
+Two more frontmatter fields are optional, mostly for taught skills:
+
+```yaml
+inputs:
+  - name: destination
+    description: where the trip is to
+    required: true
+  - name: nights
+success_check: The user has agreed to the checklist.
+```
+
+| Field | Rules |
+|---|---|
+| `inputs` | Up to 10. What the sprig should ask for before starting. `name` is 1-40 lowercase letters, digits or underscores, starting with a letter, and not repeated; `description` up to 200 characters; `required` true or false. |
+| `success_check` | Up to 300 characters. One line on how to tell the skill worked; the sprig checks it before recording the run as succeeded. |
+
+Anything else (`version`, `author`, `tags`...) is ignored: Thicket keeps
+the version history itself.
 
 ### Writing the steps
 
@@ -152,11 +174,63 @@ turn it into a Thicket skill; she'll show you the draft before saving.
 
 ## Using them
 
-Every sprig sees the list of skills (id, name and description) and reads
-a skill's steps when a request or job matches it. A scheduled job can say
-"use the morning-briefing skill". Skills never override a sprig's rules:
-risky actions still ask for your OK, and what you ask for in the moment
-wins over what the skill says.
+Every sprig sees the list of skills it's offered (id, name and
+description): the shared library and its own, its own listed first. When
+a request or job matches one, it calls `use_skill`, which gives it the
+steps and starts a **run**, and `finish_skill` when it's done, saying
+whether it succeeded or failed. Stopping the reply ("stop") marks the
+sprig's runs in that chat as stopped by you. `read_skill` just reads a
+skill (to show it to you or revise it) without starting a run. A
+scheduled job can say "use the morning-briefing skill". Skills never
+override a sprig's rules: risky actions still ask for your OK, and what
+you ask for in the moment wins over what the skill says.
+
+Runs are counted per sprig and skill (the history of a skill says how
+many times the sprig asking has followed it), so a skill's first few
+runs can be treated with extra care.
+
+## A sprig's own skills
+
+A sprig's own skills live in its folder, one file each, in the format
+above:
+
+```
+characters/
+  pip.md
+  pip/
+    skills/
+      pip-tea.md      id: pip-tea
+```
+
+The folder is the source of truth, like `voice_tests/`: Thicket reads it
+on start and whenever a file in it changes (within ten seconds), and
+mirrors it into the database, so versions, history and runs work as for
+shared skills. A new file is a new skill, an edited file a new version,
+and a removed file deletes the skill (its versions are kept). The file
+name must be the skill's id plus `.md`. A skill saved, restored or
+deleted in chat is written to (or removed from) the folder at once.
+
+Skill ids are unique across the whole Thicket: a file whose id is
+already a shared skill, or another sprig's, is skipped, and Juni tells
+the admins which file and why. A sprig's own skills don't count toward
+the shared library's 100; each sprig can have up to 40.
+
+Nobody else's sprig is offered them, and the dashboard shows them only
+to people who can see that sprig. They aren't included in a
+[sprig package](characters.md#sharing-a-sprig) yet: the export lists
+them, and you copy the files across by hand.
+
+**Promoting** one into the shared library takes the owner or an admin:
+ask the sprig ("put the tea skill in the shared library"), or run
+
+```bash
+docker compose exec thicket thicket skill promote pip-tea
+```
+
+It keeps its id and versions, every sprig is offered it from then on,
+and only owners and admins can change it. The promotion goes in the
+trail. Its file is kept in the sprig's folder as `pip-tea.md.promoted`,
+which Thicket ignores, so the sprig doesn't take it back.
 
 ## Changing them
 
@@ -191,9 +265,12 @@ thicket skill import weekly-review.skill.md
 ```
 
 Importing a skill whose id exists adds a new version; the old ones stay.
-Read a skill file before you import it: its steps will be followed by
-every sprig.
+Importing over a sprig's own skill is refused: edit its file instead.
+`thicket skill list` marks a sprig's own skills with `[pip only]`. Read a
+skill file before you import it: its steps will be followed by every
+sprig.
 
-Skills live in the database, so `thicket backup` backs them up. A library
-holds up to 100 skills; the first 40 are listed to sprigs, and they can
-read the rest by id.
+Skills live in the database, so `thicket backup` backs them up (a
+sprig's own skills are also files in its folder). The shared library
+holds up to 100 skills; the first 40 a sprig is offered are listed to
+it, and it can read the rest by id.

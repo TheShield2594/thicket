@@ -47,7 +47,7 @@ func voiceUser() *store.User {
 // prompt, the configured model, no tools and no memories. The reply is
 // the model's own (no consistency rewrite), so drift isn't hidden.
 func (e *Engine) VoiceReply(ctx context.Context, c *character.Character, prompt string) (string, error) {
-	skills, err := e.DB.Skills(ctx)
+	skills, err := e.DB.SkillsFor(ctx, c.ID)
 	if err != nil {
 		return "", err
 	}

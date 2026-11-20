@@ -595,8 +595,19 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 			Status: t.Status, Error: t.Error, At: stamp(t.StartedAt), Ended: stamp(t.FinishedAt)})
 	}
 
-	if p.Skills, err = d.DB.Skills(ctx); err != nil {
+	skills, err := d.DB.Skills(ctx)
+	if err != nil {
 		return nil, err
+	}
+	for _, k := range skills {
+		// A sprig's own skill shows with its sprig, if you may see it.
+		if !k.Shared() && d.Chars.PrivateFrom(k.SprigID, u.ID) {
+			continue
+		}
+		if !k.Shared() {
+			k.SprigID = name(k.SprigID)
+		}
+		p.Skills = append(p.Skills, k)
 	}
 
 	apps, err := d.DB.PendingApprovals(ctx, u.ID, 30*time.Minute)

@@ -28,6 +28,7 @@ const (
 	TrailCap     = "cap"     // a sprig's own spend cap changed
 	TrailAction  = "action"  // a sprig did something at act level (an integration, a job)
 	TrailLimit   = "limit"   // a kid sprig stopped at a time limit
+	TrailSkill   = "skill"   // a sprig's own skill was moved to the shared library
 )
 
 type TrailEntry struct {

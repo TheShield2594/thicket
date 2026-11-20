@@ -249,7 +249,19 @@ func Export(src Source) (*Package, error) {
 	if len(p.Routines) > maxRoutines {
 		return nil, fmt.Errorf("%s has %d routines; a package holds at most %d", c.DisplayName(), len(p.Routines), maxRoutines)
 	}
-	p.Skills = usedSkills(c, p.Routines, src.Library, src.ExtraSkills)
+	// Packages carry shared skills only. A sprig's own skills (its
+	// skills/ folder) aren't packaged yet: say so rather than turn them
+	// into shared ones on the other side.
+	var shared []store.Skill
+	for _, k := range src.Library {
+		switch {
+		case k.Shared():
+			shared = append(shared, k)
+		case k.SprigID == c.ID:
+			p.Omitted = append(p.Omitted, "its own skill "+k.ID+" (copy characters/"+c.ID+"/skills/"+k.ID+".md across by hand)")
+		}
+	}
+	p.Skills = usedSkills(c, p.Routines, shared, src.ExtraSkills)
 	if len(p.Skills) > maxSkills {
 		return nil, fmt.Errorf("%s uses %d skills; a package holds at most %d", c.DisplayName(), len(p.Skills), maxSkills)
 	}
@@ -719,6 +731,10 @@ func (p *Package) PlanSkills(ctx context.Context, db *store.Store, valid func(st
 			out = append(out, SkillPlan{Skill: k, Action: "new"})
 		case err != nil:
 			return nil, err
+		case !cur.Shared():
+			// A package brings shared skills; one sprig's own can't be
+			// replaced by it (its file is the source of truth).
+			return nil, fmt.Errorf("the skill %q in this package has the same id as %s's own skill: rename one first", k.ID, cur.SprigID)
 		case cur.Name == k.Name && cur.Description == k.Description && strings.TrimSpace(cur.Body) == strings.TrimSpace(k.Body):
 			out = append(out, SkillPlan{Skill: k, Action: "same"})
 		default:

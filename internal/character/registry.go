@@ -214,6 +214,13 @@ func (r *Registry) Load() error {
 		}
 		chars[c.ID] = c
 	}
+	// A sprig's own skills (<id>/skills/*.md) count as its files: a change
+	// to one reloads, so the store's mirror of them is brought up to date.
+	for _, p := range skillFiles(r.dir) {
+		if info, err := os.Stat(p); err == nil {
+			mtimes[p] = info.ModTime()
+		}
+	}
 	var hosts []string
 	for id, c := range chars {
 		if c.Host {
@@ -272,6 +279,16 @@ func (r *Registry) Changed() bool {
 			return true
 		}
 		if old, ok := r.mtimes[filepath.Join(r.dir, name)]; !ok || !old.Equal(info.ModTime()) {
+			return true
+		}
+	}
+	for _, p := range skillFiles(r.dir) {
+		seen++
+		info, err := os.Stat(p)
+		if err != nil {
+			return true
+		}
+		if old, ok := r.mtimes[p]; !ok || !old.Equal(info.ModTime()) {
 			return true
 		}
 	}

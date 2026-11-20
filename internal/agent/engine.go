@@ -79,18 +79,19 @@ type Engine struct {
 	// returns once the bot is online; the app sets it.
 	ConnectChat func(ctx context.Context, app, token string) error
 
-	chanMu    sync.RWMutex
-	channels  map[string]channel.Channel
-	chatLocks sync.Map   // chatRef -> *sync.Mutex
-	active    sync.Map   // chatRef -> character id
-	drafts    sync.Map   // user id -> *character.Character
-	kidDrafts sync.Map   // user id -> *kidDraft
-	kidMu     sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
-	kidTurns  sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid
-	userMu    sync.Mutex // serialises first-contact user creation
-	rateMu    sync.Mutex
-	rate      map[int64][]time.Time
-	limits    rateLimits // per-sprig and per-integration tool limits
+	chanMu      sync.RWMutex
+	channels    map[string]channel.Channel
+	skillSyncMu sync.Mutex // one SyncSprigSkills at a time
+	chatLocks   sync.Map   // chatRef -> *sync.Mutex
+	active      sync.Map   // chatRef -> character id
+	drafts      sync.Map   // user id -> *character.Character
+	kidDrafts   sync.Map   // user id -> *kidDraft
+	kidMu       sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
+	kidTurns    sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid
+	userMu      sync.Mutex // serialises first-contact user creation
+	rateMu      sync.Mutex
+	rate        map[int64][]time.Time
+	limits      rateLimits // per-sprig and per-integration tool limits
 	// compactBackoff: conversation id -> time before which summarising
 	// isn't retried (it failed).
 	compactBackoff sync.Map
