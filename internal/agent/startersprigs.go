@@ -217,7 +217,7 @@ func buildStarter(fsys fs.FS, dir, id string) (*StarterSprig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path.Base(f), err)
 		}
-		skills = append(skills, sprigpkg.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body})
+		skills = append(skills, sprigpkg.SkillFrom(k))
 	}
 	var routines []sprigpkg.Routine
 	if b, err := read("routines.json"); err == nil {
@@ -250,7 +250,7 @@ func buildStarter(fsys fs.FS, dir, id string) (*StarterSprig, error) {
 	s := &StarterSprig{ID: id, Summary: meta.Summary, Tiers: meta.Tiers, Ages: meta.Ages, Offer: meta.Offer,
 		DailyUSD: meta.DailyUSD, Levels: meta.Levels, Char: back.Char, Package: raw, Routines: back.Routines, CheckIns: meta.CheckIns}
 	for _, k := range back.Skills {
-		s.Skills = append(s.Skills, store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body})
+		s.Skills = append(s.Skills, k.Store())
 	}
 	names := make([]string, 0, len(back.Files))
 	for rel := range back.Files {

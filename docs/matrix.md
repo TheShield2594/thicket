@@ -60,9 +60,11 @@ Messages sent while Thicket was offline aren't answered when it comes
 back (no late replies to old questions); only new ones are.
 
 "Delete that" redacts the sprig's message. When a message looks like a
-key or password, Thicket redacts it too, if the bot is allowed to (it is
-in a DM; in a room, it needs a power level that lets it redact others'
-messages).
+key or password, Thicket redacts it too, but only if the bot's power
+level lets it redact other people's messages (50 by default). That
+includes DMs: in a DM the bot opened itself it has that level, but in a
+room or DM you created, give the bot moderator rights, or a pasted key
+stays visible after the redaction fails.
 
 ## Rooms
 

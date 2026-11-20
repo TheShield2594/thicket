@@ -120,6 +120,27 @@ type Skill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Body        string `json:"body"`
+	// Optional (taught skills); packages without them are unchanged.
+	Inputs       []store.SkillInput `json:"inputs,omitempty"`
+	SuccessCheck string             `json:"success_check,omitempty"`
+}
+
+// SkillFrom is a library skill as a package carries it.
+func SkillFrom(k store.Skill) Skill {
+	return Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body, Inputs: k.Inputs, SuccessCheck: k.SuccessCheck}
+}
+
+// Store is the package skill as a library skill (no owner: shared).
+func (k Skill) Store() store.Skill {
+	return store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body, Inputs: k.Inputs, SuccessCheck: k.SuccessCheck}
+}
+
+// sameSkill reports whether a package skill says what a library one does.
+func sameSkill(k Skill, cur *store.Skill) bool {
+	a, _ := json.Marshal(k.Inputs)
+	b, _ := json.Marshal(cur.Inputs)
+	return cur.Name == k.Name && cur.Description == k.Description && strings.TrimSpace(cur.Body) == strings.TrimSpace(k.Body) &&
+		string(a) == string(b) && cur.SuccessCheck == k.SuccessCheck
 }
 
 // Memory scopes in a package.
@@ -332,7 +353,7 @@ func usedSkills(c *character.Character, routines []Routine, lib []store.Skill, e
 	var out []Skill
 	for _, k := range lib {
 		if slices.Contains(extra, k.ID) || mentions(text, k.ID) {
-			out = append(out, Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body})
+			out = append(out, SkillFrom(k))
 		}
 	}
 	return out
@@ -721,7 +742,7 @@ func (p *Package) PlanSkills(ctx context.Context, db *store.Store, valid func(st
 	var out []SkillPlan
 	for _, k := range p.Skills {
 		if valid != nil {
-			if err := valid(store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body}); err != nil {
+			if err := valid(k.Store()); err != nil {
 				return nil, fmt.Errorf("the skill %q in this package isn't valid: %w", k.ID, err)
 			}
 		}
@@ -735,7 +756,7 @@ func (p *Package) PlanSkills(ctx context.Context, db *store.Store, valid func(st
 			// A package brings shared skills; one sprig's own can't be
 			// replaced by it (its file is the source of truth).
 			return nil, fmt.Errorf("the skill %q in this package has the same id as %s's own skill: rename one first", k.ID, cur.SprigID)
-		case cur.Name == k.Name && cur.Description == k.Description && strings.TrimSpace(cur.Body) == strings.TrimSpace(k.Body):
+		case sameSkill(k, cur):
 			out = append(out, SkillPlan{Skill: k, Action: "same"})
 		default:
 			out = append(out, SkillPlan{Skill: k, Action: "new version", Base: cur.Version, Current: cur.Body})
@@ -1146,7 +1167,8 @@ func (p *Package) Install(ctx context.Context, db *store.Store, charsDir string,
 			res.Skills = append(res.Skills, k.ID+" "+SkillsNeedAdmin)
 			continue
 		}
-		sk := store.Skill{ID: k.ID, Name: k.Name, Description: k.Description, Body: k.Body, Author: "import", Note: "imported with " + c.DisplayName()}
+		sk := k.Store()
+		sk.Author, sk.Note = "import", "imported with "+c.DisplayName()
 		v, err := db.SaveSkill(ctx, sk, k.Base)
 		switch {
 		case errors.Is(err, store.ErrNoChange):
