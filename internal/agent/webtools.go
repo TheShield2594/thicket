@@ -37,7 +37,7 @@ func (e *Engine) fetcher() *websearch.Fetcher {
 func (e *Engine) searchProvider(ctx context.Context) (string, error) {
 	choice := e.Settings.String(ctx, "web_search")
 	searx := e.Settings.String(ctx, "search_url")
-	onOpenRouter := !e.localModel(ctx) && e.Secrets.Has(ctx, secrets.OpenRouterKey)
+	onOpenRouter := e.onOpenRouter(ctx) && e.Secrets.Has(ctx, secrets.OpenRouterKey)
 	switch choice {
 	case "off":
 		return "", errors.New("web search is turned off in this Thicket's settings (web_search)")
@@ -58,7 +58,7 @@ func (e *Engine) searchProvider(ctx context.Context) (string, error) {
 	case onOpenRouter:
 		return "openrouter", nil
 	}
-	return "", errors.New("there's no web search set up: with a local model, run SearXNG and have the owner set search_url to its address")
+	return "", errors.New("there's no web search set up: without OpenRouter, run SearXNG and have the owner set search_url to its address")
 }
 
 func (e *Engine) toolWebSearch(ctx context.Context, t *turn, args json.RawMessage) (string, error) {

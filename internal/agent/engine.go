@@ -598,9 +598,15 @@ func (e *Engine) failureReply(ctx context.Context, t *turn, err error) string {
 	case errors.As(err, &be):
 		return budgetReply(t, be)
 	case errors.Is(err, llm.ErrNoKey):
-		return "I can't reach my brain right now: there's no model API key set up. DM me your OpenRouter key and I'll be back."
+		return "I can't reach my brain right now: there's no model API key set up. DM me an OpenRouter key (or another provider's key with its name, like \"groq gsk_…\") and I'll be back."
 	case llm.Fatal(err):
-		return "The model provider turned me away (" + shortErr(err) + "). It might be the API key or credits running out. Can you check OpenRouter?"
+		name := "OpenRouter"
+		if p, ok := e.provider(ctx); ok {
+			name = p.Name
+		} else if e.localModel(ctx) {
+			name = "the model server"
+		}
+		return "The model provider turned me away (" + shortErr(err) + "). It might be the API key or credits running out. Can you check " + name + "?"
 	default:
 		return "Something went wrong on my end and I couldn't finish that (" + shortErr(err) + "). Try again in a moment?"
 	}

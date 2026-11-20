@@ -50,6 +50,10 @@ services:
       # You can also just send Juni the address in a DM.
       THICKET_MODEL_URL: ${THICKET_MODEL_URL:-}
       THICKET_MODEL_API_KEY: ${THICKET_MODEL_API_KEY:-}
+      # Optional. A hosted provider instead of OpenRouter, with its key in
+      # THICKET_MODEL_API_KEY: opencode-zen, opencode-go, nous, openai, anthropic,
+      # gemini, groq, deepseek, ... (see docs/providers.md).
+      THICKET_PROVIDER: ${THICKET_PROVIDER:-}
       # Optional. Your SearXNG for web search (see docs/web.md); without it, OpenRouter's is used.
       THICKET_SEARCH_URL: ${THICKET_SEARCH_URL:-}
       # Optional. 1 sends fetch_page through HTTPS_PROXY/HTTP_PROXY, if your network needs one

@@ -184,7 +184,24 @@ func (d *Doctor) model(ctx context.Context, st *settings.Settings, sec *secrets.
 	}
 	var auth map[string]string
 	if key != "" && !llm.IsOpenRouter(base) {
-		auth = map[string]string{"Authorization": "Bearer " + key} // a protected local server
+		auth = map[string]string{"Authorization": "Bearer " + key} // a provider, or a protected local server
+		if p, ok := llm.ProviderFor(base); ok && p.Headers != nil {
+			for k, v := range p.Headers(key) {
+				auth[k] = v
+			}
+		}
+	}
+	if p, ok := llm.ProviderFor(base); ok {
+		if key == "" {
+			c.Detail = p.Name + " is set, but no key is stored yet: DM Juni the key with the provider's name"
+			return c
+		}
+		if _, err := d.get(ctx, base+"/models", auth); err != nil {
+			c.Detail = p.Name + " refused the stored key or isn't reachable (" + red.Redact(err.Error()) + ")"
+			return c
+		}
+		c.OK, c.Detail = true, p.Name+" reachable, key accepted"
+		return c
 	}
 	if _, err := d.get(ctx, base+"/models", auth); err != nil {
 		c.Detail = fmt.Sprintf("%s isn't reachable: %s", base, red.Redact(err.Error()))

@@ -80,7 +80,8 @@ func (o *OpenRouter) Chat(ctx context.Context, req Request) (*Response, error) {
 	base := o.base(ctx)
 	hosted := IsOpenRouter(base)
 	key, err := o.Key(ctx, base)
-	if hosted && (err != nil || key == "") {
+	_, provider := ProviderFor(base)
+	if (hosted || provider) && (err != nil || key == "") {
 		return nil, ErrNoKey // local servers usually need no key
 	}
 	body := orRequest{
@@ -282,6 +283,11 @@ func ListModels(ctx context.Context, base, key string) ([]string, error) {
 	}
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
+		if p, ok := ProviderFor(base); ok && p.Headers != nil {
+			for k, v := range p.Headers(key) {
+				req.Header.Set(k, v)
+			}
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -300,10 +306,16 @@ func ListModels(ctx context.Context, base, key string) ([]string, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("that doesn't look like an OpenAI-compatible server (unreadable model list)")
 	}
+	// Gemini lists "models/gemini-…" but chats with the bare id.
+	p, _ := ProviderFor(base)
 	var ids []string
 	for _, m := range out.Data {
-		if m.ID != "" {
-			ids = append(ids, m.ID)
+		id := m.ID
+		if p.ID == "gemini" {
+			id = strings.TrimPrefix(id, "models/")
+		}
+		if id != "" {
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil

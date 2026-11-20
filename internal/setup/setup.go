@@ -154,6 +154,58 @@ func (s *Setup) LocalModel(ctx context.Context, base, model, key string) (string
 	return fmt.Sprintf("models run on %s, using %s", base, model) + verified(s.Verify, "the server answered"), nil
 }
 
+// ProviderModels lists a hosted provider's models with a key, which
+// checks the key too.
+func (s *Setup) ProviderModels(ctx context.Context, p llm.Provider, key string) ([]string, error) {
+	models, err := llm.ListModels(ctx, p.BaseURL, strings.TrimSpace(key))
+	if err != nil {
+		return nil, fmt.Errorf("%s didn't accept that key: %v", p.Name, err)
+	}
+	if len(llm.ChatModels(models)) == 0 {
+		return nil, fmt.Errorf("%s accepted the key but lists no chat models; is the plan active?", p.Name)
+	}
+	return llm.ChatModels(models), nil
+}
+
+// Provider points Thicket at a hosted provider with its key. An empty
+// model picks one from the provider's list.
+func (s *Setup) Provider(ctx context.Context, id, key, model string) (string, error) {
+	p, ok := llm.ProviderByID(id)
+	if !ok {
+		return "", fmt.Errorf("Thicket doesn't know a provider called %q", id)
+	}
+	key, model = strings.TrimSpace(key), strings.TrimSpace(model)
+	if key == "" {
+		return "", fmt.Errorf("%s needs an API key (make one at %s)", p.Name, p.KeysURL)
+	}
+	cheap := model
+	if s.Verify {
+		models, err := s.ProviderModels(ctx, p, key)
+		if err != nil {
+			return "", err
+		}
+		main, c := p.PickModels(models)
+		switch {
+		case model == "":
+			model, cheap = main, c
+		case !contains(models, model):
+			return "", fmt.Errorf("%s doesn't have a model called %q; it has: %s", p.Name, model, strings.Join(models, ", "))
+		}
+	}
+	if model == "" {
+		return "", fmt.Errorf("without checking the key, %s needs a model name (THICKET_MODEL)", p.Name)
+	}
+	if err := s.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
+		return "", err
+	}
+	for k, v := range map[string]string{"model_url": p.BaseURL, "model": model, "fallback_model": model, "cheap_model": cheap} {
+		if err := s.Settings.Set(ctx, k, v); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("models run on %s, using %s", p.Name, model) + verified(s.Verify, "key accepted"), nil
+}
+
 // DiscordToken checks the bot token and stores it.
 func (s *Setup) DiscordToken(ctx context.Context, token string) (string, error) {
 	token = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(token), "Bot "))
@@ -293,6 +345,7 @@ type State struct {
 	DiscordToken, TelegramToken bool
 	ModelURL, Model             string
 	Local                       bool
+	Provider                    string // a hosted provider's name, if models run on one
 	Timezone                    string
 	Daily, Monthly              string
 	Owner                       string // "discord:123", or "" if nobody yet
@@ -310,7 +363,10 @@ func (s *Setup) State(ctx context.Context) (State, error) {
 		Daily:         capText(s.Settings.Float(ctx, "budget.daily_usd")),
 		Monthly:       capText(s.Settings.Float(ctx, "budget.monthly_usd")),
 	}
-	st.Local = !llm.IsOpenRouter(st.ModelURL)
+	st.Local = !llm.IsHosted(st.ModelURL)
+	if p, ok := llm.ProviderFor(st.ModelURL); ok {
+		st.Provider = p.Name
+	}
 	users, err := s.DB.ListUsers(ctx)
 	if err != nil {
 		return st, err
@@ -328,7 +384,12 @@ func (s *Setup) State(ctx context.Context) (State, error) {
 }
 
 // ModelReady reports whether a model can be called with what's stored.
-func (st State) ModelReady() bool { return st.Local || st.OpenRouterKey }
+func (st State) ModelReady() bool {
+	if st.Provider != "" {
+		return st.ModelAPIKey
+	}
+	return st.Local || st.OpenRouterKey
+}
 
 func nameSuffix(name string) string {
 	if name == "" {

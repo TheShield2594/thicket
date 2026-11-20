@@ -6,6 +6,22 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v35)
 
+- More model providers: besides OpenRouter and your own server, Thicket
+  now knows hosted OpenAI-compatible providers and subscriptions:
+  OpenCode Zen, OpenCode Go, Nous Portal, OpenAI, Anthropic, Google
+  Gemini, xAI, Mistral, DeepSeek, Groq, Cerebras, Together AI, Fireworks,
+  DeepInfra, Hugging Face, NVIDIA NIM, Moonshot (Kimi), Z.ai (pay-as-you-go
+  and the GLM Coding Plan), Chutes, Synthetic and Venice. Send Juni the
+  key in a DM (with the provider's name when its keys look like others',
+  as in `deepseek sk-…`), pick option 3 in `thicket init`, or set
+  `THICKET_PROVIDER` and `THICKET_MODEL_API_KEY`. Thicket checks the key,
+  picks a main and a cheap model from what the provider lists, and
+  `thicket doctor` checks the key too. Subscriptions count as $0 a call;
+  for pay-as-you-go providers, which don't report costs, the new
+  `model_usd_per_mtok_in` and `model_usd_per_mtok_out` settings price
+  calls for the spend caps. PDFs, voice messages and web search work as
+  they do with a local server. See [Providers](docs/providers.md).
+
 - Plugins (#78): optional abilities run in their own containers, started
   by a compose profile and connected as built-in integrations named after
   them; the core bundles none. Each is found at `THICKET_<NAME>_URL` (or

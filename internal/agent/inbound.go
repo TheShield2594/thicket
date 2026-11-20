@@ -65,12 +65,16 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 	if app, _ := chatToken(in.Text); app != nil {
 		known = true
 	}
-	if !known && !secrets.LooksLikeSecret(in.Text) && !openRouterKeyRe.MatchString(in.Text) {
+	prov, provKey := providerKey(in.Text)
+	if !known && !secrets.LooksLikeSecret(in.Text) && !openRouterKeyRe.MatchString(in.Text) && provKey == "" {
 		return false, nil
 	}
 	if !in.IsDM {
 		e.scrub(ctx, in)
 		return true, e.send(ctx, in.ChatRef(), host, "I deleted that message because it looked like a password or API key. Please don't post those in shared channels. If you need to give me one, DM me.")
+	}
+	if provKey != "" && user.IsAdmin() && !openRouterKeyRe.MatchString(in.Text) {
+		return true, e.connectProvider(ctx, in, user, host, prov, provKey, true)
 	}
 	if key := openRouterKeyRe.FindString(in.Text); key != "" && user.IsAdmin() {
 		if e.KeyCheck != nil {
@@ -99,6 +103,41 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 			"The user just connected their OpenRouter API key (it's stored safely; don't mention the key itself). Continue onboarding from where things stand.")
 	}
 	return true, e.send(ctx, in.ChatRef(), host, "That looks like a key or password, so I didn't read it or save it. If you want me to use it, tell me what it's for and I'll ask for it properly.")
+}
+
+// providerKey finds a hosted provider's key in a message: a key only one
+// provider's keys look like, or a key sent with the provider's name
+// ("deepseek sk-…"). A plain sk-… key with no name is not guessed at:
+// trying it on several services would hand it to the wrong ones.
+func providerKey(text string) (llm.Provider, string) {
+	if p, k, ok := llm.ProviderByKey(text); ok {
+		return p, k
+	}
+	p, ok := llm.ProviderInText(text)
+	if !ok || p.KeyRe != nil {
+		return llm.Provider{}, "" // a provider with its own key shape was matched above
+	}
+	// Only a short message that is the name and a key ("deepseek sk-…",
+	// "use synthetic key syn_…"): a long hash in ordinary chat that
+	// happens to name a provider must not be sent off as a key.
+	fields := strings.Fields(text)
+	if len(fields) > 6 {
+		return llm.Provider{}, ""
+	}
+	k := llm.KeyInText(p, text)
+	if len(k) < 20 || !strings.ContainsAny(k, "0123456789") {
+		return llm.Provider{}, ""
+	}
+	return p, k
+}
+
+// providerNames lists the catalog for people.
+func providerNames() string {
+	var names []string
+	for _, p := range llm.Providers {
+		names = append(names, p.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // scrub deletes a message containing a secret, best effort (Discord won't
@@ -140,9 +179,13 @@ func (e *Engine) bootstrapGreeting(ctx context.Context, in channel.Incoming, use
 	}
 	if ok, _ := e.DB.ClaimNotice(ctx, fmt.Sprintf("bootstrap-greet:%d", user.ID), time.Hour); ok {
 		return e.send(ctx, in.ChatRef(), host, "Hi! I'm "+host.DisplayName()+", the gardener around here. 🌱 Welcome to your Thicket.\n\n"+
-			"Before I can really talk, I need a model to think with. Two ways:\n"+
+			"Before I can really talk, I need a model to think with. Three ways:\n"+
 			"• **OpenRouter** (easiest): make a key at https://openrouter.ai/keys and paste it here. I'll check it works, encrypt it, and never show it to anyone, me included.\n"+
+			"• **Another provider or subscription**: send its name and key together, like `groq gsk_…` or `opencode go sk-…`. I know "+providerNames()+".\n"+
 			"• **Your own machine**: if you run Ollama or LM Studio, send me its address (like `http://192.168.1.20:11434`), or just say \"ollama\".")
 	}
-	return e.send(ctx, in.ChatRef(), host, "I still need a model before I can think properly: paste an OpenRouter key (it starts with `sk-or-`), or send the address of your Ollama or LM Studio server.")
+	if p, ok := llm.ProviderInText(in.Text); ok {
+		return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("%s works. Make a key at %s and send it to me with the name, like `%s <key>`. I'll check it, encrypt it, and delete your message if I can.", p.Name, p.KeysURL, p.ID))
+	}
+	return e.send(ctx, in.ChatRef(), host, "I still need a model before I can think properly: paste an OpenRouter key (it starts with `sk-or-`), another provider's key with its name (like `groq gsk_…`), or the address of your Ollama or LM Studio server.")
 }

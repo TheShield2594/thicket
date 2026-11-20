@@ -15,23 +15,41 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-// Models run on OpenRouter (needs a key) or on any OpenAI-compatible
-// server the owner runs themselves: Ollama, LM Studio, llama.cpp, vLLM.
-// Setting up a local server is part of first-run setup: the owner sends
-// its address instead of a key, and Thicket checks it and picks a model.
+// Models run on OpenRouter (needs a key), on a hosted provider from the
+// catalog in llm.Providers (needs that provider's key), or on any
+// OpenAI-compatible server the owner runs themselves: Ollama, LM Studio,
+// llama.cpp, vLLM. Choosing one is part of first-run setup: the owner sends
+// a key or a server's address, and Thicket checks it and picks a model.
 
 // ModelReady reports whether Thicket can call a model.
 func (e *Engine) ModelReady(ctx context.Context) bool {
-	if !e.localModel(ctx) {
+	url := e.Settings.String(ctx, "model_url")
+	if llm.IsOpenRouter(url) {
 		return e.Secrets.Has(ctx, secrets.OpenRouterKey)
 	}
-	// A local server needs a model chosen for it: OpenRouter's default
+	if _, ok := llm.ProviderFor(url); ok && !e.Secrets.Has(ctx, secrets.ModelAPIKey) {
+		return false
+	}
+	// Other servers need a model chosen for them: OpenRouter's default
 	// model ids mean nothing there.
 	return e.Settings.IsSet(ctx, "model") || e.Cfg.Model != config.DefaultModel
 }
 
+// localModel reports whether models run on a server the owner runs
+// (free, maybe slow, no hosted extras).
 func (e *Engine) localModel(ctx context.Context) bool {
-	return !llm.IsOpenRouter(e.Settings.String(ctx, "model_url"))
+	return !llm.IsHosted(e.Settings.String(ctx, "model_url"))
+}
+
+// onOpenRouter reports whether models run on OpenRouter, which alone has
+// PDF parsing, audio input and web search built in.
+func (e *Engine) onOpenRouter(ctx context.Context) bool {
+	return llm.IsOpenRouter(e.Settings.String(ctx, "model_url"))
+}
+
+// provider is the catalog provider models run on, if any.
+func (e *Engine) provider(ctx context.Context) (llm.Provider, bool) {
+	return llm.ProviderFor(e.Settings.String(ctx, "model_url"))
 }
 
 var (
@@ -58,7 +76,7 @@ func localCandidates(text string) []string {
 	}
 	withV1 := func(raw string) {
 		u, err := url.Parse(strings.TrimRight(raw, "/.,)"))
-		if err != nil || u.Host == "" || llm.IsOpenRouter(raw) {
+		if err != nil || u.Host == "" || llm.IsHosted(raw) {
 			return
 		}
 		switch {
@@ -118,11 +136,78 @@ func (e *Engine) bootstrap(ctx context.Context, in channel.Incoming, user *store
 	if cands := localCandidates(in.Text); len(cands) > 0 {
 		return e.connectLocal(ctx, in, user, host, cands, true)
 	}
+	// A provider and key set in the environment: pick its models now.
+	if p, ok := e.provider(ctx); ok {
+		if key, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey); key != "" {
+			return e.connectProvider(ctx, in, user, host, p, key, false)
+		}
+		return e.bootstrapGreeting(ctx, in, user, host)
+	}
 	// A server set in the environment: connect to it straight away.
 	if e.localModel(ctx) {
 		return e.connectLocal(ctx, in, user, host, []string{e.Settings.String(ctx, "model_url")}, false)
 	}
 	return e.bootstrapGreeting(ctx, in, user, host)
+}
+
+// connectProvider checks a hosted provider's key by listing its models,
+// picks the models, and switches Thicket to it.
+// sent says the key came in this message (so the message is deleted),
+// rather than from the environment.
+func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user *store.User, host *character.Character, p llm.Provider, key string, sent bool) error {
+	if ch := e.channelFor(in.Channel); ch != nil {
+		ch.Typing(ctx, in.ChatID)
+	}
+	if sent {
+		e.scrub(ctx, in) // whatever happens next, the key leaves the chat
+	}
+	list := llm.ListModels
+	if e.ListModels != nil {
+		list = e.ListModels
+	}
+	ids, err := list(ctx, p.BaseURL, key)
+	if err != nil {
+		return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("Hmm, %s didn't accept that key (%s). Could you double-check it (keys are at %s) and send it again?", p.Name, shortErr(err), p.KeysURL))
+	}
+	model, cheap := p.PickModels(ids)
+	if model == "" {
+		return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("%s accepted the key, but lists no chat models I can use. Is the account or plan active?", p.Name))
+	}
+	wasReady := e.ModelReady(ctx)
+	if sent {
+		if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
+			return err
+		}
+	}
+	set := map[string]string{"model_url": p.BaseURL, "model": model, "cheap_model": cheap, "fallback_model": model}
+	for _, k := range []string{"model_url", "model", "cheap_model", "fallback_model"} {
+		if err := e.Settings.Set(ctx, k, set[k]); err != nil {
+			return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(err)+").")
+		}
+	}
+	e.logActivity(ctx, "info", "system", "", user.ID, "connected to model provider "+p.Name, model)
+	msg := fmt.Sprintf("Connected to %s. I'll think with **%s**", p.Name, model)
+	if sent {
+		msg = fmt.Sprintf("Got it, and it works! I've locked the key away encrypted. I'll think with **%s** on %s", model, p.Name)
+	}
+	if cheap != model {
+		msg += fmt.Sprintf(", and use **%s** for quick background jobs", cheap)
+	}
+	msg += ". Say \"use <model>\" any time to change."
+	if p.Note != "" {
+		msg += "\n\n" + p.Note
+	}
+	if !p.Subscription {
+		msg += "\n\n" + p.Name + " doesn't tell me what each call costs, so spend caps only count it if you tell me its prices: set `model_usd_per_mtok_in` and `model_usd_per_mtok_out` (dollars per million tokens)."
+	}
+	if err := e.send(ctx, in.ChatRef(), host, msg); err != nil {
+		return err
+	}
+	if wasReady {
+		return nil
+	}
+	return e.continueAfterEvent(ctx, in, user, host,
+		fmt.Sprintf("Thicket is now running on %s (model %s); the key is stored safely, don't mention it. Continue onboarding from where things stand.", p.Name, model))
 }
 
 // connectLocal tries each candidate server, and on the first with a chat
@@ -172,5 +257,5 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 	hint := "If Thicket runs in Docker, `localhost` there is the container itself: use your computer's LAN address (like http://192.168.1.20:11434), " +
 		"or http://host.docker.internal:11434 with the compose file's extra_hosts line. For Ollama, also start it with OLLAMA_HOST=0.0.0.0 so it listens beyond localhost."
 	return e.send(ctx, in.ChatRef(), host, "I couldn't reach a model server at "+strings.Join(tried, "; ")+".\n\n"+hint+
-		"\n\nSend me the address to try again, or an OpenRouter key from https://openrouter.ai/keys instead.")
+		"\n\nSend me the address to try again, or an OpenRouter key from https://openrouter.ai/keys instead (or another provider's key, with its name: \"groq gsk_…\").")
 }

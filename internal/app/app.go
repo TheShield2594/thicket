@@ -221,7 +221,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		if llm.IsOpenRouter(base) {
 			return sec.Get(ctx, secrets.OpenRouterKey)
 		}
-		k, _ := sec.Get(ctx, secrets.ModelAPIKey) // most local servers need none
+		k, _ := sec.Get(ctx, secrets.ModelAPIKey) // a provider's key; most local servers need none
 		return k, nil
 	})
 	or.URL = func(ctx context.Context) string { return a.Settings.String(ctx, "model_url") }
@@ -503,6 +503,9 @@ func (a *App) health(ctx context.Context) map[string]server.Check {
 	switch url := a.Settings.String(ctx, "model_url"); {
 	case a.Engine.ModelReady(ctx) && llm.IsOpenRouter(url):
 		out["model_key"] = server.Check{OK: true}
+	case a.Engine.ModelReady(ctx) && llm.IsHosted(url):
+		p, _ := llm.ProviderFor(url)
+		out["model_key"] = server.Check{OK: true, Detail: p.Name}
 	case a.Engine.ModelReady(ctx):
 		// /health needs no sign-in: the server's address isn't shown.
 		out["model_key"] = server.Check{OK: true, Detail: "local model server"}

@@ -142,3 +142,37 @@ func TestPromptMixIsRecordedAndNamedInTheWarning(t *testing.T) {
 		t.Fatalf("mix line: %s", line)
 	}
 }
+
+func TestProviderPricesCountWhenCostIsNotReported(t *testing.T) {
+	g, _, _ := guard(t, 0) // 10 prompt and 2 reply tokens, no reported cost
+	ctx := context.Background()
+	call := func() float64 {
+		mctx, m := WithMeter(ctx)
+		if _, err := g.Chat(mctx, llm.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		return m.USD()
+	}
+	set := func(k, v string) {
+		if err := g.Settings.Set(ctx, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("model_url", "https://api.groq.com/openai/v1")
+	if got := call(); got != 0 {
+		t.Fatalf("no prices set: %v", got)
+	}
+	set("model_usd_per_mtok_in", "100000")
+	set("model_usd_per_mtok_out", "200000")
+	if got := call(); got < 1.3999 || got > 1.4001 {
+		t.Fatalf("priced: %v, want 1.40", got)
+	}
+	set("model_url", "https://opencode.ai/zen/go/v1") // a subscription
+	if got := call(); got != 0 {
+		t.Fatalf("subscription: %v", got)
+	}
+	set("model_url", "https://openrouter.ai/api/v1") // reports its own cost
+	if got := call(); got != 0 {
+		t.Fatalf("openrouter: %v", got)
+	}
+}

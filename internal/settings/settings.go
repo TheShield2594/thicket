@@ -28,7 +28,7 @@ type Key struct {
 
 // Known lists the settings users may change in chat. Anything else is refused.
 var Known = []Key{
-	{"model", "primary chat model (OpenRouter model id)", "string"},
+	{"model", "primary chat model (a model id on the server model_url points at)", "string"},
 	{"fallback_model", "model used when the primary fails", "string"},
 	{"cheap_model", "small model for memory review and personality checks", "string"},
 	{"budget.daily_usd", "daily spend cap in USD (0 = no cap)", "float"},
@@ -39,7 +39,9 @@ var Known = []Key{
 	{"consistency_check", "run the personality check on replies (true/false)", "bool"},
 	{"checkin_days", "days of quiet before a sprig checks in (0 = never)", "int"},
 	{"history_tokens", "how much of the conversation each reply includes, in tokens (0 = automatic: 12000 on OpenRouter, 3000 on a local model); older parts are summarised", "int"},
-	{"model_url", "where models run: OpenRouter's API, or a local OpenAI-compatible server such as http://192.168.1.20:11434/v1 (Ollama)", "url"},
+	{"model_url", "where models run: OpenRouter's API, a hosted provider's OpenAI-compatible API (OpenCode Zen or Go, Nous Portal, OpenAI, Anthropic, Gemini, Groq, DeepSeek and others; see docs/providers.md), or a local server such as http://192.168.1.20:11434/v1 (Ollama)", "url"},
+	{"model_usd_per_mtok_in", "for spend caps on a pay-as-you-go provider that doesn't report costs (not OpenRouter, not a subscription): dollars per million prompt tokens (0 = count as free)", "float"},
+	{"model_usd_per_mtok_out", "the same, per million reply tokens", "float"},
 	{"web_search", "how sprigs with the web scope search: auto, openrouter (OpenRouter's web search, about $0.02 a search), searxng (your own SearXNG at search_url), or off", "choice"},
 	{"search_url", "address of your SearXNG instance, e.g. http://192.168.1.20:8888", "url"},
 	{"document_chars", "how much of a PDF's text is kept for follow-up questions, in characters (0 = none, at most 100000); it's re-sent with every later reply in the conversation", "int"},

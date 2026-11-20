@@ -190,7 +190,7 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 	var localText strings.Builder // their text, for this turn only
 	var packages map[string][]byte
 	pdfTries := 0
-	local := e.localModel(ctx) // once, so every PDF in a message goes one way
+	local := !e.onOpenRouter(ctx) // once, so every PDF in a message goes one way
 	files, audio := 0, 0
 	spoken := false
 	for _, a := range atts {
@@ -292,7 +292,7 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 					fmt.Fprintf(&b, "\n[pdf %s could not be read: %v]", name, err)
 					continue
 				case text == "":
-					fmt.Fprintf(&b, "\n[pdf %s has no text to read (it's probably scanned). Reading scanned PDFs needs OpenRouter, and Thicket is using a local model server.]", name)
+					fmt.Fprintf(&b, "\n[pdf %s has no text to read (it's probably scanned). Reading scanned PDFs needs OpenRouter, and Thicket is using another model server.]", name)
 					continue
 				case err != nil:
 					fmt.Fprintf(&b, "\n[only part of pdf %s could be read: %v]", name, err)
@@ -321,8 +321,8 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 			pdfs = append(pdfs, llm.File{Name: name, URL: "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(body)})
 			pageCounts = append(pageCounts, pages)
 		case kindAudio:
-			if e.localModel(ctx) {
-				fmt.Fprintf(&b, "\n[voice message %s was not transcribed: that needs OpenRouter, and Thicket is using a local model server. Ask the user to type it.]", name)
+			if !e.onOpenRouter(ctx) {
+				fmt.Fprintf(&b, "\n[voice message %s was not transcribed: that needs OpenRouter, and Thicket is using another model server. Ask the user to type it.]", name)
 				continue
 			}
 			if audio >= maxAudioPerMessage {
