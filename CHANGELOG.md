@@ -4,7 +4,7 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v34)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v35)
 
 - Plugins (#78): optional abilities run in their own containers, started
   by a compose profile and connected as built-in integrations named after
@@ -28,7 +28,7 @@ stated.
   records the level, the floor and the reason. See
   [Calls that always ask](docs/mcp.md#calls-that-always-ask-level-floors).
 
-- Signed gallery packages (schema v34, #81). `thicket gallery keygen`
+- Signed gallery packages (schema v35, #81). `thicket gallery keygen`
   makes your Ed25519 author key (kept in the encrypted secret store);
   `thicket export-sprig ID --for-gallery` writes a signed package holding
   only `character.md`, `sprig/avatar.json`, voice tests, `skills/*.md`,
