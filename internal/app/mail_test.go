@@ -566,7 +566,7 @@ func TestMailboxOnTheDashboard(t *testing.T) {
 	fm.box["wren"] = []mail.Summary{{ID: "m1", From: `"<b>Eve</b>" <eve@evil.example>`, Subject: hostile, Date: "2026-11-20 09:00", Preview: hostile, Attachments: 1}}
 	fm.box["fern"] = []mail.Summary{{ID: "f1", From: "shop@vendor.example", Subject: "Receipt", Draft: true}}
 	fm.msg["wren/m1"] = &mail.Message{ID: "m1", From: `"<b>Eve</b>" <eve@evil.example>`, To: []string{"wren@example.org"}, Subject: hostile,
-		Text: "Click here <https://evil.example/login>\n" + hostile + `<style>body{display:none}</style>`,
+		Text:        "Click here <https://evil.example/login>\n" + hostile + `<style>body{display:none}</style>`,
 		Attachments: []mail.Attachment{{ID: "a1", Name: "invoice<script>.pdf", Type: "application/pdf", Size: 2048}}}
 	srv := httptest.NewServer(a.Dashboard.Handler())
 	defer srv.Close()
