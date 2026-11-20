@@ -91,8 +91,11 @@ type App struct {
 	live      map[string]*liveChan // the running ones, by name
 	startTok  map[string]string    // tokens of the apps built at startup
 	runCtx    context.Context      // set by Run
-	stopping  bool
-	wg        sync.WaitGroup
+	// offPlugins are plugins turned off whose integration couldn't be
+	// turned off in the database: not connected this run.
+	offPlugins map[string]bool
+	stopping   bool
+	wg         sync.WaitGroup
 }
 
 // goRun runs a background task that Run waits for. A crash is reported,
@@ -596,8 +599,10 @@ func (a *App) Run(parent context.Context) error {
 	}
 	goRun("mcp", func() {
 		defer close(mcpDone)
-		for name, err := range a.MCP.ConnectAll(ctx) {
-			if a.isDefaultPlugin(name) {
+		errs := a.MCP.ConnectAll(ctx)
+		a.disconnectKeptOff() // turned off, though the database still says on
+		for name, err := range errs {
+			if a.isDefaultPlugin(name) || a.isKeptOff(name) {
 				continue // watchDefaultPlugins connects it, or quietly turns it off
 			}
 			if a.isPlugin(name) && a.retryPlugin(ctx, name) == nil {

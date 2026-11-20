@@ -214,3 +214,38 @@ func TestPluginTurnedOff(t *testing.T) {
 		t.Fatal("a default plugin isn't left to discovery")
 	}
 }
+
+// A plugin turned off whose integration can't be turned off in the
+// database is reported, and still kept from connecting this run.
+func TestPluginTurnedOffWriteFails(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	tokenFile := filepath.Join(t.TempDir(), "auth", "token")
+	srv := stubPlugin(t, tokenFile)
+	a.Plugins = plugin.MustNew(plugin.Spec{Name: "stub"})
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", srv.URL)
+	a.Cfg.SetPluginEnv("THICKET_STUB_TOKEN_FILE", tokenFile)
+	if !a.ensurePlugins(ctx) {
+		t.Fatal("setup failed")
+	}
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", "off")
+	old := putMCPServer
+	putMCPServer = func(context.Context, *App, store.MCPServer) error { return fmt.Errorf("disk full") }
+	defer func() { putMCPServer = old }()
+	if a.ensurePlugins(ctx) {
+		t.Fatal("a failed turn-off reported success")
+	}
+	a.mu.Lock()
+	errs := strings.Join(a.startErrs, "|")
+	a.mu.Unlock()
+	if !strings.Contains(errs, "couldn't be turned off") || !strings.Contains(errs, "disk full") {
+		t.Fatalf("not reported: %q", errs)
+	}
+	a.MCP.ConnectAll(ctx) // the database still says it's on
+	if st := a.MCP.Status()["stub"]; !strings.HasPrefix(st, "connected") {
+		t.Fatalf("test setup: the stale integration should connect before it's dropped: %q", st)
+	}
+	a.disconnectKeptOff()
+	if st := a.MCP.Status()["stub"]; strings.HasPrefix(st, "connected") {
+		t.Fatalf("a turned-off plugin connected: %q", st)
+	}
+}

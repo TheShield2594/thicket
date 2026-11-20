@@ -56,7 +56,12 @@ func (a *App) ensurePlugins(ctx context.Context) bool {
 	// integration Thicket set up for it; grants stay.
 	for _, s := range a.plugins().All() {
 		if ep := s.Resolve(a.Cfg.LookupPluginEnv, a.Cfg.DataDir); ep.URL == "" {
-			a.disableManaged(ctx, ep, "")
+			if err := a.disableManaged(ctx, ep, ""); err != nil {
+				// Still kept from connecting this run (Run disconnects it).
+				a.keepOff(ep.Name)
+				a.startErr(fmt.Sprintf("The %s plugin is turned off, but its integration couldn't be turned off: %s", ep.Name, shortErr(err)))
+				ok = false
+			}
 		}
 	}
 	for _, ep := range a.pluginEndpoints() {
@@ -153,19 +158,55 @@ func managed(s store.MCPServer, ep plugin.Endpoint) bool {
 // disableManaged turns off the integration Thicket set up for a plugin,
 // if it is on (and, when target isn't "", still points there). Grants
 // stay, so turning the plugin back on brings it back.
-func (a *App) disableManaged(ctx context.Context, ep plugin.Endpoint, target string) {
+func (a *App) disableManaged(ctx context.Context, ep plugin.Endpoint, target string) error {
 	servers, err := a.DB.MCPServers(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	for _, s := range servers {
 		if managed(s, ep) && s.Enabled && (target == "" || s.Target == target) {
 			s.Enabled = false
-			if err := a.DB.PutMCPServer(ctx, s); err == nil {
-				a.Log.Info("plugin integration turned off", "plugin", ep.Name)
+			if err := putMCPServer(ctx, a, s); err != nil {
+				return err
 			}
+			a.Log.Info("plugin integration turned off", "plugin", ep.Name)
 		}
 	}
+	return nil
+}
+
+// putMCPServer stores an integration (tests make it fail).
+var putMCPServer = func(ctx context.Context, a *App, s store.MCPServer) error { return a.DB.PutMCPServer(ctx, s) }
+
+// keepOff marks a plugin that must not be connected this run, though its
+// integration couldn't be turned off in the database.
+func (a *App) keepOff(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.offPlugins == nil {
+		a.offPlugins = map[string]bool{}
+	}
+	a.offPlugins[name] = true
+}
+
+// disconnectKeptOff drops the connections of plugins kept off.
+func (a *App) disconnectKeptOff() {
+	a.mu.Lock()
+	names := make([]string, 0, len(a.offPlugins))
+	for n := range a.offPlugins {
+		names = append(names, n)
+	}
+	a.mu.Unlock()
+	for _, n := range names {
+		a.MCP.Disconnect(n)
+	}
+}
+
+// isKeptOff reports whether a plugin is kept from connecting this run.
+func (a *App) isKeptOff(name string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.offPlugins[name]
 }
 
 // retryPlugin waits for a plugin that is still starting.
@@ -257,7 +298,11 @@ func (a *App) retryPluginNow(ctx context.Context, name string) error {
 // absentPlugin turns off a default-address plugin's integration left from
 // an earlier start, if it is still the one Thicket set up there.
 func (a *App) absentPlugin(ctx context.Context, ep plugin.Endpoint) {
-	a.disableManaged(ctx, ep, ep.MCPURL())
+	if err := a.disableManaged(ctx, ep, ep.MCPURL()); err != nil {
+		a.keepOff(ep.Name)
+		a.MCP.Disconnect(ep.Name)
+		a.Log.Warn("absent plugin's integration not turned off", "plugin", ep.Name, "err", shortErr(err))
+	}
 }
 
 // execKeptKey marks that sprigs given an exec-capable integration before
