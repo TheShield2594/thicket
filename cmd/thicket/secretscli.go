@@ -146,7 +146,7 @@ func secretsSet(ctx context.Context, sec *secrets.Store, name string, in io.Read
 	}
 	fmt.Fprintf(out, "Stored %s encrypted.\n", name)
 	switch name {
-	case secrets.DiscordToken, secrets.TelegramToken:
+	case secrets.DiscordToken, secrets.TelegramToken, secrets.MatrixToken:
 		fmt.Fprintln(out, "Restart Thicket for the chat app to use it.")
 	}
 	return nil

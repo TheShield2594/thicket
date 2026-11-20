@@ -64,6 +64,13 @@ services:
       THICKET_ALLOWED_USERS: ${THICKET_ALLOWED_USERS:-}
       THICKET_DISCORD_CHANNELS: ${THICKET_DISCORD_CHANNELS:-}
       THICKET_TELEGRAM_CHATS: ${THICKET_TELEGRAM_CHATS:-}
+      # Optional. Matrix is off unless the homeserver and the bot account's access
+      # token are both set (or the token is stored: `thicket secrets set matrix_token`).
+      # Encrypted rooms aren't supported. See docs/matrix.md.
+      THICKET_MATRIX_HOMESERVER: ${THICKET_MATRIX_HOMESERVER:-}
+      THICKET_MATRIX_TOKEN: ${THICKET_MATRIX_TOKEN:-}
+      THICKET_OWNER_MATRIX_ID: ${THICKET_OWNER_MATRIX_ID:-}
+      THICKET_MATRIX_ROOMS: ${THICKET_MATRIX_ROOMS:-}
       THICKET_IDLE_AFTER: ${THICKET_IDLE_AFTER:-}
       THICKET_MESSAGE_RETENTION: ${THICKET_MESSAGE_RETENTION:-}
       THICKET_LOG_LEVEL: ${THICKET_LOG_LEVEL:-}

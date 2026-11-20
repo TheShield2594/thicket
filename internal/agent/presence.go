@@ -26,7 +26,7 @@ import (
 //     app would bring these to their phone.
 
 // phoneApps are the chat apps that reach someone on their phone.
-var phoneApps = map[string]bool{"discord": true, "telegram": true}
+var phoneApps = map[string]bool{"discord": true, "telegram": true, "matrix": true}
 
 // appName is how a chat app is named to people.
 func appName(ch string) string {
@@ -187,9 +187,9 @@ func (e *Engine) toolSetReach(ctx context.Context, t *turn, args json.RawMessage
 		app = ""
 	case "web app", "web":
 		app = "web"
-	case "discord", "telegram":
+	case "discord", "telegram", "matrix":
 	default:
-		return "", fmt.Errorf("app is telegram, discord, web or auto, not %q", a.App)
+		return "", fmt.Errorf("app is telegram, discord, matrix, web or auto, not %q", a.App)
 	}
 	sprig := ""
 	who := "every sprig"

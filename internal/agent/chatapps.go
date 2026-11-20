@@ -28,6 +28,8 @@ var chatApps = []chatApp{
 		"On https://discord.com/developers/applications: New Application, then Bot. Turn on **Message Content Intent** (under Privileged Gateway Intents), press **Reset Token** and copy it."},
 	{"telegram", "Telegram", secrets.TelegramToken,
 		"In Telegram, message @BotFather, send /newbot, and copy the token it gives you."},
+	{"matrix", "Matrix", secrets.MatrixToken,
+		"Make a Matrix account for the bot on your homeserver, sign in to it once (in Element: Settings, Help & About, Access Token) and copy its access token. THICKET_MATRIX_HOMESERVER must name the homeserver (see docs/matrix.md)."},
 }
 
 func chatAppByID(id string) *chatApp {
@@ -51,12 +53,17 @@ func chatAppBySecret(name string) *chatApp {
 var (
 	discordTokenRe  = regexp.MustCompile(`[MNO][A-Za-z0-9_\-]{22,27}\.[A-Za-z0-9_\-]{6,7}\.[A-Za-z0-9_\-]{27,}`)
 	telegramTokenRe = regexp.MustCompile(`\b[0-9]{6,12}:AA[A-Za-z0-9_\-]{33}`)
+	// A Synapse access token; other homeservers' tokens have no fixed shape.
+	matrixTokenRe = regexp.MustCompile(`\bsyt_[A-Za-z0-9_\-]{20,}`)
 )
 
-// chatToken finds a Discord or Telegram bot token in text.
+// chatToken finds a Discord, Telegram or Matrix bot token in text.
 func chatToken(text string) (*chatApp, string) {
 	if tok := telegramTokenRe.FindString(text); tok != "" {
 		return chatAppByID("telegram"), tok
+	}
+	if tok := matrixTokenRe.FindString(text); tok != "" {
+		return chatAppByID("matrix"), tok
 	}
 	for _, tok := range discordTokenRe.FindAllString(text, -1) {
 		// A Discord token starts with the bot's numeric id in base64.
@@ -105,6 +112,14 @@ func (e *Engine) chatNextSteps(app *chatApp, from string) string {
 			b.WriteString("\n- To talk to me on Telegram as yourself, say **link my Telegram** and I'll give you a one-time code to send the bot.")
 		}
 		b.WriteString("\n- To let someone else in, give me their numeric Telegram ID (@userinfobot shows it).")
+	case "matrix":
+		if bot.Name != "" {
+			b.WriteString("\n- Start a chat with " + bot.Name + " (encryption off: encrypted rooms aren't supported yet), or invite it to a room.")
+		}
+		if from != app.id {
+			b.WriteString("\n- To talk to me on Matrix as yourself, say **link my Matrix** and I'll give you a one-time code to send the bot.")
+		}
+		b.WriteString("\n- To let someone else in, give me their Matrix ID, like @alice:example.org.")
 	}
 	return b.String()
 }
@@ -176,7 +191,7 @@ func (e *Engine) toolConnectChatApp(ctx context.Context, t *turn, args json.RawM
 	}
 	app := chatAppByID(a.App)
 	if app == nil {
-		return "", errors.New("app must be discord or telegram")
+		return "", errors.New("app must be discord, telegram or matrix")
 	}
 	from, _ := splitRef(t.chatRef)
 	// A token the user already sent, under another name or from an earlier try.

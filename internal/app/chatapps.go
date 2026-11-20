@@ -71,6 +71,9 @@ func (a *App) ConnectChat(ctx context.Context, name, token string) error {
 		return nil
 	}
 	ch := a.newChannel(name, token, a.Log)
+	if ch == nil && name == "matrix" {
+		return errors.New("Matrix needs THICKET_MATRIX_HOMESERVER set to the homeserver's address (such as https://matrix.example.org) first; set it, restart Thicket, then send the access token again")
+	}
 	if ch == nil {
 		return fmt.Errorf("Thicket has no chat app called %q (discord and telegram are the ones that take a bot token)", name)
 	}

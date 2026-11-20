@@ -79,7 +79,7 @@ func (e *Engine) toolLinkAccount(ctx context.Context, t *turn, _ json.RawMessage
 
 	var apps []string
 	for name := range e.Channels() {
-		if name == "discord" || name == "telegram" {
+		if name == "discord" || name == "telegram" || name == "matrix" {
 			apps = append(apps, strings.ToUpper(name[:1])+name[1:])
 		}
 	}

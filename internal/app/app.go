@@ -126,6 +126,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	// Chat tokens aren't stored secrets, but must never be logged either.
 	red.Add(cfg.DiscordToken)
 	red.Add(cfg.TelegramToken)
+	red.Add(cfg.MatrixToken)
 	out := opts.LogOut
 	if out == nil {
 		out = os.Stdout
@@ -167,11 +168,20 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	// still has them, were just stored).
 	cfg.DiscordToken = a.storedToken(ctx, secrets.DiscordToken, cfg.DiscordToken)
 	cfg.TelegramToken = a.storedToken(ctx, secrets.TelegramToken, cfg.TelegramToken)
+	cfg.MatrixToken = a.storedToken(ctx, secrets.MatrixToken, cfg.MatrixToken)
 	if opts.Channels != nil {
 		a.channels = opts.Channels(log)
 	}
 	if opts.NewChannel != nil {
-		for _, t := range []struct{ name, token string }{{"discord", cfg.DiscordToken}, {"telegram", cfg.TelegramToken}} {
+		type chatApp struct{ name, token string }
+		apps := []chatApp{{"discord", cfg.DiscordToken}, {"telegram", cfg.TelegramToken}}
+		// Matrix also needs its homeserver: without one it stays off.
+		if cfg.MatrixOn() {
+			apps = append(apps, chatApp{"matrix", cfg.MatrixToken})
+		} else if cfg.MatrixToken != "" {
+			log.Warn("a Matrix access token is stored, but THICKET_MATRIX_HOMESERVER isn't set, so Matrix is off")
+		}
+		for _, t := range apps {
 			if t.token == "" {
 				continue
 			}

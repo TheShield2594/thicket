@@ -22,6 +22,7 @@ import (
 	"github.com/theshield2594/thicket/internal/backup"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/channel/discord"
+	"github.com/theshield2594/thicket/internal/channel/matrix"
 	"github.com/theshield2594/thicket/internal/channel/telegram"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
@@ -249,13 +250,18 @@ func serve() error {
 	defer stop()
 	// Discord and Telegram start if their tokens are stored, and connect
 	// while Thicket runs when a token arrives in chat; without either,
-	// it's the web app alone.
+	// it's the web app alone. Matrix starts if THICKET_MATRIX_HOMESERVER is
+	// set and its access token is stored.
 	a, err := app.New(ctx, cfg, version, app.Options{NewChannel: func(name, token string, log *slog.Logger) channel.Channel {
 		switch name {
 		case "discord":
 			return discord.New(token, cfg.DiscordListenChannels, log)
 		case "telegram":
 			return telegram.New(token, cfg.TelegramListenChats, log)
+		case "matrix":
+			if cfg.MatrixOn() {
+				return matrix.New(cfg.MatrixHomeserver, token, cfg.MatrixListenRooms, log)
+			}
 		}
 		return nil
 	}})

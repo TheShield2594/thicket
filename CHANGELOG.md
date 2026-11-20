@@ -21,6 +21,18 @@ stated.
   Shared skills work as before. See
   [A sprig's own skills](docs/skills.md#a-sprigs-own-skills).
 
+- Matrix (off by default, `docs/matrix.md`): set
+  `THICKET_MATRIX_HOMESERVER` and the bot account's access token
+  (`THICKET_MATRIX_TOKEN`, `thicket secrets set matrix_token`, or sent to
+  Juni in a DM) and sprigs answer DMs, mentions and replies in Matrix
+  rooms, through `/sync` long polling (no open port). Replies start with
+  the sprig's name; images and files come through as attachments;
+  linking, invites, "reach me on Matrix" and remembering by reaction work
+  as on the other apps. End-to-end encrypted rooms aren't supported yet:
+  the bot declines invites to them with the reason, and leaves a room
+  that turns encryption on, saying why. Without the homeserver set,
+  nothing changes.
+
 - API token kinds (schema v32): `cli`, `mcp` and `app`, enforced by the
   server. An agent's token (`thicket api-token create NAME --kind mcp`)
   can't answer approvals, pause, resume, undo or use `/api/v2`, and what
