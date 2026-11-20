@@ -45,8 +45,8 @@ func (t Tool) Hint(key string) bool {
 const (
 	// GatesItselfHint: the tool enforces its own rules for what it does
 	// on its own (a mail plugin's allowlist) and drafts otherwise, so it
-	// is called at draft level too (told to only draft) and acts by
-	// default.
+	// is called at draft level too (told to only draft). Its default
+	// level is draft: acting on its own is its owner's choice.
 	GatesItselfHint = "thicket/gates_itself"
 	// TrailedHint: the plugin reports what the tool did itself, so its
 	// arguments aren't copied into the trail.

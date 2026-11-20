@@ -36,7 +36,10 @@ mail, connect your provider's MCP server as an integration instead
 2. **Start the plugin.** `docker compose --profile mail up -d`. Thicket
    finds it at `http://mail:7072` (or `THICKET_MAIL_URL`) and shares a
    token with it through the `mail-auth` volume; `thicket doctor` shows
-   `plugin.mail`.
+   `plugin.mail`. Thicket looks for a plugin at its default address only
+   in the first minute after it starts, so if Thicket was already running,
+   restart it after starting the plugin (`docker compose restart
+   thicket`).
 3. **Tell Juni**, in a DM: "give Pip the address pip@yourdomain.example on
    Fastmail". For JMAP Juni needs the session URL
    (`https://api.fastmail.com/jmap/session` for Fastmail); for IMAP, the

@@ -63,7 +63,7 @@ type Tool struct {
 	// GatesItself: one of Thicket's own plugins enforces its own rules for
 	// what the tool does on its own (the mail plugin's allowlist) and
 	// drafts otherwise. It is called at draft level too, told to only
-	// draft, and acts by default (levels.go).
+	// draft, and is at draft until its owner sets it to act (levels.go).
 	GatesItself bool
 	// Remote is an integration tool's own name (Name is the model-facing
 	// mcp_<server>__<tool>).
@@ -186,7 +186,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 						return "", err
 					}
 					if res.Drafted != nil && own[st.Server] && st.Server == mail.Plugin {
-						e.mailDrafted(ctx, t, res.Drafted)
+						res.Text += e.mailDrafted(ctx, t, res.Drafted)
 					}
 					if res.Floor != nil {
 						f := pluginFloor(st.Server, res.Floor)

@@ -106,7 +106,8 @@ mark tools in `tools/list` with hints of its own, in the tool's `_meta`:
 - `"thicket/gates_itself": true`: the tool enforces its own rules for
   what it does on its own and drafts otherwise (the mail plugin's
   allowlist). Thicket calls it at `draft` level too (with `draft_only`),
-  asks first at `ask`, refuses at `read`, and its default level is `act`.
+  asks first at `ask`, refuses at `read`, and its default level is
+  `draft`, so acting on its own is always its owner's choice.
 - `"thicket/trailed": true`: the plugin reports what the tool did
   itself, so Thicket doesn't copy its arguments into the trail.
 

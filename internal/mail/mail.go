@@ -258,7 +258,7 @@ type Doctor struct {
 // Client talks to the plugin's admin API.
 type Client struct {
 	URL   string // base, no trailing slash
-	Token func() (string, error)
+	Token func(ctx context.Context) (string, error)
 	HTTP  *http.Client
 }
 
@@ -290,7 +290,7 @@ func (c *Client) raw(ctx context.Context, method, path string, body any) (*http.
 	if err != nil {
 		return nil, err
 	}
-	tok, err := c.Token()
+	tok, err := c.Token(ctx)
 	if err != nil {
 		return nil, err
 	}

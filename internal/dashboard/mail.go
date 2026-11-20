@@ -292,7 +292,10 @@ func size(n int64) string {
 	return fmt.Sprintf("%d bytes", n)
 }
 
-var mailFuncs = template.FuncMap{"size": size, "join": func(s []string) string { return strings.Join(s, ", ") }}
+// maxAttachment is the largest attachment the plugin hands over.
+const maxAttachment = 50 << 20
+
+var mailFuncs = template.FuncMap{"size": size, "tooBig": func(n int64) bool { return n > maxAttachment }, "join": func(s []string) string { return strings.Join(s, ", ") }}
 
 const mailHead = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Mail · Thicket</title>` + style + `</head>
@@ -338,7 +341,7 @@ var mailMsgTmpl = template.Must(template.New("mailmsg").Funcs(mailFuncs).Funcs(t
 </table>
 <p class="muted small">Shown as plain text: no pictures are loaded, and links are written out with where they really go. Open one only if you trust it.</p>
 <pre style="max-height:none;font-size:14px">{{.Text}}</pre>
-{{if .Attachments}}<h3>Attachments</h3><ul class="plain">{{range .Attachments}}<li>{{.Name}} <span class="tag">{{.Type}}</span> <span class="muted small">{{size .Size}}</span> <a href="/dashboard/mail/attachment?sprig={{$p.Box.ID}}&amp;id={{$p.Message.ID}}&amp;aid={{.ID}}" download>Download</a></li>{{end}}</ul>
+{{if .Attachments}}<h3>Attachments</h3><ul class="plain">{{range .Attachments}}<li>{{.Name}} <span class="tag">{{.Type}}</span> <span class="muted small">{{size .Size}}</span> {{if tooBig .Size}}<span class="muted small">over the 50 MB download limit: open it at your provider</span>{{else}}<a href="/dashboard/mail/attachment?sprig={{$p.Box.ID}}&amp;id={{$p.Message.ID}}&amp;aid={{.ID}}" download>Download</a>{{end}}</li>{{end}}</ul>
 <p class="muted small">Attachments come from outside: download only what you expect, and open it with care.</p>{{end}}
 {{if .Draft}}<div class="actions">{{template "draftbtns" (btn $p .ID)}}</div>{{end}}
 <p><a href="/dashboard/mail?sprig={{$p.Box.ID}}{{if .Draft}}&amp;folder=drafts{{end}}">← Back</a></p></section>{{end}}

@@ -30,6 +30,8 @@ type fakeMail struct {
 	discards []string
 	accounts []mail.Account
 	nextID   int
+	// failDiscard makes discards fail (the provider is down).
+	failDiscard bool
 	// What the dashboard reads.
 	box map[string][]mail.Summary
 	msg map[string]*mail.Message
@@ -151,6 +153,12 @@ func (f *fakeMail) handler(t *testing.T) http.Handler {
 	}))
 	mux.HandleFunc("POST /v1/mailbox/{sprig}/drafts/{id}/discard", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		if f.failDiscard {
+			f.mu.Unlock()
+			w.WriteHeader(503)
+			w.Write([]byte(`{"error":"account unavailable"}`))
+			return
+		}
 		f.discards = append(f.discards, r.PathValue("sprig")+"/"+r.PathValue("id"))
 		f.mu.Unlock()
 		w.Write([]byte(`{}`))
@@ -242,7 +250,7 @@ func mailReady(t *testing.T) (*App, *fakeChannel, context.Context, *fakeMail, *s
 	if _, err := a.MCP.Connect(ctx, s); err != nil {
 		t.Fatal(err)
 	}
-	cl := &mail.Client{URL: srv.URL, Token: func() (string, error) { return mailToken, nil }}
+	cl := &mail.Client{URL: srv.URL, Token: func(context.Context) (string, error) { return mailToken, nil }}
 	a.Engine.Mail = cl
 	a.Dashboard.Mail = &dashboard.Mailbox{Client: cl, Engine: a.Engine}
 	for _, sp := range []string{"wren", "fern"} {
@@ -268,9 +276,26 @@ func TestMailSendingRulesThroughCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// An allowlisted vendor at the default level (a tool that gates
-	// itself acts by default): sent, and core said who called and what's
-	// allowed.
+	// With no level set, a tool that gates itself is at draft: the plugin
+	// is called, told to only draft, even for an allowlisted address.
+	e.HandleIncoming(ctx, dm(sendCall("shop@vendor.example")))
+	fc.take()
+	if c := fm.last(t); !c.Meta.Call.DraftOnly {
+		t.Fatalf("the default level let the sprig act: %+v", c.Meta.Call)
+	}
+	drafts, _ := a.DB.OpenInbox(ctx, owner.ID)
+	for _, it := range drafts {
+		if err := e.DismissInbox(ctx, owner, it.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fm.mu.Lock()
+	fm.discards = nil
+	fm.mu.Unlock()
+
+	// Its owner sets it to act. An allowlisted vendor: sent, and core said
+	// who called and what's allowed.
+	a.DB.SetToolLevel(ctx, "wren", "mcp_mail__send_mail", store.LevelAct)
 	e.HandleIncoming(ctx, dm(sendCall("shop@vendor.example")))
 	fc.take()
 	c := fm.last(t)
@@ -304,7 +329,7 @@ func TestMailSendingRulesThroughCore(t *testing.T) {
 	fm.mu.Lock()
 	sent := strings.Join(fm.sent, ",")
 	fm.mu.Unlock()
-	if sent != "wren/d2" {
+	if sent != "wren/d3" {
 		t.Fatalf("Send didn't send the draft through the admin API: %q", sent)
 	}
 	if open, _ := a.DB.OpenInbox(ctx, owner.ID); len(open) != 0 {
@@ -324,7 +349,7 @@ func TestMailSendingRulesThroughCore(t *testing.T) {
 	fm.mu.Lock()
 	discarded := strings.Join(fm.discards, ",")
 	fm.mu.Unlock()
-	if discarded != "wren/d3" {
+	if discarded != "wren/d4" {
 		t.Fatalf("Discard didn't discard: %q", discarded)
 	}
 
@@ -381,6 +406,45 @@ func TestMailSendingRulesThroughCore(t *testing.T) {
 	fc.take()
 	if c := fm.last(t); c.HasMeta {
 		t.Fatalf("a hand-added integration was told who's calling: %+v", c.Meta)
+	}
+}
+
+// A draft can't be sent once its sprig is at read level for email, and a
+// draft that can't be discarded stays in "needs you".
+func TestMailDraftsStayWhenTheyCantGo(t *testing.T) {
+	a, fc, ctx, fm, owner := mailReady(t)
+	e := a.Engine
+	e.HandleIncoming(ctx, dm(sendCall("stranger@else.example")))
+	fc.take()
+	items, _ := a.DB.OpenInbox(ctx, owner.ID)
+	if len(items) != 1 {
+		t.Fatalf("needs you: %+v", items)
+	}
+	a.DB.SetToolLevel(ctx, "wren", store.AnyTool, store.LevelRead)
+	if err := e.RunDraft(ctx, owner, items[0].ID); err == nil || !strings.Contains(err.Error(), "read level") {
+		t.Fatalf("a draft was sent at read level: %v", err)
+	}
+	fm.mu.Lock()
+	fm.failDiscard = true
+	sent := len(fm.sent)
+	fm.mu.Unlock()
+	if sent != 0 {
+		t.Fatal("sent anyway")
+	}
+	if err := e.DismissInbox(ctx, owner, items[0].ID); err == nil {
+		t.Fatal("a discard that failed was reported done")
+	}
+	if open, _ := a.DB.OpenInbox(ctx, owner.ID); len(open) != 1 {
+		t.Fatalf("the draft left needs you though it wasn't discarded: %+v", open)
+	}
+	fm.mu.Lock()
+	fm.failDiscard = false
+	fm.mu.Unlock()
+	if err := e.DismissInbox(ctx, owner, items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := a.DB.OpenInbox(ctx, owner.ID); len(open) != 0 {
+		t.Fatalf("still open: %+v", open)
 	}
 }
 
@@ -519,14 +583,38 @@ func TestMailAddressSetupInChat(t *testing.T) {
 	if fern == nil || fern.Password != "xq7-app-pass-word-991" || fern.IMAP == nil || fern.IMAP.Security != "tls" || fern.SMTP.Security != "starttls" {
 		t.Fatalf("account for the plugin: %+v", fern)
 	}
-	if _, err := a.Engine.Mail.PutAccounts(ctx, accts); err != nil {
-		t.Fatal(err)
+	// The sync worker pushes it: the DM woke it, no direct call here.
+	wctx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { a.Engine.RunMail(wctx); close(done) }()
+	defer func() { stop(); <-done }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fm.mu.Lock()
+		got := ""
+		for _, ac := range fm.accounts {
+			if ac.Sprig == "fern" {
+				got = ac.Password
+			}
+		}
+		fm.mu.Unlock()
+		if got == "xq7-app-pass-word-991" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the sync worker never pushed Fern's new password (got %q)", got)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	fm.mu.Lock()
-	n := len(fm.accounts)
-	fm.mu.Unlock()
-	if n != 2 {
-		t.Fatalf("plugin got %d accounts", n)
+	// A new login drops the old password at once: the address waits for
+	// the new one rather than trying the new server with the old.
+	a.Engine.HandleIncoming(ctx, dm(`call tool mail_address {"sprig":"fern","action":"set","address":"fern@errands.example","backend":"imap","imap_host":"imap2.errands.example","smtp_host":"smtp.errands.example","smtp_security":"starttls"}`))
+	fc.take()
+	if a.Secrets.Has(ctx, "mail_fern_password") {
+		t.Fatal("the old password was kept for a new server")
+	}
+	if accts, _ := a.Engine.MailAccounts(ctx); len(accts) != 1 || accts[0].Sprig != "wren" {
+		t.Fatalf("an address without its password would be pushed: %+v", accts)
 	}
 	if strings.Contains(a.Secrets.Redact("pw xq7-app-pass-word-991"), "xq7") {
 		t.Fatal("the mail password isn't redacted")

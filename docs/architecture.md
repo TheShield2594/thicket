@@ -335,7 +335,8 @@ it, routing and ownership agree.
 
 Every tool call passes `Engine.gate` before it runs. The level comes from
 `tool_levels` (a sprig's own row, else the `*` row for every sprig, else
-the default: `ask` for `Tool.Risky`, `act` otherwise). A solo sprig skips
+the default: `draft` for a tool that gates itself, `ask` for
+`Tool.Risky`, `act` otherwise). A solo sprig skips
 the every-sprig row (`store.LevelFor.Private`), core tools included: only
 its person decides what it may do, so a household-wide level covers
 shared sprigs and leaves private ones on their own rows and the defaults. `read` refuses risky

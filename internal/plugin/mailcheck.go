@@ -14,7 +14,7 @@ import (
 // polling) and sending works; missing SPF, DKIM or DMARC records for the
 // sending domain are advice, not a failure.
 func mailCheck(ctx context.Context, url, token string) (string, error) {
-	cl := &mail.Client{URL: url, Token: func() (string, error) { return token, nil }}
+	cl := &mail.Client{URL: url, Token: func(context.Context) (string, error) { return token, nil }}
 	rep, err := cl.Doctor(ctx)
 	if err != nil {
 		return "", err

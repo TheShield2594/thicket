@@ -137,12 +137,14 @@ func MailDraftOf(action string) (sprig, draftID string, ok bool) {
 	return a.Mail.Sprig, a.Mail.DraftID, true
 }
 
-// mailDrafted puts a draft the plugin saved in "needs you".
-func (e *Engine) mailDrafted(ctx context.Context, t *turn, raw json.RawMessage) {
+// mailDrafted puts a draft the plugin saved in "needs you". It returns
+// what the sprig should be told if that failed ("" if it worked): the
+// draft is saved in the mailbox either way, and isn't made again.
+func (e *Engine) mailDrafted(ctx context.Context, t *turn, raw json.RawMessage) string {
 	var d mail.Drafted
 	if err := json.Unmarshal(raw, &d); err != nil || d.DraftID == "" {
 		e.Log.Warn("mail plugin drafted something unreadable", "sprig", t.char.ID)
-		return
+		return "\n(Note: the draft is in the mailbox's Drafts, but it couldn't be added to needs you. Tell the person to send it from the Mail page on the dashboard.)"
 	}
 	var act mailDraftAction
 	act.Mail.Sprig, act.Mail.DraftID, act.ChatRef = t.char.ID, d.DraftID, t.chatRef
@@ -171,7 +173,15 @@ func (e *Engine) mailDrafted(ctx context.Context, t *turn, raw json.RawMessage) 
 		Detail: truncate(e.Secrets.Redact(detail.String()), 4000), Action: string(b)})
 	if err != nil {
 		e.Log.Error("save mail draft to needs you", "err", err)
+		return "\n(Note: the draft is in the mailbox's Drafts, but it couldn't be added to needs you. Tell the person to send it from the Mail page on the dashboard.)"
 	}
+	return ""
+}
+
+// mailSendLevel is a sprig's level for sending a mail draft (the plugin's
+// send_draft), as it would apply to a call now.
+func (e *Engine) mailSendLevel(ctx context.Context, c *character.Character) string {
+	return e.toolLevel(ctx, c, &Tool{Name: mcp.FuncName(mail.Plugin, "send_draft"), Scope: "mcp:" + mail.Plugin, Risky: true, GatesItself: true})
 }
 
 // sendMailDraft sends a mail draft a person said yes to in "needs you".
@@ -188,6 +198,12 @@ func (e *Engine) sendMailDraft(ctx context.Context, user *store.User, it *store.
 	}
 	if err := e.paused(ctx, c.ID); err != nil {
 		return fmt.Errorf("%w: resume it first", err)
+	}
+	// Sending a draft is the plugin's send_draft: at read level for it (or
+	// for all its tools) the sprig was locked down since it drafted, so the
+	// draft stays for the person to discard.
+	if e.mailSendLevel(ctx, c) == store.LevelRead {
+		return fmt.Errorf("%s is at read level for email now, so its draft can't be sent; discard it, or raise its level first", c.DisplayName())
 	}
 	if err := e.DB.ResolveInbox(ctx, it.ID, user.ID); err != nil {
 		return errors.New("that draft was already dealt with")
@@ -218,16 +234,24 @@ func (e *Engine) DismissInbox(ctx context.Context, user *store.User, id int64) e
 		return ErrNotYours
 	}
 	sprig, draftID, isMail := MailDraftOf(it.Action)
-	if err := e.DB.ResolveInbox(ctx, id, user.ID); err != nil {
-		return err
-	}
-	if isMail && it.Status == "open" && e.Mail != nil {
-		if err := e.Mail.DiscardDraft(ctx, sprig, draftID); err != nil && !errors.Is(err, mail.ErrNotFound) {
-			e.Log.Warn("discard mail draft", "sprig", sprig, "err", e.Secrets.Redact(err.Error()))
-			return fmt.Errorf("cleared, but the draft is still in %s's Drafts: %s", sprig, e.Secrets.Redact(err.Error()))
+	if isMail && it.Status == "open" {
+		// The draft goes first; the item stays in front of them until it
+		// is really gone (a draft that's already gone counts).
+		c, ok := e.Chars.Get(sprig)
+		if ok && !MayReadMail(user, c) {
+			return ErrNotYours
+		}
+		if ok {
+			if e.Mail == nil {
+				return errors.New("the mail plugin isn't running, so the draft can't be discarded yet")
+			}
+			if err := e.Mail.DiscardDraft(ctx, sprig, draftID); err != nil && !errors.Is(err, mail.ErrNotFound) {
+				e.Log.Warn("discard mail draft", "sprig", sprig, "err", e.Secrets.Redact(err.Error()))
+				return fmt.Errorf("couldn't discard the draft, so it's still here: %s", e.Secrets.Redact(err.Error()))
+			}
 		}
 	}
-	return nil
+	return e.DB.ResolveInbox(ctx, id, user.ID)
 }
 
 // --- the allowlist ---
@@ -242,7 +266,11 @@ func (e *Engine) MailAllowlist(ctx context.Context, u *store.User, sprig string)
 	if !MayReadMail(u, c) {
 		return nil, ErrNotYours
 	}
-	return e.DB.MailAllow(ctx, c.ID)
+	list, err := e.DB.MailAllow(ctx, c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", store.ErrStorage, err)
+	}
+	return list, nil
 }
 
 // ChangeMailAllow adds and removes allowlist entries for sprig. Only its
@@ -285,11 +313,8 @@ func (e *Engine) ChangeMailAllow(ctx context.Context, by *store.User, sprig stri
 	if len(a)+len(r) > 100 {
 		return nil, errors.New("at most 100 changes at a time")
 	}
-	added, removed, err := e.DB.ChangeMailAllow(ctx, c.ID, a, r, by.ID)
-	if err != nil {
-		return nil, err
-	}
-	if len(added)+len(removed) > 0 {
+	var summary string
+	_, _, err = e.DB.ChangeMailAllow(ctx, c.ID, a, r, by.ID, func(added, removed []string) *store.TrailEntry {
 		var parts []string
 		if len(added) > 0 {
 			parts = append(parts, "added "+strings.Join(added, ", "))
@@ -297,19 +322,31 @@ func (e *Engine) ChangeMailAllow(ctx context.Context, by *store.User, sprig stri
 		if len(removed) > 0 {
 			parts = append(parts, "removed "+strings.Join(removed, ", "))
 		}
-		undo := &trailUndo{Type: "mailallow", Character: c.ID, Tools: removed}
+		summary = strings.Join(parts, "; ")
+		undo := trailUndo{Type: "mailallow", Character: c.ID, Tools: removed}
 		undo.Args, _ = json.Marshal(added) // undo removes what was added and puts back what was removed
-		e.addTrail(ctx, by.ID, c.ID, store.TrailAccess, fmt.Sprintf("%s's mail allowlist: %s (%s)", c.DisplayName(), strings.Join(parts, "; "), via), "", undo)
-		e.logActivity(ctx, "info", "approval", c.ID, by.ID, "mail allowlist changed: "+strings.Join(parts, "; "), "")
+		raw, _ := json.Marshal(undo)
+		return &store.TrailEntry{UserID: by.ID, Character: c.ID, Kind: store.TrailAccess,
+			Summary: fmt.Sprintf("%s's mail allowlist: %s (%s)", c.DisplayName(), summary, via), Undo: raw}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", store.ErrStorage, err)
 	}
-	return e.DB.MailAllow(ctx, c.ID)
+	if summary != "" {
+		e.logActivity(ctx, "info", "approval", c.ID, by.ID, "mail allowlist changed: "+summary, "")
+	}
+	list, err := e.DB.MailAllow(ctx, c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", store.ErrStorage, err)
+	}
+	return list, nil
 }
 
 // undoMailAllow reverses an allowlist change (UndoTrail checked who).
 func (e *Engine) undoMailAllow(ctx context.Context, by *store.User, u trailUndo) (string, error) {
 	var added []string
 	_ = json.Unmarshal(u.Args, &added)
-	if _, _, err := e.DB.ChangeMailAllow(ctx, u.Character, u.Tools, added, by.ID); err != nil {
+	if _, _, err := e.DB.ChangeMailAllow(ctx, u.Character, u.Tools, added, by.ID, nil); err != nil {
 		return "", err
 	}
 	var parts []string
@@ -456,6 +493,16 @@ func (e *Engine) toolMailAddress(ctx context.Context, t *turn, args json.RawMess
 	raw, _ := json.Marshal(s)
 	acct := store.MailAccount{Sprig: c.ID, Address: addr, Backend: backend, Settings: string(raw), SecretName: mailSecret(c.ID),
 		RetentionDays: a.RetentionDays, SendLimit: a.SendLimit, CreatedBy: t.user.ID}
+	// A different server, login or address, or a new password asked for:
+	// the old password is dropped first, so the new settings are never
+	// tried with it (the address waits until the new one arrives). Only
+	// retention and the daily limit keep it.
+	newLogin := cur != nil && (cur.Address != addr || cur.Backend != backend || cur.Settings != string(raw))
+	if newLogin || a.NewPassword {
+		if err := e.Secrets.Delete(ctx, acct.SecretName); err != nil {
+			return "", fmt.Errorf("couldn't drop the old password: %w", err)
+		}
+	}
 	if err := e.DB.PutMailAccount(ctx, acct); err != nil {
 		return "", err
 	}
@@ -537,7 +584,10 @@ func (e *Engine) RunMail(ctx context.Context) {
 	if e.Mail == nil {
 		return
 	}
-	go e.followMail(ctx)
+	// Everything started here ends before RunMail returns: following the
+	// events, and the trigger polls new mail starts.
+	defer e.mailWork.Wait()
+	e.mailWork.Go(func() { e.followMail(ctx) })
 	t := time.NewTicker(mailSyncEvery)
 	defer t.Stop()
 	for {
@@ -627,27 +677,49 @@ func (e *Engine) followMail(ctx context.Context) {
 			}
 			epoch = evs.Epoch
 		}
+		failed := false
 		for _, ev := range evs.Events {
 			if ev.Seq <= after {
 				continue
 			}
-			e.MailEvent(ctx, ev)
+			if err := e.MailEvent(ctx, ev); err != nil {
+				// Not recorded: stop here and offer it again, so the trail
+				// never misses a message.
+				e.Log.Error("mail event not recorded; retrying", "seq", ev.Seq, "err", err)
+				failed = true
+				break
+			}
 			after = ev.Seq
 		}
-		if evs.Next > after {
+		if !failed && evs.Next > after {
 			after = evs.Next
 		}
 		_ = e.DB.SetSetting(ctx, mailCursorKey, fmt.Sprintf("%s:%d", epoch, after))
+		if failed {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, time.Minute)
+		}
 	}
 }
 
-// MailEvent handles one thing that happened in a sprig's mailbox.
-func (e *Engine) MailEvent(ctx context.Context, ev mail.Event) {
+// MailEvent handles one thing that happened in a sprig's mailbox. An
+// error means it wasn't fully recorded: followMail stops there and offers
+// it again (what was recorded is written so a retry doesn't duplicate it:
+// the code item is keyed by message id, and goes first).
+func (e *Engine) MailEvent(ctx context.Context, ev mail.Event) error {
 	c, ok := e.Chars.Get(ev.Sprig)
 	if !ok {
-		return
+		return nil
 	}
 	owner := e.mailOwner(ctx, c.ID)
+	trail := func(summary, detail string) error {
+		_, err := e.DB.AddTrailID(ctx, store.TrailEntry{UserID: owner, Character: c.ID, Kind: store.TrailMail, Summary: summary, Detail: detail})
+		return err
+	}
 	clean := func(s string) string { return truncate(strings.Join(strings.Fields(e.Secrets.Redact(s)), " "), 200) }
 	detail := func() string {
 		var b strings.Builder
@@ -663,23 +735,28 @@ func (e *Engine) MailEvent(ctx context.Context, ev mail.Event) {
 	}
 	switch ev.Kind {
 	case "received":
-		e.addTrail(ctx, owner, c.ID, store.TrailMail, fmt.Sprintf("%s received mail from %s: %s", c.DisplayName(), clean(ev.From), clean(ev.Subject)), detail(), nil)
 		if ev.OTP && owner != 0 {
-			_, _ = e.DB.AddInbox(ctx, store.InboxItem{UserID: owner, Character: c.ID, Kind: store.InboxCode,
+			if _, err := e.DB.AddInbox(ctx, store.InboxItem{UserID: owner, Character: c.ID, Kind: store.InboxCode, Ref: "mail:" + c.ID + ":" + ev.MessageID,
 				Title: truncate(fmt.Sprintf("A one-time code arrived for %s from %s", c.DisplayName(), clean(ev.From)), 200),
 				Detail: fmt.Sprintf("Subject: %s\n\nOpen %s's mailbox on the dashboard to read it. %s sees the code hidden and never types it in anywhere: if it's for a sign-in it was doing, you enter it.",
-					clean(ev.Subject), c.DisplayName(), c.DisplayName())})
+					clean(ev.Subject), c.DisplayName(), c.DisplayName())}); err != nil {
+				return err
+			}
 		}
-		go e.PollTriggersFor(context.WithoutCancel(ctx), mail.Plugin, c.ID)
+		if err := trail(fmt.Sprintf("%s received mail from %s: %s", c.DisplayName(), clean(ev.From), clean(ev.Subject)), detail()); err != nil {
+			return err
+		}
+		e.mailWork.Go(func() { e.PollTriggersFor(context.WithoutCancel(ctx), mail.Plugin, c.ID) })
 	case "sent":
 		who := c.DisplayName() + " sent"
 		if ev.Approved {
 			who = "Sent from " + c.DisplayName() + "'s address (approved by a person)"
 		}
-		e.addTrail(ctx, owner, c.ID, store.TrailMail, fmt.Sprintf("%s mail to %s: %s", who, clean(strings.Join(ev.To, ", ")), clean(ev.Subject)), detail(), nil)
+		return trail(fmt.Sprintf("%s mail to %s: %s", who, clean(strings.Join(ev.To, ", ")), clean(ev.Subject)), detail())
 	case "error":
 		e.logActivity(ctx, "warn", "tool", c.ID, owner, "mail: "+clean(ev.Detail), "")
 	}
+	return nil
 }
 
 // PollTriggersFor polls, now, a sprig's triggers on one integration (new

@@ -92,7 +92,7 @@ func (s *Store) OpenInbox(ctx context.Context, userID int64) ([]InboxItem, error
 
 // OpenDrafts lists a sprig's open drafts, whoever they're for.
 func (s *Store) OpenDrafts(ctx context.Context, character string) ([]InboxItem, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+inboxCols+" FROM inbox WHERE status = 'open' AND kind = ? AND character = ? ORDER BY id LIMIT 500", InboxDraft, character)
+	rows, err := s.db.QueryContext(ctx, "SELECT "+inboxCols+" FROM inbox WHERE status = 'open' AND kind = ? AND character = ? ORDER BY id", InboxDraft, character)
 	if err != nil {
 		return nil, err
 	}

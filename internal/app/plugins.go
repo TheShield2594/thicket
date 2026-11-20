@@ -361,7 +361,7 @@ func (a *App) setUpMail() bool {
 		return false
 	}
 	cl := &mail.Client{URL: ep.URL, HTTP: &http.Client{Timeout: 60 * time.Second},
-		Token: func() (string, error) { return a.Secrets.Get(context.Background(), ep.Secret()) }}
+		Token: func(ctx context.Context) (string, error) { return a.Secrets.Get(ctx, ep.Secret()) }}
 	a.Engine.Mail = cl
 	if a.Dashboard != nil {
 		a.Dashboard.Mail = &dashboard.Mailbox{Client: cl, Engine: a.Engine}

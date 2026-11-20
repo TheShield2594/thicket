@@ -60,10 +60,13 @@ func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *To
 	if lv != "" {
 		return lv
 	}
-	if tool.Risky && !tool.GatesItself {
+	if tool.GatesItself {
+		return store.LevelDraft // it only drafts until its owner says it may act
+	}
+	if tool.Risky {
 		return store.LevelAsk
 	}
-	return store.LevelAct // a tool that gates itself drafts unless its own rules allow
+	return store.LevelAct
 }
 
 // gate applies the level to a call. It returns ok=true when the tool may

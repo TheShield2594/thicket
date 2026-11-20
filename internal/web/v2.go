@@ -524,7 +524,12 @@ func (a *Adapter) v2SetLevel(w http.ResponseWriter, r *http.Request, u *store.Us
 
 func (a *Adapter) v2MailAllow(w http.ResponseWriter, r *http.Request, u *store.User) {
 	list, err := a.Household.MailAllowlist(r.Context(), u, r.PathValue("id"))
+	if errors.Is(err, store.ErrStorage) {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	if err != nil {
+		// No such sprig, or not one they may see: the same answer.
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -540,6 +545,10 @@ func (a *Adapter) v2ChangeMailAllow(w http.ResponseWriter, r *http.Request, u *s
 		return
 	}
 	list, err := a.Household.ChangeMailAllow(r.Context(), u, r.PathValue("id"), b.Add, b.Remove, "through the API")
+	if errors.Is(err, store.ErrStorage) {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

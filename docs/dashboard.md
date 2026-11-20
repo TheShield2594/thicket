@@ -16,8 +16,10 @@ pause, and change what sprigs remember about you.
   sprig wrote up instead of doing (do it, or dismiss), and failed,
   interrupted or undelivered work (clear it once you've dealt with it).
   An email a sprig drafted shows who it's to, the subject and why it
-  wasn't sent, with **Send** and **Discard**; a one-time code that
-  arrived in a sprig's mailbox is listed here for you to read.
+  wasn't sent, with **Send** and **Discard**. When a one-time code
+  arrives in a sprig's mailbox, an item here gives the sender and
+  subject; the code itself is in the sprig's mailbox (**Mail**), where
+  you read it.
   The sprig reports back in the chat the request came from.
 - **Pause**: the owner has **Pause everything**, and each sprig you own
   has a **Pause** button (the person a private sprig belongs to, or the

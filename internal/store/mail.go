@@ -100,8 +100,10 @@ func (s *Store) MailAllow(ctx context.Context, sprig string) ([]string, error) {
 }
 
 // ChangeMailAllow adds and removes allowlist entries (already normalised)
-// in one transaction, and reports which really changed.
-func (s *Store) ChangeMailAllow(ctx context.Context, sprig string, add, remove []string, by int64) (added, removed []string, err error) {
+// in one transaction, and reports which really changed. trail, if not
+// nil, makes the trail entry for what changed; it is written in the same
+// transaction, so a change is never made without its record.
+func (s *Store) ChangeMailAllow(ctx context.Context, sprig string, add, remove []string, by int64, trail func(added, removed []string) *TrailEntry) (added, removed []string, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
@@ -124,6 +126,14 @@ func (s *Store) ChangeMailAllow(ctx context.Context, sprig string, add, remove [
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			removed = append(removed, e)
+		}
+	}
+	if trail != nil && len(added)+len(removed) > 0 {
+		if t := trail(added, removed); t != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO trail (at, user_id, character, kind, summary, detail, undo) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				now, nullInt(t.UserID), t.Character, t.Kind, s.clean(t.Summary), s.clean(t.Detail), string(t.Undo)); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	return added, removed, tx.Commit()
