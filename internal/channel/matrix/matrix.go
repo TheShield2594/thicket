@@ -63,6 +63,9 @@ type Adapter struct {
 	sentQ  []string
 
 	onReact func(ctx context.Context, r channel.Reaction)
+	// dmMu serialises opening DMs, so two sends to someone new open one
+	// room and the saved DM list keeps both.
+	dmMu sync.Mutex
 }
 
 // room is what the adapter knows about a joined room.
@@ -268,6 +271,24 @@ func (a *Adapter) Bot() (channel.Bot, bool) {
 	return channel.Bot{Name: a.userID, URL: "https://matrix.to/#/" + a.userID}, true
 }
 
+var (
+	errBadToken = errors.New("the Matrix homeserver didn't accept that access token")
+	errNoUserID = errors.New("the Matrix homeserver gave an answer without a user id (is THICKET_MATRIX_HOMESERVER the client-server API address?)")
+)
+
+// transient reports whether a request may work if tried again later: no
+// answer at all, a server error, or rate limiting.
+func transient(err error) bool {
+	if errors.Is(err, errBadToken) || errors.Is(err, errNoUserID) {
+		return false
+	}
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae.Status >= 500 || ae.Status == http.StatusTooManyRequests
+	}
+	return true
+}
+
 // whoami returns the account the access token belongs to.
 func (a *Adapter) whoami(ctx context.Context) (string, error) {
 	var me struct {
@@ -276,13 +297,13 @@ func (a *Adapter) whoami(ctx context.Context) (string, error) {
 	err := a.call(ctx, a.http, http.MethodGet, "/account/whoami", nil, nil, &me)
 	var ae *apiError
 	if errors.As(err, &ae) && (ae.Status == 401 || ae.Code == "M_UNKNOWN_TOKEN" || ae.Code == "M_MISSING_TOKEN") {
-		return "", errors.New("the Matrix homeserver didn't accept that access token")
+		return "", errBadToken
 	}
 	if err != nil {
 		return "", err
 	}
 	if me.UserID == "" {
-		return "", errors.New("the Matrix homeserver gave an answer without a user id (is THICKET_MATRIX_HOMESERVER the client-server API address?)")
+		return "", errNoUserID
 	}
 	return me.UserID, nil
 }
@@ -312,9 +333,26 @@ func (a *Adapter) sync(ctx context.Context, since string, timeout time.Duration,
 }
 
 func (a *Adapter) Run(ctx context.Context, h channel.Handler) error {
-	uid, err := a.whoami(ctx)
-	if err != nil {
-		return err
+	// A homeserver that's down or restarting is waited for; a rejected
+	// token is an error at once.
+	var uid string
+	for backoff := time.Second; ; backoff = min(backoff*2, 30*time.Second) {
+		var err error
+		if uid, err = a.whoami(ctx); err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if !transient(err) {
+			return err
+		}
+		a.log.Warn("matrix: homeserver not reachable yet", "err", err)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
 	}
 	a.userID = uid
 	var dn struct {
@@ -807,6 +845,17 @@ func (a *Adapter) rememberSent(id string) {
 // SendDirect posts in the bot's DM room with a user, creating it (an
 // invite they accept) if there is none.
 func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Persona, text string) (string, error) {
+	roomID, err := a.directRoom(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return roomID, a.Send(ctx, roomID, p, text)
+}
+
+// directRoom finds the bot's DM room with a user, or opens one.
+func (a *Adapter) directRoom(ctx context.Context, userID string) (string, error) {
+	a.dmMu.Lock()
+	defer a.dmMu.Unlock()
 	a.mu.Lock()
 	roomID := a.direct[userID]
 	if rm := a.rooms[roomID]; roomID != "" && rm != nil && rm.left {
@@ -837,7 +886,7 @@ func (a *Adapter) SendDirect(ctx context.Context, userID string, p channel.Perso
 			a.log.Warn("matrix: couldn't save the DM list", "err", err)
 		}
 	}
-	return roomID, a.Send(ctx, roomID, p, text)
+	return roomID, nil
 }
 
 // Delete redacts a message.

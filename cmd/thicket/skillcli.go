@@ -137,15 +137,15 @@ func skillPromote(ctx context.Context, charsDir string, db *store.Store, id stri
 	}
 	// Shared first: a running server that saw the file go before that
 	// would delete the skill as the sprig's.
-	if err := db.PromoteSkill(ctx, id); err != nil {
+	// The trail entry goes in with the promotion, or neither does.
+	if err := db.PromoteSkill(ctx, id, &store.TrailEntry{Character: k.SprigID, Kind: store.TrailSkill,
+		Summary: fmt.Sprintf("skill %s moved from %s's own skills to the shared library", id, k.SprigID), Detail: "thicket skill promote"}); err != nil {
 		return err
 	}
 	path := filepath.Join(character.SkillDir(charsDir, k.SprigID), id+".md")
 	if err := os.Rename(path, path+".promoted"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%s is shared now, but its file couldn't be moved aside (%v): rename %s yourself", id, err, path)
 	}
-	_ = db.AddTrail(ctx, store.TrailEntry{Character: k.SprigID, Kind: store.TrailSkill,
-		Summary: fmt.Sprintf("skill %s moved from %s's own skills to the shared library", id, k.SprigID), Detail: "thicket skill promote"})
 	fmt.Printf("%s is in the shared library now: every sprig is offered it\n", id)
 	return nil
 }

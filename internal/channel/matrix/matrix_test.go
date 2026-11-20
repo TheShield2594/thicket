@@ -33,6 +33,8 @@ type fakeHS struct {
 	// v1Media is whether the authenticated media API exists.
 	v1Media bool
 	n       int
+	// whoamiDown answers that many whoami calls with a 503 first.
+	whoamiDown int
 }
 
 type call struct {
@@ -79,6 +81,17 @@ func (f *fakeHS) serve(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(body))
 		return
 	case path == "/_matrix/client/v3/account/whoami":
+		f.mu.Lock()
+		down := f.whoamiDown > 0
+		if down {
+			f.whoamiDown--
+		}
+		f.mu.Unlock()
+		if down {
+			w.WriteHeader(503)
+			w.Write([]byte(`{"errcode":"M_UNKNOWN","error":"starting up"}`))
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"user_id": botID})
 		return
 	case strings.HasPrefix(path, "/_matrix/client/v3/profile/"):
@@ -449,5 +462,68 @@ func TestListeningRooms(t *testing.T) {
 	got, _ := run(t, a)
 	if in := next(t, got); !in.Listening || in.Mentioned || in.IsDM {
 		t.Fatalf("listening room: %+v", in)
+	}
+}
+
+// A homeserver that's still starting is waited for, not given up on.
+func TestRunWaitsForHomeserver(t *testing.T) {
+	f, srv := newFake(t)
+	f.whoamiDown = 1
+	f.queue(map[string]any{})
+	a := New(srv.URL, token, nil, logger())
+	run(t, a)
+	deadline := time.Now().Add(10 * time.Second)
+	for !a.Connected() {
+		if time.Now().After(deadline) {
+			t.Fatal("never connected after the homeserver came up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Two sends to someone new at once open one DM room.
+func TestSendDirectConcurrentOpensOneRoom(t *testing.T) {
+	f, srv := newFake(t)
+	f.queue(map[string]any{})
+	a := New(srv.URL, token, nil, logger())
+	run(t, a)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := a.SendDirect(context.Background(), "@dana:x", channel.Persona{}, "hi"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := len(f.callsTo("/createRoom")); n != 1 {
+		t.Fatalf("%d rooms created", n)
+	}
+}
+
+func TestSplitLongBacktickRun(t *testing.T) {
+	const n = 100
+	for _, text := range []string{
+		strings.Repeat("`", 3*n),
+		"hello " + strings.Repeat("`", 3*n),
+		strings.Repeat("word ", 60),
+	} {
+		done := make(chan []string, 1)
+		go func() { done <- split(text, n) }()
+		select {
+		case parts := <-done:
+			for _, p := range parts {
+				if p == "" {
+					t.Fatalf("empty chunk splitting %q...", text[:10])
+				}
+			}
+			if len(parts) < 2 {
+				t.Fatalf("not split: %d parts", len(parts))
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("split never finished on %q...", text[:10])
+		}
 	}
 }

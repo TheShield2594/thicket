@@ -12,7 +12,10 @@ It's off unless you turn it on. Like Telegram, it uses long polling
    Help & About, **Access Token**. Then close that session without
    signing out (signing out ends the token).
 3. Set `THICKET_MATRIX_HOMESERVER` to the homeserver's client-server
-   address, such as `https://matrix.example.org`.
+   address, such as `https://matrix.example.org`. Plain `http://` works
+   only for a homeserver on this machine or your local network
+   (localhost, a private IP address, or a Docker service name such as
+   `http://synapse:8008`), because the token goes with every request.
 4. Give Thicket the token: send it to Juni in a DM on the web app (a
    Synapse token starting `syt_` is spotted and connected straight away),
    or `thicket secrets set matrix_token`, or set `THICKET_MATRIX_TOKEN`
@@ -32,10 +35,12 @@ homeserver whose token it is.
 Thicket can't read end-to-end encrypted rooms yet. It declines invites
 to them, giving the reason (your client shows it with the declined
 invite), and if encryption is turned on in a room it's in, it says why
-and leaves. Make the room or DM with encryption off: in Element, create
-the room and turn **Encrypted** off in its settings before anyone
-writes. Element turns it on by default for DMs, so start a DM by making
-a new room, inviting the bot, and leaving encryption off.
+and leaves. Make the room with encryption off from the start: in
+Element's "New room" dialog, turn **Enable end-to-end encryption** off
+before you create it. Encryption can't be turned off once a room has it,
+so for a room that's already encrypted, make a new one. Element turns it
+on by default for DMs, so start a DM by making a new room this way and
+inviting the bot.
 
 ## How it looks
 

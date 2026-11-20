@@ -52,6 +52,9 @@ const (
 
 var ErrNoChange = errors.New("nothing changed")
 
+// ErrSkillIDTaken means a deleted skill's id can't be reused by this owner.
+var ErrSkillIDTaken = errors.New("skill id taken")
+
 // VersionConflict means the skill changed since the caller read it.
 type VersionConflict struct{ Current int }
 
@@ -212,6 +215,15 @@ func (s *Store) SaveSkill(ctx context.Context, k Skill, base int) (int, error) {
 			}
 		}
 		if deleted { // recreated: numbering carries on from the old versions
+			// Old versions of a sprig's own skill stay that sprig's: nobody
+			// else may take the id over (and with it, restore or history).
+			var was sql.NullString
+			if err := tx.QueryRowContext(ctx, "SELECT sprig_id FROM skills WHERE id = ?", k.ID).Scan(&was); err != nil {
+				return 0, err
+			}
+			if was.Valid && was.String != k.SprigID {
+				return 0, fmt.Errorf("%w: the id %q belonged to another sprig's skill; pick another", ErrSkillIDTaken, k.ID)
+			}
 			if _, err := tx.ExecContext(ctx, "UPDATE skills SET deleted = 0, sprig_id = ? WHERE id = ?", owner, k.ID); err != nil {
 				return 0, err
 			}
@@ -260,8 +272,9 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 }
 
 // PromoteSkill moves a sprig's own skill into the shared library, where
-// every sprig is offered it. It keeps its id and versions.
-func (s *Store) PromoteSkill(ctx context.Context, id string) error {
+// every sprig is offered it. It keeps its id and versions. The trail
+// entry, if given, is written in the same transaction.
+func (s *Store) PromoteSkill(ctx context.Context, id string, trail *TrailEntry) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -286,7 +299,26 @@ func (s *Store) PromoteSkill(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE skills SET sprig_id = NULL, updated_at = ? WHERE id = ?", s.unix(), id); err != nil {
 		return err
 	}
+	if trail != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO trail (at, user_id, character, kind, summary, detail, undo) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			s.unix(), nullInt(trail.UserID), trail.Character, trail.Kind, s.clean(trail.Summary), s.clean(trail.Detail), string(trail.Undo)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+// DeleteSprigSkill deletes a skill only while it is still that sprig's
+// own (a skill promoted meanwhile stays). ErrNotFound if it isn't.
+func (s *Store) DeleteSprigSkill(ctx context.Context, id, sprig string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE skills SET deleted = 1, updated_at = ? WHERE id = ? AND sprig_id = ? AND deleted = 0", s.unix(), id, sprig)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // --- skill runs ---
@@ -336,7 +368,7 @@ func (s *Store) FinishSkillRun(ctx context.Context, id int64, sprig, outcome, no
 		return fmt.Errorf("outcome must be %s, %s or %s", SkillSucceeded, SkillFailed, SkillStopped)
 	}
 	res, err := s.db.ExecContext(ctx, "UPDATE skill_runs SET outcome = ?, note = ?, finished_at = ? WHERE id = ? AND sprig_id = ? AND outcome = ''",
-		outcome, note, s.unix(), id, sprig)
+		outcome, s.clean(note), s.unix(), id, sprig)
 	if err != nil {
 		return err
 	}

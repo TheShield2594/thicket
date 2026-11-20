@@ -27,6 +27,7 @@ func TestMatrixStartsOnlyWhenConfigured(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("THICKET_DATA_DIR", dir)
+			t.Setenv("DISCORD_TOKEN", "") // whatever the developer's shell has
 			t.Setenv("THICKET_MATRIX_HOMESERVER", tc.homeserver)
 			t.Setenv("THICKET_MATRIX_TOKEN", tok)
 			t.Setenv("TELEGRAM_TOKEN", "123456:AA"+"bcdefghijklmnopqrstuvwxyz01234567")

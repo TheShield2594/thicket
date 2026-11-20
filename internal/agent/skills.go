@@ -289,11 +289,22 @@ func (e *Engine) toolSaveSkill(ctx context.Context, t *turn, args json.RawMessag
 	if err := ValidateSkill(k); err != nil {
 		return "", err
 	}
+	// Saves and their files land in order, and never under a sync.
+	e.skillSyncMu.Lock()
+	defer e.skillSyncMu.Unlock()
 	v, err := e.DB.SaveSkill(ctx, k, a.BaseVersion)
 	var vc *store.VersionConflict
 	switch {
 	case errors.Is(err, store.ErrNoChange):
+		if !k.Shared() {
+			// Its file may have failed to write last time: put it right.
+			if err := e.writeSprigSkill(k); err != nil {
+				return "", fmt.Errorf("skill %s is already that in the store (version %d), but writing its file failed: %v", k.ID, v, err)
+			}
+		}
 		return fmt.Sprintf("Skill %s is already exactly that (version %d); nothing saved.", k.ID, v), nil
+	case errors.Is(err, store.ErrSkillIDTaken):
+		return "", fmt.Errorf("the id %q belonged to another sprig's skill: pick another", k.ID)
 	case errors.Is(err, store.ErrNotFound):
 		return "", fmt.Errorf("there's no skill %q to revise; use base_version 0 to create it", k.ID)
 	case errors.As(err, &vc) && a.BaseVersion == 0:
@@ -366,6 +377,9 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 		return "", err
 	}
 	if a.Action != "history" {
+		// Saves and their files land in order, and never under a sync.
+		e.skillSyncMu.Lock()
+		defer e.skillSyncMu.Unlock()
 		what := a.Action + " a skill"
 		if a.Action == "promote" {
 			// Into the shared library: that's the library's people's call.
@@ -435,7 +449,9 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 			return "", fmt.Errorf("%s is already in the shared library", id)
 		}
 		owner := cur.SprigID
-		if err := e.DB.PromoteSkill(ctx, id); err != nil {
+		// The trail entry goes in with the promotion, or neither does.
+		if err := e.DB.PromoteSkill(ctx, id, &store.TrailEntry{UserID: t.user.ID, Character: owner, Kind: store.TrailSkill,
+			Summary: fmt.Sprintf("skill %s moved from %s's own skills to the shared library", id, e.charName(owner))}); err != nil {
 			return "", err
 		}
 		// No longer the sprig's: its file goes, so a reload doesn't make it
@@ -443,8 +459,6 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 		if err := e.retireSprigSkill(owner, id); err != nil {
 			e.Log.Error("promote skill: move its file", "skill", id, "err", err)
 		}
-		e.addTrail(ctx, t.user.ID, owner, store.TrailSkill,
-			fmt.Sprintf("skill %s moved from %s's own skills to the shared library", id, e.charName(owner)), "", nil)
 		e.logActivity(ctx, "info", "skill", t.char.ID, t.user.ID, "skill "+id+" promoted to the shared library", "")
 		return fmt.Sprintf("Skill %s is in the shared library now: every sprig is offered it. Only the owner or an admin can change it from here on.", id), nil
 	}

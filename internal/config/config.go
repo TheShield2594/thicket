@@ -6,7 +6,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -200,8 +202,8 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "THICKET_MATRIX_HOMESERVER is not set, so Matrix is off",
 			"For Matrix, set THICKET_MATRIX_HOMESERVER to your homeserver's address and store the bot account's access token with `thicket secrets set matrix_token` or THICKET_MATRIX_TOKEN (see docs/matrix.md)."})
 	case !c.MatrixOn():
-		out = append(out, Problem{false, "THICKET_MATRIX_HOMESERVER doesn't start with https://, so Matrix is off",
-			"Set it to the homeserver's client-server address, such as https://matrix.example.org."})
+		out = append(out, Problem{false, "THICKET_MATRIX_HOMESERVER isn't an https:// address, so Matrix is off",
+			"Set it to the homeserver's client-server address, such as https://matrix.example.org. Plain http:// is accepted only for a homeserver on this machine or the local network (localhost, a private IP address, or a Docker service name), because the access token goes with every request."})
 	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
@@ -281,10 +283,34 @@ func (c *Config) OwnerConfigured() bool {
 	return c.DiscordOwnerID != "" || c.TelegramOwnerID != "" || c.MatrixOwnerID != ""
 }
 
-// MatrixOn reports whether a Matrix homeserver is configured (it still
-// needs an access token to connect).
+// MatrixOn reports whether a usable Matrix homeserver is configured (it
+// still needs an access token to connect). The token is sent with every
+// request, so plain http is accepted only for a homeserver on this
+// machine or the local network: localhost, a private IP address, or a
+// name without dots, such as a Docker service ("http://synapse:8008").
 func (c *Config) MatrixOn() bool {
-	return strings.HasPrefix(c.MatrixHomeserver, "https://") || strings.HasPrefix(c.MatrixHomeserver, "http://")
+	u, err := url.Parse(c.MatrixHomeserver)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		return localHost(u.Hostname())
+	}
+	return false
+}
+
+// localHost reports whether host is this machine or on the local network.
+func localHost(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	return host != "" && !strings.Contains(host, ".")
 }
 
 func env(k, def string) string {

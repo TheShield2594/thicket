@@ -70,6 +70,12 @@ func split(text string, n int) []string {
 		for cut > 0 && text[cut-1] == '`' && text[cut] == '`' {
 			cut--
 		}
+		if cut == 0 { // a run of backticks as long as the chunk: cut inside it
+			cut = n
+			for cut > 0 && !utf8.RuneStart(text[cut]) {
+				cut--
+			}
+		}
 		chunk := strings.TrimSpace(text[:cut])
 		rest := strings.TrimSpace(text[cut:])
 		if strings.Count(chunk, fence)%2 == 1 {

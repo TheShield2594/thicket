@@ -103,9 +103,14 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 	}
 	dir := e.Chars.Dir()
 	seen := map[string]bool{} // skill ids that have a file
+	keep := map[string]bool{} // sprigs whose folder couldn't be read: keep their skills
 	for _, c := range e.Chars.All() {
-		paths, _ := filepath.Glob(filepath.Join(character.SkillDir(dir, c.ID), "*.md"))
-		sort.Strings(paths)
+		paths, err := sprigSkillFiles(character.SkillDir(dir, c.ID))
+		if err != nil {
+			probs = append(probs, SkillSyncProblem{character.SkillDir(dir, c.ID), "couldn't read the folder: " + err.Error()})
+			keep[c.ID] = true
+			continue
+		}
 		for _, path := range paths {
 			k, err := readSprigSkill(path)
 			if err != nil {
@@ -148,7 +153,7 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 	}
 	// Skills whose file is gone, or whose sprig is.
 	for id, sprig := range owners {
-		if seen[id] {
+		if seen[id] || keep[sprig] {
 			continue
 		}
 		if _, ok := e.Chars.Get(sprig); !ok {
@@ -158,7 +163,10 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 				continue
 			}
 		}
-		if err := e.DB.DeleteSkill(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		// Only while it's still that sprig's: one promoted meanwhile stays.
+		if err := e.DB.DeleteSprigSkill(ctx, id, sprig); errors.Is(err, store.ErrNotFound) {
+			continue
+		} else if err != nil {
 			e.Log.Error("sync sprig skills: delete", "skill", id, "err", err)
 			continue
 		}
@@ -170,11 +178,32 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 	return probs
 }
 
-// readSprigSkill parses one skill file; its id must match the file name.
-// On a parse error the returned skill still carries the file's id, if
-// the name gives one.
+// sprigSkillFiles lists a skills folder's *.md files, sorted. A missing
+// folder is no files; any other read error is returned, so a folder that
+// can't be read isn't taken for one that was emptied.
+func sprigSkillFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, en := range entries {
+		if n := en.Name(); !en.IsDir() && strings.HasSuffix(n, ".md") && !strings.HasPrefix(n, ".") {
+			out = append(out, filepath.Join(dir, n))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// readSprigSkill parses one skill file; it must be named <id>.md. On a
+// parse error the returned skill still carries the file's id, if the
+// name gives one.
 func readSprigSkill(path string) (store.Skill, error) {
-	want := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".md"), ".skill")
+	want := strings.TrimSuffix(filepath.Base(path), ".md")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return store.Skill{ID: want}, err

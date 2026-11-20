@@ -56,13 +56,50 @@ func TestSprigSkillsAndRuns(t *testing.T) {
 		t.Fatalf("count %d", n)
 	}
 
-	if err := s.PromoteSkill(ctx, "pip-tea"); err != nil {
+	if err := s.PromoteSkill(ctx, "pip-tea", nil); err != nil {
 		t.Fatal(err)
 	}
 	if ks, _ := s.SkillsFor(ctx, "fern"); len(ks) != 2 {
 		t.Fatalf("promoted skill not shared: %+v", ks)
 	}
-	if err := s.PromoteSkill(ctx, "pip-tea"); err == nil {
+	if err := s.PromoteSkill(ctx, "pip-tea", nil); err == nil {
 		t.Fatal("promoted twice")
+	}
+}
+
+// A deleted sprig skill's id (and its old versions) stays that sprig's.
+func TestDeletedSprigSkillIDStaysItsOwn(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	k := Skill{ID: "pip-tea", Name: "Tea", Description: "d", Body: "1. secret family recipe", SprigID: "pip"}
+	if _, err := s.SaveSkill(ctx, k, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSprigSkill(ctx, "pip-tea", "fern"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted as another sprig's: %v", err)
+	}
+	if err := s.DeleteSprigSkill(ctx, "pip-tea", "pip"); err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []string{"fern", ""} {
+		other := k
+		other.SprigID, other.Body = owner, "1. mine"
+		if _, err := s.SaveSkill(ctx, other, 0); !errors.Is(err, ErrSkillIDTaken) {
+			t.Fatalf("%q took over pip's old id: %v", owner, err)
+		}
+	}
+	if v, err := s.SaveSkill(ctx, k, 0); err != nil || v != 2 {
+		t.Fatalf("pip recreating its own: %d %v", v, err)
+	}
+	// Promotion and its trail entry go in together.
+	if err := s.PromoteSkill(ctx, "pip-tea", &TrailEntry{Character: "pip", Kind: TrailSkill, Summary: "promoted"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSprigSkill(ctx, "pip-tea", "pip"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a stale sync deleted a promoted skill: %v", err)
+	}
+	trail, _ := s.Trail(ctx, 0, 5)
+	if len(trail) != 1 || trail[0].Kind != TrailSkill {
+		t.Fatalf("trail: %+v", trail)
 	}
 }
