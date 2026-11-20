@@ -416,7 +416,11 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 		}
 	}
 	if changes(tool) {
-		if lv := e.toolLevel(ctx, t.char, tool); lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
+		lv := e.toolLevel(ctx, t.char, tool)
+		if f, ok := e.floorFor(ctx, t, tool); ok {
+			lv = stricter(lv, f.Level) // a floor set since it asked counts too
+		}
+		if lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
 			return "Error: your access to " + name + " was lowered to " + lv + " since you asked, so it wasn't run."
 		}
 	}

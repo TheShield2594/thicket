@@ -597,6 +597,9 @@ func (a *App) Run(parent context.Context) error {
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {
+			if a.isDefaultPlugin(name) {
+				continue // watchDefaultPlugins connects it, or quietly turns it off
+			}
 			if a.isPlugin(name) && a.retryPlugin(ctx, name) == nil {
 				continue // it was still starting
 			}

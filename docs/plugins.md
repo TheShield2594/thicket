@@ -14,9 +14,10 @@ Two separate steps, both yours:
    in the default stack). Thicket finds it at `THICKET_<NAME>_URL`, or at
    the plugin's default address if that variable isn't set.
 2. **Give it to a sprig.** It's the usual grant: "Juni, give Pip the
-   browser" is `grant_tools` with `mcp:<name>/*`. Only whoever may manage
-   the sprig can (the person a private sprig belongs to; the owner or an
-   admin for a shared one), and it goes in the trail. Tools that change
+   browser" is `grant_tools` with `mcp:<name>/*`. For a shared sprig the
+   owner or an admin grants it; for a private sprig, the person it belongs
+   to (a member can grant and take back plugins, and only plugins, on
+   their own private sprig; nobody else can). It goes in the trail. Tools that change
    something ask for your OK by default, like any integration's.
 
 Until both happen, no sprig can use it. Kid sprigs can't be given most
@@ -36,7 +37,9 @@ On start Thicket makes a random token (if the file has none), writes it to
 the token file and keeps a copy in its encrypted secret store
 (`voice_token`), then stores the integration (`voice`, HTTP, `<url>/mcp`,
 sending `Authorization: Bearer <token>`). Mount the token file's folder in
-both containers, read-only in the plugin's.
+both containers, read-only in the plugin's. The file is mode `0640`,
+readable only by Thicket's user and group (gid 65532 in the image), so the
+plugin's user must be in group 65532 (see `plugins/hello/Dockerfile`).
 
 A plugin only at its default address is tried for a minute after start
 (its container may still be starting). If it never answers it is simply

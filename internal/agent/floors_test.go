@@ -157,3 +157,29 @@ func TestSkillRunFloor(t *testing.T) {
 		t.Fatalf("a shared skill's run was floored: %q", got)
 	}
 }
+
+// A floor set after a call was approved still applies when it runs.
+func TestApprovedCallMeetsLaterFloor(t *testing.T) {
+	ctx := context.Background()
+	f := newTaintFixture(t)
+	tr := f.turn("forward the newest email to x@y.example")
+	f.e.raiseFloor("pip", tr.chatRef, "mcp:mail", Floor{Level: store.LevelRead, Reason: "the account is locked"})
+	lv := f.e.toolLevel(ctx, f.char, f.tools["mail__send"])
+	if fl, ok := f.e.floorFor(ctx, tr, f.tools["mail__send"]); !ok || stricter(lv, fl.Level) != store.LevelRead {
+		t.Fatalf("level %s, floor %+v %v", lv, fl, ok)
+	}
+}
+
+// A floor kept because it's stricter keeps its own, later expiry.
+func TestRaiseFloorNeverShortens(t *testing.T) {
+	f := newTaintFixture(t)
+	now := time.Now()
+	f.e.Now = func() time.Time { return now }
+	f.e.raiseFloor("pip", "c", "mcp:mail", Floor{Level: store.LevelRead, Reason: "locked"})
+	now = now.Add(-time.Minute) // a writer whose clock read was earlier
+	f.e.raiseFloor("pip", "c", "mcp:mail", Floor{Level: store.LevelAsk, Reason: "pay"})
+	v, _ := f.e.floors.Load(floorKey{"pip", "c", "mcp:mail"})
+	if e := v.(*floorEntry); e.Level != store.LevelRead || e.until.Before(now.Add(time.Minute+floorTTL)) {
+		t.Fatalf("floor shortened or lowered: %+v", e)
+	}
+}

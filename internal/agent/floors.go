@@ -113,8 +113,8 @@ type floorEntry struct {
 // integration in a chat. A stricter floor already there stays.
 func (e *Engine) raiseFloor(sprig, chat, scope string, f Floor) {
 	key := floorKey{sprig, chat, scope}
-	now := e.now()
 	for {
+		now := e.now()
 		old, loaded := e.floors.LoadOrStore(key, &floorEntry{Floor: f, until: now.Add(floorTTL)})
 		if !loaded {
 			return
@@ -123,6 +123,9 @@ func (e *Engine) raiseFloor(sprig, chat, scope string, f Floor) {
 		next := &floorEntry{Floor: f, until: now.Add(floorTTL)}
 		if cur.until.After(now) && strictness(cur.Level) <= strictness(f.Level) {
 			next.Floor = cur.Floor // never lowered; the stricter reason stays
+			if cur.until.After(next.until) {
+				next.until = cur.until // never shortened
+			}
 		}
 		if e.floors.CompareAndSwap(key, old, next) {
 			return

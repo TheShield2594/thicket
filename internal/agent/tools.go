@@ -16,6 +16,7 @@ import (
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
@@ -456,9 +457,10 @@ func (e *Engine) builtinTools() []*Tool {
 			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/* plus exec on (set_sprig_access), since it runs commands. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
-			AdminOnly:   true,
-			ChatOnly:    true,
-			Run:         e.toolGrantTools,
+			// Not AdminOnly: a member may give plugins to their own
+			// private sprig (toolGrantTools checks who may change what).
+			ChatOnly: true,
+			Run:      e.toolGrantTools,
 		},
 		{
 			Name: "set_initiative",
@@ -1188,6 +1190,20 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	c, ok := e.Chars.Get(a.Character)
 	if !ok || c.PrivateFrom(t.user.ID) { // someone else's private sprig is theirs to change
 		return "", fmt.Errorf("no sprig with id %q", a.Character)
+	}
+	// Admins change any sprig's scopes (not someone else's private
+	// sprig). Anyone else may only give or take plugins (mcp:<plugin>/…)
+	// to or from a private sprig of their own.
+	if !t.user.IsAdmin() {
+		if err := e.mayManage(ctx, t.user, c, "change tool scopes"); err != nil {
+			return "", err
+		}
+		for _, s := range append(append([]string{}, a.Add...), a.Remove...) {
+			if _, ok := e.plugins().Get(plugin.ScopeServer(s)); !ok {
+				e.refused(ctx, t.user, c.ID, "tried to change scope "+s+" without being an admin")
+				return "", fmt.Errorf("only the owner or an admin can change %s; you can give or take plugins (mcp:<plugin>/*) for your own private sprig", s)
+			}
+		}
 	}
 	cp := *c
 	set := map[string]bool{}

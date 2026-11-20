@@ -52,6 +52,13 @@ func (a *App) pluginEndpoints() []plugin.Endpoint {
 // every set-up plugin's settings are known to be current.
 func (a *App) ensurePlugins(ctx context.Context) bool {
 	ok := true
+	// A plugin turned off (THICKET_<NAME>_URL empty or "off") loses the
+	// integration Thicket set up for it; grants stay.
+	for _, s := range a.plugins().All() {
+		if ep := s.Resolve(a.Cfg.LookupPluginEnv, a.Cfg.DataDir); ep.URL == "" {
+			a.disableManaged(ctx, ep, "")
+		}
+	}
 	for _, ep := range a.pluginEndpoints() {
 		if !ep.Explicit {
 			continue
@@ -71,6 +78,7 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 	tok := ""
 	if b, err := os.ReadFile(ep.TokenFile); err == nil {
 		tok = strings.TrimSpace(string(b))
+		_ = os.Chmod(ep.TokenFile, tokenMode) // tighten one written before 0640
 	}
 	if len(tok) < 32 {
 		b := make([]byte, 32)
@@ -78,14 +86,16 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 			return err
 		}
 		tok = base64.RawURLEncoding.EncodeToString(b)
-		if err := os.MkdirAll(filepath.Dir(ep.TokenFile), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(ep.TokenFile), 0o750); err != nil {
 			return fmt.Errorf("token folder: %w", err)
 		}
-		// Readable by the plugin's own user: the file only unlocks the
+		// Readable by Thicket's group (65532 in the image), which the
+		// plugin's user joins: not by anyone else. It only unlocks the
 		// plugin itself.
-		if err := os.WriteFile(ep.TokenFile, []byte(tok+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(ep.TokenFile, []byte(tok+"\n"), tokenMode); err != nil {
 			return fmt.Errorf("writing the token: %w", err)
 		}
+		_ = os.Chmod(ep.TokenFile, tokenMode) // WriteFile keeps an existing file's mode
 	}
 	if cur, _ := a.Secrets.Get(ctx, ep.Secret()); cur != tok {
 		if err := a.Secrets.Put(ctx, ep.Secret(), tok); err != nil {
@@ -106,14 +116,56 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 	return a.DB.PutMCPServer(ctx, want)
 }
 
-// isPlugin reports whether an integration is a configured plugin.
-func (a *App) isPlugin(name string) bool {
+// tokenMode is a plugin token file's mode: Thicket and its group only.
+const tokenMode = 0o640
+
+// pluginEndpoint finds a configured plugin by integration name.
+func (a *App) pluginEndpoint(name string) (plugin.Endpoint, bool) {
 	for _, ep := range a.pluginEndpoints() {
 		if ep.Name == name {
-			return true
+			return ep, true
 		}
 	}
-	return false
+	return plugin.Endpoint{}, false
+}
+
+// isPlugin reports whether an integration is a configured plugin.
+func (a *App) isPlugin(name string) bool {
+	_, ok := a.pluginEndpoint(name)
+	return ok
+}
+
+// isDefaultPlugin reports whether an integration is a plugin found only
+// at its default address: watchDefaultPlugins connects it, or turns it
+// off quietly, so startup doesn't report it.
+func (a *App) isDefaultPlugin(name string) bool {
+	ep, ok := a.pluginEndpoint(name)
+	return ok && !ep.Explicit
+}
+
+// managed reports whether a stored integration is the one Thicket set
+// up for a plugin (its name and its token header), not one someone
+// added by hand under the same name.
+func managed(s store.MCPServer, ep plugin.Endpoint) bool {
+	return s.Name == ep.Name && s.Headers["Authorization"] == "Bearer {{secret:"+ep.Secret()+"}}"
+}
+
+// disableManaged turns off the integration Thicket set up for a plugin,
+// if it is on (and, when target isn't "", still points there). Grants
+// stay, so turning the plugin back on brings it back.
+func (a *App) disableManaged(ctx context.Context, ep plugin.Endpoint, target string) {
+	servers, err := a.DB.MCPServers(ctx)
+	if err != nil {
+		return
+	}
+	for _, s := range servers {
+		if managed(s, ep) && s.Enabled && (target == "" || s.Target == target) {
+			s.Enabled = false
+			if err := a.DB.PutMCPServer(ctx, s); err == nil {
+				a.Log.Info("plugin integration turned off", "plugin", ep.Name)
+			}
+		}
+	}
 }
 
 // retryPlugin waits for a plugin that is still starting.
@@ -203,19 +255,9 @@ func (a *App) retryPluginNow(ctx context.Context, name string) error {
 }
 
 // absentPlugin turns off a default-address plugin's integration left from
-// an earlier start, if it is still the one Thicket set up. Grants stay,
-// so starting the plugin again brings it back.
+// an earlier start, if it is still the one Thicket set up there.
 func (a *App) absentPlugin(ctx context.Context, ep plugin.Endpoint) {
-	servers, err := a.DB.MCPServers(ctx)
-	if err != nil {
-		return
-	}
-	for _, s := range servers {
-		if s.Name == ep.Name && s.Enabled && s.Target == ep.MCPURL() {
-			s.Enabled = false
-			_ = a.DB.PutMCPServer(ctx, s)
-		}
-	}
+	a.disableManaged(ctx, ep, ep.MCPURL())
 }
 
 // execKeptKey marks that sprigs given an exec-capable integration before

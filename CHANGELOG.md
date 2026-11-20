@@ -11,10 +11,15 @@ stated.
   them; the core bundles none. Each is found at `THICKET_<NAME>_URL` (or
   its default address, tried quietly: a plugin that isn't running is
   simply absent) and shares a token through `THICKET_<NAME>_TOKEN_FILE`.
-  No sprig can use one until its owner grants `mcp:<name>/*`; kid sprigs
+  No sprig can use one until it is granted `mcp:<name>/*`: by the owner
+  or an admin for a shared sprig, by its person for a private one (a
+  member may grant only plugins, only to their own sprig); kid sprigs
   are refused plugins whose policy says so. `thicket doctor` checks each
-  one (answers, token accepted, version). The sandbox is now the first
-  plugin, with no change in behaviour. `plugins/hello` is a template; see
+  one (answers, token accepted, version). Setting a plugin's URL to empty
+  or `off` now turns its integration off. The sandbox is now the first
+  plugin; its token file is now readable only by Thicket's user and group
+  (`0640`), which the sandbox image's user joins, so update both images
+  together. `plugins/hello` is a template; see
   [Plugins](docs/plugins.md).
 
 - Level floors (schema v34, #79): some calls ask first whatever their

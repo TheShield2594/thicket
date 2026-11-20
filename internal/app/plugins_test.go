@@ -15,6 +15,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/doctor"
 	"github.com/theshield2594/thicket/internal/plugin"
+	"github.com/theshield2594/thicket/internal/store"
 )
 
 // stubPlugin is a plugin container: an MCP server behind the token in
@@ -168,5 +169,48 @@ func TestKidSprigsRefusedPlugins(t *testing.T) {
 	}
 	if _, err := h.a.Engine.KidAccess(h.ctx, h.owner, "bramble", []string{"mcp:ha/get_state"}, nil, nil, nil); err != nil {
 		t.Fatalf("an ordinary read-only tool was refused: %v", err)
+	}
+}
+
+// Turning a plugin's URL off turns its integration off (grants stay); an
+// integration someone added by hand under the same name is left alone.
+// The token file is readable by Thicket's user and group only.
+func TestPluginTurnedOff(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	a.Plugins = plugin.MustNew(plugin.Spec{Name: "stub"}, plugin.Spec{Name: "other"})
+	tokenFile := filepath.Join(t.TempDir(), "auth", "token")
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", "http://127.0.0.1:1")
+	a.Cfg.SetPluginEnv("THICKET_STUB_TOKEN_FILE", tokenFile)
+	a.ensurePlugins(ctx)
+	if st, err := os.Stat(tokenFile); err != nil || st.Mode().Perm() != 0o640 {
+		t.Fatalf("token file: %v %v", st.Mode(), err)
+	}
+	os.Chmod(tokenFile, 0o644) // one written by an older version
+	a.ensurePlugins(ctx)
+	if st, _ := os.Stat(tokenFile); st.Mode().Perm() != 0o640 {
+		t.Fatalf("old token file not tightened: %v", st.Mode())
+	}
+	hand := store.MCPServer{Name: "other", Transport: "http", Target: "http://mine/mcp", Enabled: true}
+	a.DB.PutMCPServer(ctx, hand)
+
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", "off")
+	a.ensurePlugins(ctx)
+	servers, _ := a.DB.MCPServers(ctx)
+	for _, s := range servers {
+		if s.Name == "stub" && s.Enabled {
+			t.Fatal("a plugin turned off is still on")
+		}
+		if s.Name == "other" && !s.Enabled {
+			t.Fatal("a hand-made integration was turned off")
+		}
+	}
+	// Startup leaves default-address plugins to watchDefaultPlugins.
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", "http://127.0.0.1:1")
+	if a.isDefaultPlugin("stub") {
+		t.Fatal("an explicit plugin counted as default")
+	}
+	a.Plugins = plugin.MustNew(plugin.Spec{Name: "dflt", DefaultURL: "http://127.0.0.1:1"})
+	if !a.isDefaultPlugin("dflt") {
+		t.Fatal("a default plugin isn't left to discovery")
 	}
 }
