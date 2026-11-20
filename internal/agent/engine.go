@@ -287,7 +287,8 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	defer func() {
 		// However late the stop came, a skill the sprig was following here
 		// was stopped by the person (stopAck may already have said so).
-		if flight.stopped.Load() {
+		// After finish no stop is accepted, so none is missed here.
+		if flight.finish() {
 			if id := flight.charID(); id != "" {
 				if _, err := e.DB.StopSkillRuns(context.WithoutCancel(ctx), id, in.ChatRef()); err != nil {
 					e.Log.Error("stop skill runs", "err", err)

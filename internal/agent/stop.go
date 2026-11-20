@@ -35,6 +35,35 @@ type inFlight struct {
 	acked   atomic.Bool
 	dropped atomic.Int32 // queued messages set aside by the stop
 	char    atomic.Value // string: the sprig doing the work, once known
+	// endMu orders a stop against the end of the work: once finish has
+	// run, tryStop refuses, so a stop is either seen by the cleanup or
+	// not accepted at all.
+	endMu sync.Mutex
+	ended bool
+}
+
+// tryStop marks the work stopped, running before first (under the same
+// lock), unless it has already finished. It reports whether it stopped it.
+func (f *inFlight) tryStop(before func()) bool {
+	f.endMu.Lock()
+	defer f.endMu.Unlock()
+	if f.ended {
+		return false
+	}
+	if before != nil {
+		before()
+	}
+	f.stopped.Store(true)
+	return true
+}
+
+// finish ends the work: later stops are refused. It reports whether the
+// work was stopped.
+func (f *inFlight) finish() bool {
+	f.endMu.Lock()
+	defer f.endMu.Unlock()
+	f.ended = true
+	return f.stopped.Load()
 }
 
 func (f *inFlight) setChar(id string) { f.char.Store(id) }
@@ -78,10 +107,10 @@ func (e *Engine) Queued(chatRef string) int { return int(e.waiting(chatRef).Load
 func (e *Engine) Stop(chatRef string, user *store.User) (stoppedReply bool, jobs []string) {
 	if v, ok := e.turnsIn.Load(chatRef); ok {
 		f := v.(*inFlight)
-		if f.userID == user.ID || user.IsAdmin() {
+		if (f.userID == user.ID || user.IsAdmin()) && f.tryStop(func() {
 			f.dropped.Store(e.waiting(chatRef).Load())
 			e.stopSeq.Store(chatRef, e.arrivals.Load()) // everything already queued
-			f.stopped.Store(true)
+		}) {
 			f.cancel()
 			return true, nil
 		}

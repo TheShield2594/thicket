@@ -508,6 +508,7 @@ func TestSplitLongBacktickRun(t *testing.T) {
 	for _, text := range []string{
 		strings.Repeat("`", 3*n),
 		"hello " + strings.Repeat("`", 3*n),
+		"```\n" + strings.Repeat("`", 3*n), // a run after an opening fence
 		strings.Repeat("word ", 60),
 	} {
 		done := make(chan []string, 1)

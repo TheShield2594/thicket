@@ -255,6 +255,11 @@ func (e *Engine) toolSaveSkill(ctx context.Context, t *turn, args json.RawMessag
 	k := store.Skill{ID: strings.ToLower(strings.TrimSpace(a.ID)), Name: strings.TrimSpace(a.Name), Description: strings.TrimSpace(a.Description),
 		Body: strings.TrimSpace(a.Steps), Note: strings.TrimSpace(a.Note), Author: t.char.ID, UserID: t.user.ID,
 		Inputs: cleanInputs(a.Inputs), SuccessCheck: strings.TrimSpace(a.SuccessCheck)}
+	// Saves and their files land in order, and never under a sync; the
+	// owner is read under the same lock, so a promotion can't slip between
+	// the permission check and the save.
+	e.skillSyncMu.Lock()
+	defer e.skillSyncMu.Unlock()
 	// Who owns it: an existing skill keeps its owner; a new one goes where
 	// "for" says (by default the shared library for owners and admins, the
 	// sprig's own skills for anyone else).
@@ -289,9 +294,6 @@ func (e *Engine) toolSaveSkill(ctx context.Context, t *turn, args json.RawMessag
 	if err := ValidateSkill(k); err != nil {
 		return "", err
 	}
-	// Saves and their files land in order, and never under a sync.
-	e.skillSyncMu.Lock()
-	defer e.skillSyncMu.Unlock()
 	v, err := e.DB.SaveSkill(ctx, k, a.BaseVersion)
 	var vc *store.VersionConflict
 	switch {
@@ -372,14 +374,15 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 		return "", err
 	}
 	id := strings.ToLower(strings.TrimSpace(a.ID))
+	// Changes land in order and never under a sync, and the owner is read
+	// under the same lock, so a promotion can't slip in after the check.
+	e.skillSyncMu.Lock()
+	defer e.skillSyncMu.Unlock()
 	cur, err := e.offeredSkill(ctx, t, id, 0)
 	if err != nil {
 		return "", err
 	}
 	if a.Action != "history" {
-		// Saves and their files land in order, and never under a sync.
-		e.skillSyncMu.Lock()
-		defer e.skillSyncMu.Unlock()
 		what := a.Action + " a skill"
 		if a.Action == "promote" {
 			// Into the shared library: that's the library's people's call.

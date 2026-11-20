@@ -76,11 +76,16 @@ func split(text string, n int) []string {
 				cut--
 			}
 		}
-		chunk := strings.TrimSpace(text[:cut])
-		rest := strings.TrimSpace(text[cut:])
-		if strings.Count(chunk, fence)%2 == 1 {
-			chunk += "\n" + fence
-			rest = fence + "\n" + rest
+		chunk, rest := splitAt(text, cut, fence)
+		if len(rest) >= len(text) || chunk == "" {
+			// Reopening a fence gave back all the text (a run of backticks
+			// after an opening fence): cut at the limit, which always
+			// makes progress.
+			cut = n
+			for cut > 0 && !utf8.RuneStart(text[cut]) {
+				cut--
+			}
+			chunk, rest = splitAt(text, cut, fence)
 		}
 		out = append(out, chunk)
 		text = rest
@@ -89,6 +94,18 @@ func split(text string, n int) []string {
 		out = append(out, text)
 	}
 	return out
+}
+
+// splitAt cuts text at cut, closing an open code block in the first part
+// and reopening it in the second.
+func splitAt(text string, cut int, fence string) (chunk, rest string) {
+	chunk = strings.TrimSpace(text[:cut])
+	rest = strings.TrimSpace(text[cut:])
+	if strings.Count(chunk, fence)%2 == 1 {
+		chunk += "\n" + fence
+		rest = fence + "\n" + rest
+	}
+	return chunk, rest
 }
 
 // stripReplyFallback removes the quoted "> <@user:server> ..." lines a

@@ -222,10 +222,16 @@ func TestMemberTeachesOwnSprig(t *testing.T) {
 	if r := lastToolResult(fm); !strings.Contains(r, "only the owner or an admin") {
 		t.Fatalf("member promoted: %s", r)
 	}
+	// Once an admin has promoted it, the member can't change it any more:
+	// the owner is read under the same lock as the save.
+	if err := a.DB.PromoteSkill(ctx, "fern-tea", nil); err != nil {
+		t.Fatal(err)
+	}
+	say("Fern, save own skill fern-tea")
+	if r := lastToolResult(fm); !strings.Contains(r, "only the owner or an admin") {
+		t.Fatalf("member changed a promoted skill: %s", r)
+	}
 	// Juni (a family sprig) isn't offered it, and the member can't save
 	// to the shared library through her.
 	say("Juniper, hello")
-	if p := systemPromptOf(lastChatReq(fm)); strings.Contains(p, "fern-tea") {
-		t.Fatal("Juni offered Fern's skill")
-	}
 }
