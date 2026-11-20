@@ -24,6 +24,7 @@ import (
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
@@ -48,6 +49,9 @@ type Engine struct {
 	Settings *settings.Settings
 	Secrets  *secrets.Store
 	MCP      *mcp.Registry
+	// Plugins are the known optional containers (internal/plugin); nil
+	// means the built-in list.
+	Plugins *plugin.Registry
 	// OAuth signs in to integrations that use OAuth.
 	OAuth *mcp.OAuth
 	// Calendar is the household calendar.

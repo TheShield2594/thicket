@@ -56,7 +56,7 @@ The web app uses the same endpoints under `/api/`.
 
 | | |
 |---|---|
-| `GET /api/v2/approvals` | what's waiting for this person's OK |
+| `GET /api/v2/approvals` | what's waiting for this person's OK (`always_asks` says why one asks whatever the level, if it does) |
 | `POST /api/v2/approvals/{id}` | `{"approve": true}` or `false` |
 | `GET /api/v2/trail` | permission changes, sprig calendar entries and what sprigs did (admins: all) |
 | `POST /api/v2/trail/{id}/undo` | undo one |

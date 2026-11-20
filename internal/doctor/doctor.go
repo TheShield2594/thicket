@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
@@ -44,6 +46,8 @@ type Doctor struct {
 	// ServerURL is the running server's base URL; empty means
 	// http://127.0.0.1<THICKET_HTTP_ADDR>.
 	ServerURL string
+	// Plugins are the known optional containers (nil: plugin.Builtin).
+	Plugins *plugin.Registry
 	// DataOnly checks only the data (config, database, memory, secrets),
 	// with no network calls.
 	DataOnly bool
@@ -132,6 +136,7 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	if sec != nil {
 		out = append(out, d.mcpServers(ctx, db, sec)...)
 	}
+	out = append(out, d.plugins(ctx, sec)...)
 	out = append(out, d.server(ctx)...)
 	return out
 }
@@ -274,6 +279,90 @@ func (d *Doctor) mcpServers(ctx context.Context, db *store.Store, sec *secrets.S
 		out = append(out, Check{Name: "mcp." + s.Name, OK: true, Optional: true, Detail: fmt.Sprintf("responding, %d tools", len(tools))})
 	}
 	return out
+}
+
+// plugins checks each known plugin: whether it answers, accepts its
+// token, and which version it is, then its own check if it has one. A
+// plugin that is off, or not running at its default address, is only
+// reported; one whose address was set and fails is a problem.
+func (d *Doctor) plugins(ctx context.Context, sec *secrets.Store) []Check {
+	reg := d.Plugins
+	if reg == nil {
+		reg = plugin.Builtin()
+	}
+	var out []Check
+	for _, s := range reg.All() {
+		ep := s.Resolve(d.Cfg.LookupPluginEnv, d.Cfg.DataDir)
+		c := Check{Name: "plugin." + s.Name, Optional: true}
+		start := "set " + s.URLEnv()
+		if s.Profile != "" {
+			start = "start it with `docker compose --profile " + s.Profile + " up -d`"
+		}
+		switch {
+		case ep.URL == "":
+			c.OK, c.Detail = true, "off ("+start+" to use it)"
+		case !plugin.Answers(ctx, ep.URL) && !ep.Explicit:
+			c.OK, c.Detail = true, "not running ("+start+" to use it)"
+		default:
+			c = d.pluginCheck(ctx, ep, sec, c)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func (d *Doctor) pluginCheck(ctx context.Context, ep plugin.Endpoint, sec *secrets.Store, c Check) Check {
+	tok := ""
+	if sec != nil {
+		tok, _ = sec.Get(ctx, ep.Secret())
+	}
+	if tok == "" {
+		if b, err := os.ReadFile(ep.TokenFile); err == nil {
+			tok = strings.TrimSpace(string(b))
+		}
+	}
+	if tok == "" {
+		c.Detail = "no token shared with it yet (Thicket makes one when it starts with " + ep.URLEnv() + " set)"
+		return c
+	}
+	redact := func(s string) string {
+		s = strings.ReplaceAll(s, tok, "[token]")
+		if sec != nil {
+			s = sec.Redact(s)
+		}
+		return s
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cl, err := mcp.DialHTTP(cctx, ep.MCPURL(), map[string]string{"Authorization": "Bearer " + tok})
+	switch {
+	case err != nil && (strings.Contains(err.Error(), "HTTP 401") || strings.Contains(err.Error(), "HTTP 403")):
+		c.Detail = "answers at " + ep.URL + " but refused the token (is " + ep.TokenFileEnv() + " the same file in both containers?)"
+		return c
+	case err != nil:
+		c.Detail = "not responding at " + ep.URL + ": " + redact(err.Error())
+		return c
+	}
+	defer cl.Close()
+	tools, err := cl.ListTools(cctx)
+	if err != nil {
+		c.Detail = "connected but couldn't list its tools: " + redact(err.Error())
+		return c
+	}
+	_, ver := cl.ServerInfo()
+	if ver == "" {
+		ver = "unknown version"
+	} else {
+		ver = "version " + ver
+	}
+	if ep.Check != nil {
+		if err := ep.Check(cctx, ep.URL, tok); err != nil {
+			c.Detail = fmt.Sprintf("%s, token accepted, %s, but: %s", ep.URL, ver, redact(err.Error()))
+			return c
+		}
+	}
+	c.OK, c.Detail = true, fmt.Sprintf("%s, token accepted, %s, %d tools", ep.URL, ver, len(tools))
+	return c
 }
 
 // server asks the running Thicket for its live state (chat connections,

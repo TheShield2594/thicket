@@ -184,7 +184,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 	}
 	if t.char.IsKid() {
 		for name, tool := range out {
-			if !kidMayUse(t.char, tool) {
+			if !kidMayUse(t.char, tool) || e.kidPluginRefused(tool.Scope) != nil {
 				delete(out, name)
 			}
 		}
@@ -1193,6 +1193,12 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	set := map[string]bool{}
 	for _, s := range c.Tools {
 		set[s] = true
+	}
+	if c.IsKid() {
+		if err := e.kidPluginRefused(a.Add...); err != nil {
+			e.refused(ctx, t.user, c.ID, "tried to grant a kid sprig a plugin: "+err.Error())
+			return "", err
+		}
 	}
 	for _, s := range a.Add {
 		if (s == character.ScopeAdmin || s == character.ScopeCharacters) && !c.Host {

@@ -110,6 +110,8 @@ type transport interface {
 type Client struct {
 	t      transport
 	nextID atomic.Int64
+	// serverName and serverVersion are what the server said it is.
+	serverName, serverVersion string
 }
 
 // passEnv is what a stdio server inherits from Thicket's environment:
@@ -212,6 +214,10 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 func (c *Client) initialize(ctx context.Context) error {
 	var res struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
 	}
 	err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
@@ -221,6 +227,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
+	c.serverName, c.serverVersion = res.ServerInfo.Name, res.ServerInfo.Version
 	return c.t.notify(ctx, rpcRequest{JSONRPC: "2.0", Method: "notifications/initialized"})
 }
 
@@ -289,6 +296,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 }
 
 func (c *Client) Close() error { return c.t.close() }
+
+// ServerInfo is the name and version the server gave when connecting.
+func (c *Client) ServerInfo() (name, version string) { return c.serverName, c.serverVersion }
 
 // --- stdio transport ---
 

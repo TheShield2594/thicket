@@ -6,6 +6,17 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v34)
 
+- Plugins (#78): optional abilities run in their own containers, started
+  by a compose profile and connected as built-in integrations named after
+  them; the core bundles none. Each is found at `THICKET_<NAME>_URL` (or
+  its default address, tried quietly: a plugin that isn't running is
+  simply absent) and shares a token through `THICKET_<NAME>_TOKEN_FILE`.
+  No sprig can use one until its owner grants `mcp:<name>/*`; kid sprigs
+  are refused plugins whose policy says so. `thicket doctor` checks each
+  one (answers, token accepted, version). The sandbox is now the first
+  plugin, with no change in behaviour. `plugins/hello` is a template; see
+  [Plugins](docs/plugins.md).
+
 - Level floors (schema v34, #79): some calls ask first whatever their
   permission level. During the first three runs of a sprig's own skill,
   everything it does that changes something asks first; an integration
