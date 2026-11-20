@@ -83,9 +83,13 @@ func (e *Engine) askAbove(ctx context.Context) float64 {
 }
 
 // usdPerToken is what a token costs on a model: from what it has cost
-// over the last month, else a typical price. A local model is free.
+// over the last month, else a typical price. A local model is free, and
+// so is a call on a subscription plan.
 func (e *Engine) usdPerToken(ctx context.Context, model string) float64 {
 	if e.localModel(ctx) {
+		return 0
+	}
+	if p, ok := e.provider(ctx); ok && p.Subscription {
 		return 0
 	}
 	if model == "" {

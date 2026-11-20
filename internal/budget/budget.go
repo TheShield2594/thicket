@@ -313,6 +313,9 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 		UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose, Origin: llm.OriginOf(m),
 		Model: resp.Model, PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, CostUSD: resp.Usage.Cost,
 	}
+	if u.CostUSD == 0 {
+		u.CostUSD = g.priced(context.WithoutCancel(ctx), resp.Usage)
+	}
 	if req.Mix != nil {
 		u.PromptChars = max(llm.PromptChars(req.Messages), 1)
 		u.HistoryChars = min(req.Mix.HistoryChars, u.PromptChars)
@@ -320,6 +323,24 @@ func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error
 	}
 	g.record(ctx, cs, u)
 	return resp, nil
+}
+
+// priced is what a call cost on a provider that doesn't report cost, from
+// the owner's per-million-token prices. OpenRouter reports its own costs
+// and a subscription plan costs nothing per call.
+func (g *Guard) priced(ctx context.Context, u llm.Usage) float64 {
+	if g.Settings == nil {
+		return 0
+	}
+	url := g.Settings.String(ctx, "model_url")
+	if llm.IsOpenRouter(url) {
+		return 0
+	}
+	if p, ok := llm.ProviderFor(url); ok && p.Subscription {
+		return 0
+	}
+	in, out := g.Settings.Float(ctx, "model_usd_per_mtok_in"), g.Settings.Float(ctx, "model_usd_per_mtok_out")
+	return (float64(u.PromptTokens)*in + float64(u.CompletionTokens)*out) / 1e6
 }
 
 // record stores a paid call's usage and raises the 80% and 100% alerts it

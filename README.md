@@ -59,9 +59,11 @@ Raspberry Pi 4 or 5 (the images are built for amd64 and arm64).
    docker compose run --rm thicket init
    ```
 
-   - **The model:** an [OpenRouter](https://openrouter.ai/keys) key, or
-     the address of your own Ollama or LM Studio server
-     ([Local models](docs/local-models.md)).
+   - **The model:** an [OpenRouter](https://openrouter.ai/keys) key, a
+     key for another provider or subscription (OpenCode Zen or Go, Nous
+     Portal, OpenAI, Anthropic, Gemini, Groq, DeepSeek and more:
+     [Providers](docs/providers.md)), or the address of your own Ollama
+     or LM Studio server ([Local models](docs/local-models.md)).
    - **Discord and Telegram tokens** (both optional; without them you use
      the web app). On Discord: at the
      [Developer Portal](https://discord.com/developers/applications)
@@ -346,7 +348,8 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_MATRIX_ROOMS` | | Matrix room ids where sprigs answer every message |
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
-| `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
+| `THICKET_PROVIDER` | | a hosted provider instead of OpenRouter, e.g. `groq` or `opencode-go` ([list](docs/providers.md)); sets `THICKET_MODEL_URL` |
+| `THICKET_MODEL_API_KEY` | | key for that provider, or for your server if it wants one |
 | `THICKET_SANDBOX_URL` | `http://sandbox:7070` in compose | the sandbox container ([details](docs/sandbox.md)); empty turns it off |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
 | `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
@@ -436,6 +439,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [API v2 for apps](docs/api-v2.md)
 - [Thicket as an MCP server](docs/mcp-server.md)
 - [Skills](docs/skills.md)
+- [Model providers and subscriptions](docs/providers.md)
 - [Local models](docs/local-models.md)
 - [Web search](docs/web.md)
 - [Dashboard](docs/dashboard.md)

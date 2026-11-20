@@ -1,6 +1,7 @@
 # Local models
 
-Thicket can think with models on your own hardware instead of OpenRouter:
+Thicket can think with models on your own hardware instead of OpenRouter
+(or a hosted provider, see [Providers](providers.md)):
 anything that speaks the OpenAI chat API, such as
 [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai),
 llama.cpp's `llama-server` or vLLM. Your conversations are then

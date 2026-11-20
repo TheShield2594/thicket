@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/theshield2594/thicket/internal/llm"
 )
 
 // Defaults for model selection. All of these can be changed in chat.
@@ -51,8 +53,12 @@ type Config struct {
 	// ModelURL is the OpenAI-compatible API models are called through:
 	// OpenRouter by default, or a local server such as Ollama.
 	ModelURL    string
-	ModelAPIKey string // optional key for a self-hosted server
-	SearchURL   string // a SearXNG instance for web search (optional)
+	ModelAPIKey string // the key for a hosted provider, or optional for a self-hosted server
+	// Provider is THICKET_PROVIDER, a catalog provider's id (groq,
+	// opencode-go, nous...). It sets ModelURL unless THICKET_MODEL_URL is
+	// set too.
+	Provider  string
+	SearchURL string // a SearXNG instance for web search (optional)
 	// PluginEnv holds the plugins' THICKET_<NAME>_URL and
 	// THICKET_<NAME>_TOKEN_FILE variables as they were at start (a set but
 	// empty one is kept: it turns a plugin off). See internal/plugin.
@@ -100,6 +106,7 @@ func Load() (*Config, error) {
 		OpenRouterKey:         env("OPENROUTER_API_KEY", ""),
 		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
 		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
+		Provider:              strings.ToLower(strings.TrimSpace(env("THICKET_PROVIDER", ""))),
 		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
 		PluginEnv:             pluginEnv(os.Environ()),
 		Model:                 env("THICKET_MODEL", DefaultModel),
@@ -160,7 +167,23 @@ func Load() (*Config, error) {
 	if c.MessageRetention, err = envDuration("THICKET_MESSAGE_RETENTION", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
+	if p, ok := llm.ProviderByID(c.Provider); ok && os.Getenv("THICKET_MODEL_URL") == "" && os.Getenv("OPENROUTER_BASE_URL") == "" {
+		c.ModelURL = p.BaseURL
+	}
 	return c, nil
+}
+
+func (c *Config) providerKnown() bool {
+	_, ok := llm.ProviderByID(c.Provider)
+	return ok
+}
+
+func providerIDs() string {
+	var ids []string
+	for _, p := range llm.Providers {
+		ids = append(ids, p.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // WebBaseURL is where the web app is reached: THICKET_PUBLIC_URL, or the
@@ -213,6 +236,12 @@ func (c *Config) Check() []Problem {
 		os.Remove(f.Name())
 	}
 	switch {
+	case c.Provider != "" && !c.providerKnown():
+		out = append(out, Problem{true, "THICKET_PROVIDER " + c.Provider + " isn't a provider Thicket knows",
+			"Use one of: " + providerIDs() + ". For any other OpenAI-compatible service, set THICKET_MODEL_URL and THICKET_MODEL_API_KEY instead."})
+	case c.Provider != "" && c.ModelAPIKey == "":
+		out = append(out, Problem{false, "THICKET_PROVIDER is " + c.Provider + " but THICKET_MODEL_API_KEY is not set",
+			"Juni will ask for the key in a DM, or run thicket init."})
 	case c.ModelURL != DefaultModelURL:
 		out = append(out, Problem{false, "models run on " + c.ModelURL,
 			"Juni checks the server and picks a model on the first DM (set THICKET_MODEL to choose one yourself)."})

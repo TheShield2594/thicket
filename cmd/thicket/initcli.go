@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/setup"
@@ -79,7 +81,13 @@ func initFromEnv(ctx context.Context, s *setup.Setup, cfg *config.Config, out io
 		do   func() (string, error)
 	}
 	var steps []step
-	if cfg.ModelURL != config.DefaultModelURL {
+	if cfg.Provider != "" {
+		model := ""
+		if _, ok := os.LookupEnv("THICKET_MODEL"); ok {
+			model = cfg.Model
+		}
+		steps = append(steps, step{"THICKET_PROVIDER", func() (string, error) { return s.Provider(ctx, cfg.Provider, cfg.ModelAPIKey, model) }})
+	} else if cfg.ModelURL != config.DefaultModelURL {
 		model := ""
 		if _, ok := os.LookupEnv("THICKET_MODEL"); ok {
 			model = cfg.Model
@@ -115,7 +123,7 @@ func initFromEnv(ctx context.Context, s *setup.Setup, cfg *config.Config, out io
 		steps = append(steps, step{"THICKET_OWNER_TELEGRAM_ID", func() (string, error) { return s.Owner(ctx, "telegram:"+cfg.TelegramOwnerID) }})
 	}
 	if len(steps) == 0 {
-		fmt.Fprintln(out, "Nothing to store: none of OPENROUTER_API_KEY, THICKET_MODEL_URL, DISCORD_TOKEN, TELEGRAM_TOKEN, TZ, THICKET_DAILY_BUDGET_USD, THICKET_MONTHLY_BUDGET_USD, THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID is set.")
+		fmt.Fprintln(out, "Nothing to store: none of OPENROUTER_API_KEY, THICKET_PROVIDER, THICKET_MODEL_URL, DISCORD_TOKEN, TELEGRAM_TOKEN, TZ, THICKET_DAILY_BUDGET_USD, THICKET_MONTHLY_BUDGET_USD, THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID is set.")
 	}
 	var failed []string
 	for _, st := range steps {
@@ -211,13 +219,15 @@ func initAsk(ctx context.Context, s *setup.Setup, cfg *config.Config, in io.Read
 	// 1. Where models run.
 	now := "not set yet (Juni will ask for it in chat)"
 	switch {
+	case st.Provider != "":
+		now = st.Provider + ", using " + st.Model
 	case st.Local:
 		now = "your own server at " + st.ModelURL + ", using " + st.Model
 	case st.OpenRouterKey:
 		now = "OpenRouter, key stored"
 	}
-	fmt.Fprintf(out, "\n1. The model. Now: %s.\n   1 = OpenRouter (a key from https://openrouter.ai/keys)\n   2 = your own server (Ollama, LM Studio, llama.cpp, vLLM)\n", now)
-	switch a.line("   1, 2 or Enter: ") {
+	fmt.Fprintf(out, "\n1. The model. Now: %s.\n   1 = OpenRouter (a key from https://openrouter.ai/keys)\n   2 = your own server (Ollama, LM Studio, llama.cpp, vLLM)\n   3 = another provider or subscription (OpenCode, Nous Portal, OpenAI, Groq, ...)\n", now)
+	switch a.line("   1, 2, 3 or Enter: ") {
 	case "1":
 		a.until(func() string { return a.secret("   OpenRouter key: ") },
 			func(v string) (string, error) { return s.OpenRouterKey(ctx, v) })
@@ -237,6 +247,44 @@ func initAsk(ctx context.Context, s *setup.Setup, cfg *config.Config, in io.Read
 				model = a.line("   Model name: ")
 			}
 			return s.LocalModel(ctx, base, model, apiKey)
+		})
+	case "3":
+		for i, p := range llm.Providers {
+			fmt.Fprintf(out, "   %2d = %s\n", i+1, p.Name)
+		}
+		a.until(func() string { return a.line("   Provider (number or name): ") }, func(v string) (string, error) {
+			p, ok := llm.ProviderByID(v)
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 1 && n <= len(llm.Providers) {
+				p, ok = llm.Providers[n-1], true
+			}
+			if !ok {
+				return "", fmt.Errorf("pick a number from the list")
+			}
+			if p.Note != "" {
+				fmt.Fprintln(out, "   "+p.Note)
+			}
+			key := a.secret("   " + p.Name + " API key (from " + p.KeysURL + "): ")
+			model := ""
+			if s.Verify {
+				models, err := s.ProviderModels(ctx, p, key)
+				if err != nil {
+					return "", err
+				}
+				def, _ := p.PickModels(models)
+				shown := models
+				if len(shown) > 30 {
+					shown = append(append([]string{}, shown[:30]...), fmt.Sprintf("… and %d more", len(models)-30))
+				}
+				fmt.Fprintln(out, "   It has:", strings.Join(shown, ", "))
+				model = a.line("   Which one [" + def + "]: ")
+			} else {
+				model = a.line("   Model name: ")
+			}
+			msg, err := s.Provider(ctx, p.ID, key, model)
+			if err == nil && !p.Subscription {
+				msg += "; to count its cost in the spend caps, ask Juni to set model_usd_per_mtok_in and _out"
+			}
+			return msg, err
 		})
 	}
 
@@ -283,6 +331,10 @@ func initFinish(ctx context.Context, s *setup.Setup, cfg *config.Config, out io.
 	}
 	fmt.Fprintln(out, "\nThicket is set up:")
 	switch {
+	case st.Provider != "" && st.ModelAPIKey:
+		fmt.Fprintf(out, "  model      %s (%s)\n", st.Provider, st.Model)
+	case st.Provider != "":
+		fmt.Fprintf(out, "  model      %s, but no key yet: send it to Juni with the provider's name\n", st.Provider)
 	case st.Local:
 		fmt.Fprintf(out, "  model      your own server at %s, using %s\n", st.ModelURL, st.Model)
 	case st.OpenRouterKey:
