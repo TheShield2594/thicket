@@ -85,6 +85,7 @@ type Engine struct {
 	mailNudgeCh   chan struct{}
 	pollBusy      sync.Map       // trigger job id -> *atomic.Bool: a poll in flight (true: another was asked for meanwhile)
 	mailWork      sync.WaitGroup // RunMail's goroutines
+	mailAllowMu   sync.Mutex     // allowlist changes and their undo, one at a time
 
 	// ConnectChat connects a chat app ("discord", "telegram") with a bot
 	// token while Thicket runs, replacing a connection it already has. It

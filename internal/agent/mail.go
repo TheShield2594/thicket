@@ -313,6 +313,8 @@ func (e *Engine) ChangeMailAllow(ctx context.Context, by *store.User, sprig stri
 	if len(a)+len(r) > 100 {
 		return nil, errors.New("at most 100 changes at a time")
 	}
+	e.mailAllowMu.Lock()
+	defer e.mailAllowMu.Unlock()
 	var summary string
 	_, _, err = e.DB.ChangeMailAllow(ctx, c.ID, a, r, by.ID, func(added, removed []string) *store.TrailEntry {
 		var parts []string

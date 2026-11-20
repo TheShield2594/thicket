@@ -510,6 +510,21 @@ func TestMailAllowlistOwnership(t *testing.T) {
 	if _, err := e.UndoTrail(ctx, kim, change.ID); err == nil {
 		t.Fatal("a member undid an allowlist change on a shared sprig")
 	}
+	// A newer change: the older one can't be undone over it (it would
+	// undo the newer one too); the newest can, and then the older.
+	if _, err := e.ChangeMailAllow(ctx, owner, "fern", nil, []string{"@store.example"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.UndoTrail(ctx, owner, change.ID); err == nil || !strings.Contains(err.Error(), "changed again") {
+		t.Fatalf("an older allowlist change was undone over a newer one: %v", err)
+	}
+	newer, _ := a.DB.TrailOfKind(ctx, store.TrailAccess, "fern", 1)
+	if _, err := e.UndoTrail(ctx, owner, newer[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := a.DB.MailAllow(ctx, "fern"); strings.Join(l, ",") != "@store.example,shop@vendor.example" {
+		t.Fatalf("undoing the newer change left %v", l)
+	}
 	if _, err := e.UndoTrail(ctx, owner, change.ID); err != nil {
 		t.Fatal(err)
 	}

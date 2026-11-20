@@ -181,6 +181,17 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 			return "", fmt.Errorf("that cap was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
 		}
 	}
+	if u.Type == "mailallow" {
+		// Only the latest change to a sprig's mail allowlist is undone: an
+		// older one could put back an address a newer change took off.
+		e.mailAllowMu.Lock()
+		defer e.mailAllowMu.Unlock()
+		if latest, err := e.latestMailAllowChange(ctx, u.Character); err != nil {
+			return "", err
+		} else if latest != id {
+			return "", fmt.Errorf("that allowlist was changed again since, so undoing this would undo the newer change too: %w", ErrUndoStale)
+		}
+	}
 	if u.Type == "limits" || u.Type == "allow" || u.Type == "grant" {
 		// The same lock as every other change to a sprig's file (kidMu), so
 		// a stale copy never overwrites a newer change.
@@ -357,6 +368,22 @@ func (e *Engine) latestLimitsChange(ctx context.Context, sprig string) (*store.T
 		}
 	}
 	return nil, nil
+}
+
+// latestMailAllowChange is the newest allowlist change for a sprig still
+// in force (not undone), or 0.
+func (e *Engine) latestMailAllowChange(ctx context.Context, sprig string) (int64, error) {
+	entries, err := e.DB.TrailOfKind(ctx, store.TrailAccess, sprig, 200)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range entries {
+		var u trailUndo
+		if json.Unmarshal(t.Undo, &u) == nil && u.Type == "mailallow" {
+			return t.ID, nil
+		}
+	}
+	return 0, nil
 }
 
 func (e *Engine) latestCapChange(ctx context.Context, sprig, period string) (int64, error) {
