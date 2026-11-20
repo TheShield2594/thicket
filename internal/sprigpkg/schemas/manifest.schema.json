@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/manifest.schema.json",
+  "title": "Gallery sprig manifest.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "format", "id", "name", "author_key", "created_at", "files"],
+  "properties": {
+    "kind": {"type": "string", "enum": ["thicket-gallery-sprig"]},
+    "format": {"type": "integer", "minimum": 1},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 40},
+    "thicket_version": {"type": "string", "maxLength": 40},
+    "author_key": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "created_at": {"type": "string", "maxLength": 40},
+    "files": {
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  }
+}

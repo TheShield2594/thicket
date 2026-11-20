@@ -11,6 +11,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/agent"
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -111,6 +112,38 @@ func skillCmd(args []string) error {
 		return nil
 	case "starter":
 		return skillStarter(ctx, db, args[1:])
+	case "pending":
+		if len(args) != 2 {
+			return errors.New("usage: thicket skill pending SPRIG")
+		}
+		pend, err := sprigpkg.PendingSkills(cfg.CharactersDir, strings.ToLower(args[1]))
+		if err != nil {
+			return err
+		}
+		if len(pend) == 0 {
+			fmt.Printf("%s has no skills waiting for approval\n", args[1])
+		}
+		for _, k := range pend {
+			b, err := sprigpkg.FormatSkillFile(k)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("=== %s (waiting for approval)\n%s\n", k.ID, b)
+		}
+		return nil
+	case "approve":
+		if len(args) != 3 {
+			return errors.New("usage: thicket skill approve SPRIG ID")
+		}
+		sprig, id := strings.ToLower(args[1]), strings.ToLower(args[2])
+		k, err := sprigpkg.ApprovePendingSkill(cfg.CharactersDir, sprig, id)
+		if err != nil {
+			return err
+		}
+		_ = db.AddTrail(ctx, store.TrailEntry{Character: sprig, Kind: store.TrailSkill,
+			Summary: fmt.Sprintf("skill %s (from a gallery package) approved for %s", k.ID, sprig), Detail: "thicket skill approve"})
+		fmt.Printf("%s is %s's own skill now; a running Thicket picks it up within 10 seconds\n", k.ID, sprig)
+		return nil
 	case "promote":
 		if len(args) != 2 {
 			return errors.New("usage: thicket skill promote ID")
@@ -120,7 +153,7 @@ func skillCmd(args []string) error {
 	return fmt.Errorf("unknown skill command %q", args[0])
 }
 
-const skillUsage = "usage: thicket skill list | export ID [-o FILE] | import FILE | check FILE... | starter [ID... | all] | promote ID"
+const skillUsage = "usage: thicket skill list | export ID [-o FILE] | import FILE | check FILE... | starter [ID... | all] | promote ID | pending SPRIG | approve SPRIG ID"
 
 // skillPromote moves a sprig's own skill into the shared library. Its file
 // is kept as <id>.md.promoted so the sprig doesn't take it back on the

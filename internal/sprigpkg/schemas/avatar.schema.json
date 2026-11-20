@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/avatar.schema.json",
+  "title": "Gallery sprig sprig/avatar.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "body": {"type": "string", "maxLength": 40},
+    "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+    "hat": {"type": "string", "maxLength": 40},
+    "hat_color": {"type": "string", "pattern": "^(#[0-9a-fA-F]{6})?$"},
+    "accessory": {"type": "string", "maxLength": 40},
+    "expression": {"type": "string", "maxLength": 40}
+  }
+}

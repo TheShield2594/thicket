@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/character.schema.json",
+  "title": "Gallery sprig character.md front matter",
+  "description": "Only what describes the sprig. Who it belongs to, kids, parents, hosts, models, avatars and anything else tied to one install are not allowed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "role", "personality", "voice"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 40},
+    "nickname": {"type": "string", "maxLength": 40},
+    "role": {"type": "string", "minLength": 1, "maxLength": 200},
+    "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+    "personality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "traits": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}},
+        "quirks": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}},
+        "catchphrases": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}}
+      }
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "style": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}},
+        "never_say": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 200}},
+        "sounds_like": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"},
+        "speaks": {"type": "string", "enum": ["never", "when_spoken_to", "always"]}
+      }
+    },
+    "relationships": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user": {"type": "string", "maxLength": 500},
+        "characters": {"type": "object", "maxProperties": 20, "additionalProperties": {"type": "string", "maxLength": 500}}
+      }
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "pattern": "^(schedule|web|calendar|characters|admin|mcp:[a-z0-9][a-z0-9_-]{0,40}/\\*)$"}
+    },
+    "initiative": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_ins": {"type": "boolean"},
+        "follow_ups": {"type": "boolean"},
+        "quiet_hours": {"type": "string", "maxLength": 11},
+        "daily_messages": {"type": "integer", "minimum": 0, "maximum": 100},
+        "morning_brief": {"type": "string", "maxLength": 5},
+        "event_reminders": {"type": "integer", "minimum": 0, "maximum": 1440},
+        "due_reminders": {"type": "boolean"}
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"quiet": {"type": "boolean"}}
+    }
+  }
+}

@@ -59,8 +59,14 @@ Usage:
   thicket export-sprig ID [-o FILE] [--skill ID]...
                                       one shareable file for a sprig: character, routines, skills it
                                       uses, avatar and voice tests (never memories or secrets)
+  thicket export-sprig ID --for-gallery [-o FILE]
+                                      a signed package for the gallery: character, drawn avatar,
+                                      voice tests and skills only (needs thicket gallery keygen)
   thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--yes]
-                                      add a sprig from a package (shown first; tools start at draft)
+                                      add a sprig from a package (shown first; tools start at draft);
+                                      a gallery package is checked against its signature first
+  thicket gallery keygen | key | revoke KEYID | revoked
+                                      your author key for gallery packages, and revoked authors
   thicket sprig starter [ID...] [--kid USER] [--tier T] [--check-ins] [--yes]
                                       list the starter sprigs (homework helper, reading buddy, meal
                                       planner, bill tracker, chore chart), or add them (shown first)
@@ -73,6 +79,8 @@ Usage:
   thicket skill check FILE...         check skill files without importing them
   thicket skill starter [ID...|all]   list the example skills, or add them
   thicket skill promote ID            move a sprig's own skill into the shared library
+  thicket skill pending SPRIG         show a sprig's skills from a gallery package, waiting for approval
+  thicket skill approve SPRIG ID      make one of them the sprig's own skill
   thicket memory runs                 list recent automatic memory reviews
   thicket memory rollback RUN_ID      undo every change a memory review made
   thicket user list                   everyone, with their role and how they sign in
@@ -154,6 +162,8 @@ func main() {
 		err = exportSprigCmd(loadConfig(), args, os.Stdout)
 	case "import-sprig":
 		err = importSprigCmd(loadConfig(), args, os.Stdin, os.Stdout)
+	case "gallery":
+		err = galleryCmd(loadConfig(), args, os.Stdout)
 	case "sprig", "sprigs":
 		err = sprigCmd(loadConfig(), args, os.Stdin, os.Stdout)
 	case "memory":

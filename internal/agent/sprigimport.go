@@ -110,6 +110,9 @@ func (e *Engine) toolImportSprig(ctx context.Context, t *turn, args json.RawMess
 		}
 		return "", fmt.Errorf("no package called %q here; the packages sent are: %s", a.File, strings.Join(names, ", "))
 	}
+	if sprigpkg.IsGallery(raw) {
+		return e.proposeGalleryImport(ctx, t, raw, file, a.ID, a.Name)
+	}
 	p, stripped, err := e.readPackage(raw, a.ID, a.Name)
 	if err != nil {
 		var c *sprigpkg.Clash
@@ -150,6 +153,9 @@ func (e *Engine) importSprig(ctx context.Context, user *store.User, args json.Ra
 	raw, err := base64.StdEncoding.DecodeString(a.Package)
 	if err != nil {
 		return "", err
+	}
+	if sprigpkg.IsGallery(raw) {
+		return e.importGallery(ctx, user, a, raw)
 	}
 	p, _, err := e.readPackage(raw, a.ID, a.Name)
 	if err != nil {
