@@ -374,6 +374,13 @@ func (e *Engine) toolManageSkill(ctx context.Context, t *turn, args json.RawMess
 		return "", err
 	}
 	id := strings.ToLower(strings.TrimSpace(a.ID))
+	// Skills from a gallery package aren't in the library until approved.
+	switch a.Action {
+	case "pending":
+		return e.pendingSkills(ctx, t)
+	case "approve":
+		return e.proposeApproveSkill(ctx, t, id)
+	}
 	// Changes land in order and never under a sync, and the owner is read
 	// under the same lock, so a promotion can't slip in after the check.
 	e.skillSyncMu.Lock()

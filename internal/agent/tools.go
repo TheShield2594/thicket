@@ -386,8 +386,8 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "manage_skill",
 			Config:      true,
-			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins).",
-			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins). pending lists your skills from a gallery package that wait for approval (id can be empty); approve shows one to the user in full and asks them to approve it.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote","pending","approve"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
 			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolManageSkill,
@@ -423,7 +423,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "import_sprig",
-			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories.",
+			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories. A signed gallery package is checked against its author's key first; one from the same author as a sprig already here updates it.",
 			Params:      `{"type":"object","properties":{"file":{"type":"string","description":"the package's file name, as in the message"},"id":{"type":"string","description":"a different id, if its own is taken"},"name":{"type":"string","description":"a different name, if its own is taken"}},"required":["file"]}`,
 			Scope:       "characters",
 			ChatOnly:    true,

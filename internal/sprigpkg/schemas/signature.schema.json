@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/signature.schema.json",
+  "title": "Gallery sprig signature (detached Ed25519 signature over manifest.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["alg", "key_id", "public_key", "signature"],
+  "properties": {
+    "alg": {"type": "string", "enum": ["ed25519"]},
+    "key_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "public_key": {"type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$"},
+    "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"}
+  }
+}

@@ -520,6 +520,8 @@ func (e *Engine) internalAction(ctx context.Context, user *store.User, a *store.
 		return e.raiseLevel(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "import_sprig":
 		return e.importSprig(ctx, user, json.RawMessage(a.Args))
+	case internalPrefix + "approve_skill":
+		return e.approveSkill(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "add_starter":
 		return e.addStarter(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "create_kid_sprig":

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -21,6 +22,7 @@ import (
 )
 
 const exportSprigUsage = `usage: thicket export-sprig ID [-o FILE] [--skill ID]... [--memories [--shared] [--family]] [--user ID]
+       thicket export-sprig ID --for-gallery [-o FILE] [--skill ID]...
 
 Writes one shareable file: the sprig's character, routines, the skills it
 mentions (add others with --skill), avatar and voice tests. Secrets, chats,
@@ -29,7 +31,12 @@ the trail, the inbox and permission levels never go in.
 Memories go in only with --memories: what the sprig knows between it and
 one person (the owner, or --user ID). --shared adds that person's shared
 memories, --family the household's family memory. Leave them out of a
-package you give to someone else.`
+package you give to someone else.
+
+--for-gallery writes a signed package for the gallery instead: only the
+character, its drawn avatar, voice tests and skills (its own, and the shared
+ones it mentions), signed with your author key (thicket gallery keygen).
+No routines, memories or pictures; its tools must be whole scopes.`
 
 const importSprigUsage = `usage: thicket import-sprig FILE [--id ID] [--name NAME] [--user ID] [--memories locked|review|skip] [--yes]
 
@@ -56,9 +63,16 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	withShared := fs.Bool("shared", false, "")
 	withFamily := fs.Bool("family", false, "")
 	userID := fs.Int64("user", 0, "")
+	forGallery := fs.Bool("for-gallery", false, "")
 	pos, err := parseFlags(fs, args)
 	if err != nil || len(pos) != 1 {
 		return errors.New(exportSprigUsage)
+	}
+	if *forGallery {
+		if *withMem || *withShared || *withFamily || *userID != 0 {
+			return errors.New("a gallery package never carries memories: drop --memories, --shared, --family and --user")
+		}
+		return exportGallery(cfg, pos[0], *file, extra, out)
 	}
 	if (*withShared || *withFamily || *userID != 0) && !*withMem {
 		return errors.New("--shared, --family and --user choose which memories go in: add --memories\n\n" + exportSprigUsage)
@@ -136,6 +150,58 @@ func exportSprigCmd(cfg *config.Config, args []string, out io.Writer) error {
 	} else {
 		fmt.Fprintln(out, "No memories, secrets, chats or permission levels are in it.")
 	}
+	return nil
+}
+
+// exportGallery writes a signed gallery package.
+func exportGallery(cfg *config.Config, id, file string, extra []string, out io.Writer) error {
+	db, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	looks, err := secretCheck(ctx, cfg, db)
+	if err != nil {
+		return err
+	}
+	sec, err := openSecrets(ctx, cfg, db)
+	if err != nil {
+		return err
+	}
+	priv, err := gallerySigningKey(ctx, sec)
+	if err != nil {
+		return err
+	}
+	id = strings.ToLower(id)
+	if c, ok := findSprigFile(cfg, db, id); ok {
+		id = c.ID
+	}
+	lib, err := db.Skills(ctx)
+	if err != nil {
+		return err
+	}
+	g, err := sprigpkg.ExportGallery(sprigpkg.GallerySource{CharsDir: cfg.CharactersDir, ID: id, Library: lib, ExtraSkills: extra, Version: version, LooksSecret: looks})
+	if err != nil {
+		return err
+	}
+	b, err := g.Bytes(priv)
+	if err != nil {
+		return err
+	}
+	if file == "" {
+		file = id + sprigpkg.Ext
+	}
+	if err := writeNew(file, b); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Exported %s for the gallery to %s: %d voice tests, %d skills, signed by author key %s.\n", g.Char.DisplayName(), file,
+		countPrefix(g.Files, "voice_tests/"), len(g.Skills), g.Signer.KeyID)
+	fmt.Fprintf(out, "Fingerprint: %s\n", g.Signer.Fingerprint())
+	for _, o := range g.Omitted {
+		fmt.Fprintln(out, "Left out:", o)
+	}
+	fmt.Fprintln(out, "No routines, memories, pictures, secrets, chats or permission levels are in it.")
 	return nil
 }
 
@@ -246,7 +312,17 @@ func importSprigCmd(cfg *config.Config, args []string, in io.Reader, out io.Writ
 	default:
 		return errors.New("--memories is locked, review or skip\n\n" + importSprigUsage)
 	}
-	p, err := sprigpkg.ReadFile(pos[0])
+	raw, err := readPackageFile(pos[0])
+	if err != nil {
+		return err
+	}
+	if sprigpkg.IsGallery(raw) {
+		if *memMode != "" && *memMode != "skip" {
+			return errors.New("a gallery package carries no memories")
+		}
+		return importGalleryCmd(cfg, pos[0], raw, *id, *name, *userID, *yes, in, out)
+	}
+	p, err := sprigpkg.Read(bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -367,4 +443,107 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// readPackageFile reads a package file, refusing anything far larger than
+// a package can be.
+func readPackageFile(name string) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 64<<20+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 64<<20 {
+		return nil, errors.New("that file is far too large to be a sprig package")
+	}
+	return b, nil
+}
+
+// importGalleryCmd imports a signed gallery package, or updates a sprig
+// that came from the same author.
+func importGalleryCmd(cfg *config.Config, file string, raw []byte, id, name string, userID int64, yes bool, in io.Reader, out io.Writer) error {
+	db, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	revoked, err := sprigpkg.RevokedKeys(ctx, db)
+	if err != nil {
+		return err
+	}
+	g, err := sprigpkg.ReadGallery(bytes.NewReader(raw), revoked)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		// A new id for a new sprig; an update keeps the one it has.
+		g.Char.ID = strings.ToLower(strings.TrimSpace(id))
+	}
+	trust, err := g.CheckTrust(ctx, db, cfg.CharactersDir, revoked)
+	if err != nil {
+		return err
+	}
+	if err := g.Prepare("", name, trust.Update); err != nil {
+		return err
+	}
+	if !trust.Update {
+		reg := loadRegistry(cfg, db)
+		taken := func(s string) bool { _, ok := reg.FindByName(s); return ok }
+		if err := sprigpkg.CheckClash(g.Char, cfg.CharactersDir, taken); err != nil {
+			var c *sprigpkg.Clash
+			if errors.As(err, &c) && c.Suggest != "" {
+				return fmt.Errorf("%w: pass --%s %q", err, c.What, c.Suggest)
+			}
+			return err
+		}
+	}
+	if err := g.PlanSkills(ctx, db, agent.ValidateSkill); err != nil {
+		return err
+	}
+	preview, err := g.Preview(trust)
+	if err != nil {
+		return err
+	}
+	verb, ask, done := "Importing", "Import", "imported"
+	if trust.Update {
+		verb, ask, done = "Updating", "Update", "updated"
+	}
+	if _, err := fmt.Fprintf(out, "%s %s from the gallery package %s (made with Thicket %s). This is everything it will get:\n\n%s\n", verb, g.Char.DisplayName(), file, orUnknown(g.Manifest.ThicketVersion), preview); err != nil {
+		return fmt.Errorf("couldn't show the preview, so nothing was imported: %w", err)
+	}
+	if !yes {
+		fmt.Fprintf(out, "%s %s? [y/N] ", ask, g.Char.DisplayName())
+		line, _ := bufio.NewReader(in).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			fmt.Fprintln(out, "Nothing was written.")
+			return nil
+		}
+	}
+	var by int64
+	if u, err := memoryPerson(ctx, db, userID); err == nil {
+		by = u.ID
+	}
+	res, err := g.Install(ctx, db, cfg.CharactersDir, sprigpkg.GalleryInstallOptions{By: by, Update: trust.Update})
+	if err != nil {
+		return err
+	}
+	_ = db.AddTrail(ctx, store.TrailEntry{UserID: by, Character: g.Char.ID, Kind: store.TrailGrant,
+		Summary: fmt.Sprintf("%s %s from the gallery (author key %s); no scopes granted, tools at draft", done, g.Char.DisplayName(), g.Signer.KeyID)})
+	if trust.Update {
+		fmt.Fprintf(out, "Updated %s (%s). A running Thicket picks it up within 10 seconds.\n", g.Char.DisplayName(), g.Char.ID)
+	} else {
+		fmt.Fprintf(out, "Imported %s (%s) with no scopes granted and every tool at draft. A running Thicket picks it up within 10 seconds.\n", g.Char.DisplayName(), g.Char.ID)
+	}
+	if len(res.Pending) > 0 {
+		fmt.Fprintf(out, "Skills waiting for your approval: %s (thicket skill approve %s ID, or ask in chat).\n", strings.Join(res.Pending, ", "), g.Char.ID)
+	}
+	if len(g.Asks) > 0 && !trust.Update {
+		fmt.Fprintln(out, "It asks for:", strings.Join(g.Asks, ", ")+". Grant any you want in chat.")
+	}
+	return nil
 }

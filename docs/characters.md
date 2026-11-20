@@ -326,6 +326,37 @@ refused with a free one to pass as `--id` or `--name`.
 You can also send a `.sprig` file (up to 2 MB) to Juni in chat: she shows
 the same preview, and imports it only when you approve.
 
+### For the gallery
+
+A package for people you don't know is a **gallery package**: signed, and
+much smaller.
+
+```bash
+thicket gallery keygen                     # once: your author key
+thicket export-sprig fern --for-gallery    # writes a signed fern.sprig
+```
+
+It holds only `character.md`, `sprig/avatar.json` (the drawn avatar),
+`sprig/voice_tests/*.yaml`, `skills/*.md` (the sprig's own skills and the
+shared ones it mentions), `manifest.json` and `signature`, a detached
+Ed25519 signature over the manifest with your public key and key id. No
+routines, memories, pictures or model setting, and the export is refused
+if the sprig's `tools` name a single integration tool rather than a whole
+scope (`web`, `mcp:gmail/*`).
+
+`import-sprig` (and Juni in chat or the web app) recognises one and is
+much stricter with it: the signature is checked before anything else, then
+every file's hash; links, `..`, absolute paths, anything that isn't UTF-8
+Markdown, YAML or JSON, oversized files, files that fail their JSON Schema
+and MCP server or integration definitions anywhere are refused, each with
+the reason. The author's key is trusted on first use and shown with its
+fingerprint; a later package for the same sprig must be signed by the same
+key (it then updates the sprig and keeps your grants and levels). The
+sprig gets **no scopes** (what it asks for is listed), every tool starts
+at draft, and its skills wait, inactive, until you approve each one
+(`thicket skill approve fern ID`, or ask the sprig). It can never become a
+kid sprig. See [gallery.md](gallery.md) for the details.
+
 ## Bringing a character from another app
 
 ```bash

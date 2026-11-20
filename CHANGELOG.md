@@ -6,6 +6,22 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v33)
 
+- Signed gallery packages (schema v34, #81). `thicket gallery keygen`
+  makes your Ed25519 author key (kept in the encrypted secret store);
+  `thicket export-sprig ID --for-gallery` writes a signed package holding
+  only `character.md`, `sprig/avatar.json`, voice tests, `skills/*.md`,
+  `manifest.json` and `signature`, and refuses a sprig whose tools name
+  anything but whole scopes. Importing one (`import-sprig`, chat or the
+  web app) checks the signature first, then every hash, and refuses
+  links, `..`, absolute paths, non-UTF-8, anything but Markdown, YAML or
+  JSON, oversized files, files failing their JSON Schema, and MCP server
+  or integration definitions, each with the reason. Author keys are
+  trusted on first use (shown with their fingerprint); an update must be
+  signed by the same key; revoked keys (`thicket gallery revoke`) are
+  refused. The sprig gets no scopes and every tool at draft, can't become
+  a kid sprig, and its skills wait as its own, inactive, until approved
+  (`thicket skill approve`, or in chat). See [docs/gallery.md](docs/gallery.md).
+
 - A sprig's own skills and skill runs (schema v33, #80). A skill can
   belong to one sprig: only it is offered the skill. Its files live in
   `characters/<id>/skills/<skill>.md`, the source of truth, mirrored into
