@@ -376,14 +376,17 @@ type Approval struct {
 	CreatedAt time.Time
 	// EstimateID is the cost estimate the person was asked with (0: none).
 	EstimateID int64
+	// Floor is why it always asks whatever the level ("" = it isn't
+	// floored), shown in "needs you".
+	Floor string
 	// Reserved is set (by ApprovalByID) while its prompt is still being
 	// sent: nothing can answer it yet.
 	Reserved bool
 }
 
 func (s *Store) CreateApproval(ctx context.Context, a Approval) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
-		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID)
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id, floor) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID, a.Floor)
 	if err != nil {
 		return 0, err
 	}
@@ -400,9 +403,9 @@ func (s *Store) LatestPendingApproval(ctx context.Context, userID int64, chatRef
 	}
 	var a Approval
 	var at int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id FROM approvals
+	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, character, chat_ref, tool, args, status, result, created_at, estimate_id, floor FROM approvals
 		WHERE user_id = ? AND chat_ref = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`, userID, chatRef).
-		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID)
+		Scan(&a.ID, &a.UserID, &a.Character, &a.ChatRef, &a.Tool, &a.Args, &a.Status, &a.Result, &at, &a.EstimateID, &a.Floor)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -428,8 +431,8 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status string) (bo
 // can go on the prompt's buttons. Until OpenApproval nothing can answer it:
 // it is held as expired, with no decision time.
 func (s *Store) ReserveApproval(ctx context.Context, a Approval) (int64, error) {
-	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id) VALUES (?, ?, ?, ?, ?, 'expired', ?, ?)",
-		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID)
+	res, err := s.db.ExecContext(ctx, "INSERT INTO approvals (user_id, character, chat_ref, tool, args, status, created_at, estimate_id, floor) VALUES (?, ?, ?, ?, ?, 'expired', ?, ?, ?)",
+		a.UserID, a.Character, a.ChatRef, a.Tool, a.Args, s.unix(), a.EstimateID, a.Floor)
 	if err != nil {
 		return 0, err
 	}

@@ -235,12 +235,19 @@ func (e *Engine) toolUseSkill(ctx context.Context, t *turn, args json.RawMessage
 	if err != nil {
 		return "", err
 	}
-	run, err := e.DB.StartSkillRun(ctx, store.SkillRun{SkillID: k.ID, Version: k.Version, SprigID: t.char.ID, UserID: t.user.ID, ChatRef: t.chatRef})
+	// A sprig's own skill asks first for everything that changes
+	// something during its first runs, whatever the levels (floors.go).
+	forced := !k.Shared() && n < skillFloorRuns
+	run, err := e.DB.StartSkillRun(ctx, store.SkillRun{SkillID: k.ID, Version: k.Version, SprigID: t.char.ID, UserID: t.user.ID, ChatRef: t.chatRef, ForcedAsk: forced})
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Run %d started (your run number %d of this skill). Follow the steps; when you've finished or can't go on, call finish_skill with run %d.\n%s",
-		run, n+1, run, describeSkill(k)), nil
+	note := ""
+	if forced {
+		note = fmt.Sprintf(" This is one of the first %d runs of a new skill, so every step that changes something asks the user first: say which step you're about to take before each one.", skillFloorRuns)
+	}
+	return fmt.Sprintf("Run %d started (your run number %d of this skill).%s Follow the steps; when you've finished or can't go on, call finish_skill with run %d.\n%s",
+		run, n+1, note, run, describeSkill(k)), nil
 }
 
 func (e *Engine) toolFinishSkill(ctx context.Context, t *turn, args json.RawMessage) (string, error) {

@@ -186,8 +186,11 @@ override a sprig's rules: risky actions still ask for your OK, and what
 you ask for in the moment wins over what the skill says.
 
 Runs are counted per sprig and skill (the history of a skill says how
-many times the sprig asking has followed it), so a skill's first few
-runs can be treated with extra care.
+many times the sprig asking has followed it). The first three runs of a
+sprig's own skill ask first for everything that changes something,
+whatever the permission levels, and the sprig says which step it's about
+to take; shared skills don't. See
+[Calls that always ask](mcp.md#calls-that-always-ask-level-floors).
 
 ## A sprig's own skills
 

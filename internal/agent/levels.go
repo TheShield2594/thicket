@@ -46,7 +46,8 @@ func levelFor(c *character.Character, t *Tool) store.LevelFor {
 	return store.LevelFor{Granted: granted(t), Private: c.Tier() == character.TierSolo}
 }
 
-// toolLevel returns the level that applies to this sprig and tool.
+// toolLevel returns the level configured for this sprig and tool. A
+// call's floor (floors.go) can make it stricter in gate.
 func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *Tool) string {
 	if c.IsKid() {
 		return store.LevelRead // whatever is stored: kid sprigs never change anything
@@ -68,13 +69,24 @@ func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *To
 // gate applies the level to a call. It returns ok=true when the tool may
 // run now; otherwise msg is what the model is told instead.
 func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok bool) {
-	switch lv := e.toolLevel(ctx, t.char, tool); {
+	lv := e.toolLevel(ctx, t.char, tool)
+	floor, floored := e.floorFor(ctx, t, tool)
+	if floored {
+		e.noteFloor(ctx, t, tool, lv, floor)
+		lv = stricter(lv, floor.Level) // a floor can only make it stricter
+	}
+	switch {
 	case lv == store.LevelAct && e.holdTainted(ctx, t, tool, args):
 		return e.holdAction(ctx, t, tool, args), false
 	case lv == store.LevelAct:
 		return "", true
 	case lv == store.LevelAsk:
-		return e.requestApprovalNote(ctx, t, tool, args, e.undoNote(ctx, tool, args)), false
+		note := e.undoNote(ctx, tool, args)
+		if floored {
+			t.askFloor = floor.Reason
+			note = strings.TrimSpace(floorLine(floor) + "\n" + note)
+		}
+		return e.requestApprovalNote(ctx, t, tool, args, note), false
 	case !changes(tool):
 		return "", true // read and draft both allow reading
 	case lv == store.LevelRead:

@@ -78,8 +78,11 @@ type turn struct {
 	// measured against; toolUSD adds up the tool estimates so far;
 	// toolEstimate is the estimate for the tool call running now;
 	// promptChars is the size of the turn's prompt.
-	costOK       bool
-	estimateID   int64
+	costOK     bool
+	estimateID int64
+	// askFloor is why the approval being requested always asks (a level
+	// floor, floors.go), "" if it isn't floored.
+	askFloor     string
 	toolUSD      float64
 	toolEstimate int64
 	promptChars  int
@@ -543,8 +546,8 @@ func (e *Engine) requestApprovalNote(ctx context.Context, t *turn, tool *Tool, a
 		note += "\n"
 	}
 	msg := fmt.Sprintf("🔒 I need your OK before I do this:\n**%s**\n```json\n%s\n```\n%sReply **approve** or **deny**.", tool.Label(), truncate(pretty, 1500), note)
-	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args), EstimateID: t.askEstimate}
-	t.askEstimate = 0
+	a := &store.Approval{UserID: t.user.ID, Character: t.char.ID, ChatRef: chatRef, Tool: tool.Name, Args: string(args), EstimateID: t.askEstimate, Floor: t.askFloor}
+	t.askEstimate, t.askFloor = 0, ""
 	if t.chatRef != "" {
 		// Posted after the reply; registered by respond once delivered.
 		t.afterReply = append(t.afterReply, post{text: msg, approval: a})

@@ -397,6 +397,26 @@ func (s *Store) SkillRunCount(ctx context.Context, skillID, sprig string) (int, 
 	return n, err
 }
 
+// ForcedRun is a run that asks first (SkillRun.ForcedAsk): which skill,
+// and which of the sprig's runs of it this is (1 for the first).
+type ForcedRun struct {
+	SkillID string
+	Number  int
+}
+
+// ForcedSkillRun returns the newest run a sprig is still following in a
+// chat that asks first, started after since; ErrNotFound if none.
+func (s *Store) ForcedSkillRun(ctx context.Context, sprig, chatRef string, since time.Time) (ForcedRun, error) {
+	var r ForcedRun
+	err := s.db.QueryRowContext(ctx, `SELECT r.skill_id, (SELECT COUNT(*) FROM skill_runs p WHERE p.skill_id = r.skill_id AND p.sprig_id = r.sprig_id AND p.id <= r.id)
+		FROM skill_runs r WHERE r.sprig_id = ? AND r.chat_ref = ? AND r.outcome = '' AND r.forced_ask = 1 AND r.started_at >= ?
+		ORDER BY r.id DESC LIMIT 1`, sprig, chatRef, since.Unix()).Scan(&r.SkillID, &r.Number)
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
 // SkillRuns lists a skill's runs, newest first (sprig "" = every sprig's).
 func (s *Store) SkillRuns(ctx context.Context, skillID, sprig string, limit int) ([]SkillRun, error) {
 	q := "SELECT id, skill_id, version, sprig_id, user_id, chat_ref, started_at, finished_at, outcome, note, forced_ask FROM skill_runs WHERE skill_id = ?"

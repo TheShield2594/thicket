@@ -4,7 +4,18 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v33)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v34)
+
+- Level floors (schema v34, #79): some calls ask first whatever their
+  permission level. During the first three runs of a sprig's own skill,
+  everything it does that changes something asks first; an integration
+  can floor its next calls by putting `"thicket/floor": {"min_level":
+  "ask", "reason": "payment page"}` in a tool result's `_meta` (it can
+  raise a floor, never lower one). The stricter of the level and the
+  floor applies, so `draft` and `read` stay as they are. The prompt says
+  why ("Always asks: payment page."), as does "needs you"; the trail
+  records the level, the floor and the reason. See
+  [Calls that always ask](docs/mcp.md#calls-that-always-ask-level-floors).
 
 - A sprig's own skills and skill runs (schema v33, #80). A skill can
   belong to one sprig: only it is offered the skill. Its files live in

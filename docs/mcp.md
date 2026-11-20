@@ -225,6 +225,41 @@ everywhere, as does the dashboard's "needs you" list.
   `set_tool_approval` carry over (`always` became `ask`, `never` became
   `act`, for every sprig).
 
+### Calls that always ask (level floors)
+
+Some calls ask first whatever level the tool is at. A **floor** is a
+minimum level for one call: the level that applies is the stricter of
+the tool's level and the floor. A floor of `ask` turns `act` into `ask`,
+and leaves `draft` and `read` as they are (a floored call at `draft` is
+still only drafted). Floors apply only to calls that change something.
+
+- **A sprig's own skill, first three runs.** While a sprig follows one of
+  its own skills ([A sprig's own skills](skills.md#a-sprigs-own-skills))
+  for the first, second or third time, everything it does that changes
+  something asks first. Shared skills aren't floored.
+- **An integration that says so.** A plugin (or any MCP server) can put
+  a floor in a tool result's `_meta`:
+
+  ```json
+  {"content": [...], "_meta": {"thicket/floor": {"min_level": "ask", "reason": "payment page"}}}
+  ```
+
+  That integration's next calls that change something, by that sprig in
+  that chat, ask first for 30 minutes (each result that carries it starts
+  the 30 minutes again). A server can only raise a floor: `min_level`
+  looser than `ask` (or missing, or unreadable) counts as `ask`, and a
+  later result can't remove it. The reason is shortened to one plain line
+  of 80 characters.
+
+The approval prompt says why ("Always asks: payment page."), on every
+chat app and in "needs you" (the dashboard, `needs_you`, `thicket inbox`
+and `GET /api/v2/approvals` as `always_asks`). Each floored call goes in
+the trail with the tool's level, the floor and its reason. Nothing a
+sprig writes and no outside content can set or remove a floor: floors
+come only from Thicket's own skill-run records and from the result
+metadata, never from text. Plugin floors are kept in memory, so a restart
+clears them.
+
 ## Saying what was done, and undo
 
 Every action a sprig takes that changes something (an integration tool

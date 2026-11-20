@@ -85,6 +85,7 @@ type Engine struct {
 	chatLocks   sync.Map   // chatRef -> *sync.Mutex
 	active      sync.Map   // chatRef -> character id
 	drafts      sync.Map   // user id -> *character.Character
+	floors      sync.Map   // floorKey -> *floorEntry (floors.go)
 	kidDrafts   sync.Map   // user id -> *kidDraft
 	kidMu       sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
 	kidTurns    sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid

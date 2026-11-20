@@ -40,7 +40,21 @@ func (t Tool) ReadOnly() bool {
 type CallResult struct {
 	Text    string
 	IsError bool
+	// Floor is a minimum permission level the server asked for the calls
+	// that follow (its result's _meta "thicket/floor"), nil if none. It
+	// can only make Thicket stricter: see agent/floors.go.
+	Floor *FloorMeta
 }
+
+// FloorMeta is what a server puts in a tool result's _meta under
+// FloorMetaKey, e.g. {"min_level": "ask", "reason": "payment page"}.
+type FloorMeta struct {
+	MinLevel string `json:"min_level"`
+	Reason   string `json:"reason"`
+}
+
+// FloorMetaKey is the _meta key a plugin uses to set a level floor.
+const FloorMetaKey = "thicket/floor"
 
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -243,8 +257,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		StructuredContent json.RawMessage `json:"structuredContent"`
-		IsError           bool            `json:"isError"`
+		StructuredContent json.RawMessage            `json:"structuredContent"`
+		IsError           bool                       `json:"isError"`
+		Meta              map[string]json.RawMessage `json:"_meta"`
 	}
 	if err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": args}, &res); err != nil {
 		return nil, err
@@ -262,7 +277,15 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	if b.Len() == 0 && len(res.StructuredContent) > 0 {
 		b.Write(res.StructuredContent)
 	}
-	return &CallResult{Text: strings.TrimSpace(b.String()), IsError: res.IsError}, nil
+	out := &CallResult{Text: strings.TrimSpace(b.String()), IsError: res.IsError}
+	if raw, ok := res.Meta[FloorMetaKey]; ok {
+		var f FloorMeta
+		if json.Unmarshal(raw, &f) != nil {
+			f = FloorMeta{} // present but unreadable: still a floor (fail closed)
+		}
+		out.Floor = &f
+	}
+	return out, nil
 }
 
 func (c *Client) Close() error { return c.t.close() }

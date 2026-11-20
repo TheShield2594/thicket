@@ -166,6 +166,11 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 					if err != nil {
 						return "", err
 					}
+					if res.Floor != nil {
+						f := pluginFloor(st.Server, res.Floor)
+						e.raiseFloor(t.char.ID, t.chatRef, "mcp:"+st.Server, f)
+						e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, fmt.Sprintf("%s set a floor of %s: %s", st.Server, f.Level, f.Reason), "")
+					}
 					if res.IsError {
 						return "", errors.New(res.Text)
 					}
