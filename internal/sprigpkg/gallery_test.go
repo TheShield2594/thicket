@@ -209,8 +209,17 @@ func TestGalleryRoundTrip(t *testing.T) {
 	if len(pend) != 2 {
 		t.Fatalf("pending skills = %v", pend)
 	}
-	k, err := ApprovePendingSkill(dst.chars, "fern", "seed-swap")
+	// Only the version shown is approved.
+	if _, err := ApprovePendingSkill(dst.chars, "fern", "seed-swap", []byte("---\nid: seed-swap\n---\nsomething else\n")); !errors.Is(err, ErrPendingChanged) {
+		t.Fatalf("a different version was approved: %v", err)
+	}
+	shown, err := FormatSkillFile(pend[0])
 	must(t, err)
+	k, err := ApprovePendingSkill(dst.chars, "fern", pend[0].ID, shown)
+	must(t, err)
+	if k.ID != "seed-swap" {
+		t.Fatalf("approved %s", k.ID)
+	}
 	if k.SprigID != "fern" {
 		t.Fatal("approved skill isn't the sprig's")
 	}
@@ -238,6 +247,9 @@ func TestGalleryRoundTrip(t *testing.T) {
 	}
 	must(t, up.Prepare("", "", true))
 	must(t, up.PlanSkills(ctx, dst.db, nil))
+	if p, _ := up.Preview(trust); strings.Contains(p, "Every tool starts at draft") || !strings.Contains(p, "levels") {
+		t.Fatalf("an update's preview promises draft:\n%s", p)
+	}
 	_, err = up.Install(ctx, dst.db, dst.chars, GalleryInstallOptions{By: dst.owner.ID, Update: true})
 	must(t, err)
 	b, _ = os.ReadFile(filepath.Join(dst.chars, "fern.md"))
@@ -260,6 +272,116 @@ func TestGalleryRoundTrip(t *testing.T) {
 	}
 	if _, err := up.CheckTrust(ctx, dst.db, dst.chars, []string{up.Signer.KeyID}); err == nil || !strings.Contains(err.Error(), "revoked") {
 		t.Fatalf("revoked key at trust: %v", err)
+	}
+	// Revoked after the preview, before the install: refused at install.
+	must(t, dst.db.SetSetting(ctx, store.GalleryRevokedKey, up.Signer.KeyID))
+	if _, err := up.Install(ctx, dst.db, dst.chars, GalleryInstallOptions{By: dst.owner.ID, Update: true}); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("installed with a key revoked after the preview: %v", err)
+	}
+}
+
+// An update whose files can't all be put in place leaves the sprig as it
+// was.
+func TestPublishAllRestores(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "a.yaml")
+	must(t, os.WriteFile(first, []byte("old"), 0o644))
+	blocked := filepath.Join(dir, "b.yaml")
+	must(t, os.MkdirAll(filepath.Join(blocked, "x"), 0o755)) // a non-empty directory: rename onto it fails
+	fresh := filepath.Join(dir, "new.md")
+	err := publishAll([]stagedFile{{dest: first, data: []byte("new")}, {dest: fresh, data: []byte("n")}, {dest: blocked, data: []byte("b")}})
+	if err == nil {
+		t.Fatal("publishAll succeeded onto a directory")
+	}
+	if b, _ := os.ReadFile(first); string(b) != "old" {
+		t.Fatalf("first file not restored: %q", b)
+	}
+	if _, err := os.Stat(fresh); err == nil {
+		t.Fatal("a new file was left behind")
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, ".gallery-*"))
+	if len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+}
+
+// A skill skipped for an id clash is still shown in full.
+func TestPreviewShowsSkippedSkills(t *testing.T) {
+	ctx := context.Background()
+	src := newInstall(t)
+	src.addFern(t, "")
+	g := src.exportGallery(t)
+	raw, err := g.Bytes(testKey(t))
+	must(t, err)
+	dst := newInstall(t)
+	_, err = dst.db.SaveSkill(ctx, store.Skill{ID: "seed-swap", Name: "Mine", Description: "Use when mine", Body: "1. mine"}, 0)
+	must(t, err)
+	got, err := ReadGallery(bytes.NewReader(raw), nil)
+	must(t, err)
+	trust, err := got.CheckTrust(ctx, dst.db, dst.chars, nil)
+	must(t, err)
+	must(t, got.Prepare("", "", false))
+	must(t, got.PlanSkills(ctx, dst.db, nil))
+	p, err := got.Preview(trust)
+	must(t, err)
+	if !strings.Contains(p, "NOT imported) skills/seed-swap.md") || !strings.Contains(p, "2. offer them") {
+		t.Fatalf("skipped skill not shown in full:\n%s", p)
+	}
+	if strings.Join(got.SkillIDs(), ",") != "watering-plan" {
+		t.Fatalf("skills to install = %v", got.SkillIDs())
+	}
+}
+
+// Export refuses what import would: a file over the per-file limit, and a
+// manifest field too long.
+func TestGalleryExportMatchesImportLimits(t *testing.T) {
+	src := newInstall(t)
+	src.addFern(t, "")
+	vt := filepath.Join(src.chars, "fern", "voice_tests", "02-long.yaml")
+	must(t, os.WriteFile(vt, []byte("prompt: hi\n# "+strings.Repeat("x", galleryMaxFileBytes)+"\n"), 0o644))
+	lib, _ := src.db.Skills(context.Background())
+	_, err := ExportGallery(GallerySource{CharsDir: src.chars, ID: "fern", Library: lib, Version: "test", LooksSecret: func(string) bool { return false }})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("oversize file exported: %v", err)
+	}
+	must(t, os.Remove(vt))
+	g := src.exportGallery(t)
+	g.Manifest.ThicketVersion = strings.Repeat("9", 41)
+	if _, err := g.Bytes(testKey(t)); err == nil {
+		t.Fatal("signed a manifest import refuses")
+	}
+}
+
+// Only one YAML document per file; nothing after the archive's end.
+func TestGalleryStrictStream(t *testing.T) {
+	if err := validateYAML([]byte("prompt: hi\n---\nsneaky: true\n"), "voicetest", "voice test"); err == nil {
+		t.Fatal("a second YAML document passed")
+	}
+	if err := validateYAML([]byte("prompt: hi\n# just a comment\n"), "voicetest", "voice test"); err != nil {
+		t.Fatalf("one document with a comment: %v", err)
+	}
+	priv := testKey(t)
+	raw := signed(t, priv, "fern", goodFiles(t))
+	if _, err := ReadGallery(bytes.NewReader(raw), nil); err != nil {
+		t.Fatal(err)
+	}
+	// Data after the tar's end marker, inside the same gzip stream.
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	must(t, err)
+	plain, err := io.ReadAll(gz)
+	must(t, err)
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	w.Write(append(plain, []byte("extra unsigned data")...))
+	w.Close()
+	if _, err := ReadGallery(bytes.NewReader(b.Bytes()), nil); err == nil || !strings.Contains(err.Error(), "after its last file") {
+		t.Fatalf("trailing data accepted: %v", err)
+	}
+	// A broken gzip ending (checksum) is refused too.
+	bad := append([]byte(nil), raw...)
+	bad[len(bad)-6] ^= 0xff
+	if _, err := ReadGallery(bytes.NewReader(bad), nil); err == nil {
+		t.Fatal("a corrupt gzip trailer was accepted")
 	}
 }
 

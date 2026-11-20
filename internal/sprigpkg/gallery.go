@@ -168,8 +168,20 @@ type Gallery struct {
 	// Omitted says what export left out and why.
 	Omitted []string
 	// Skipped are package skills not installed (an id already used here),
-	// with why; set by PlanGallery.
-	Skipped []string
+	// with why; set by PlanSkills. SkippedSkills are those skills, so the
+	// preview still shows every file in full.
+	Skipped       []string
+	SkippedSkills []store.Skill
+}
+
+// SkillIDs are the ids of the skills that will be installed, in order:
+// what an approval was shown.
+func (g *Gallery) SkillIDs() []string {
+	out := make([]string, 0, len(g.Skills))
+	for _, k := range g.Skills {
+		out = append(out, k.ID)
+	}
+	return out
 }
 
 // GallerySource is what ExportGallery reads.
@@ -277,6 +289,9 @@ func ExportGallery(src GallerySource) (*Gallery, error) {
 	// The same checks import makes, so an export is never refused there.
 	total := 64 << 10
 	for name, data := range entries {
+		if len(data) > galleryMaxFileBytes {
+			return nil, fmt.Errorf("not exported: %s is too large (at most %d KB per file)", name, galleryMaxFileBytes>>10)
+		}
 		if err := checkGalleryFile(name, data); err != nil {
 			return nil, fmt.Errorf("not exported: %s: %w", name, err)
 		}
@@ -333,6 +348,13 @@ func (g *Gallery) Write(w io.Writer, priv ed25519.PrivateKey) error {
 	man, err := json.MarshalIndent(g.Manifest, "", "  ")
 	if err != nil {
 		return err
+	}
+	// Never sign a manifest import would refuse (a long version, say).
+	if _, err := readGalleryManifest(man); err != nil {
+		return fmt.Errorf("not exported: %w", err)
+	}
+	if len(man) > galleryMaxFileBytes {
+		return fmt.Errorf("not exported: the manifest is too large (at most %d KB)", galleryMaxFileBytes>>10)
 	}
 	sig, err := json.MarshalIndent(Signature{Alg: "ed25519", KeyID: g.Signer.KeyID, PublicKey: g.Signer.EncodedKey(),
 		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(priv, man))}, "", "  ")
@@ -414,12 +436,26 @@ func ReadGallery(r io.Reader, revoked []string) (*Gallery, error) {
 	if err != nil {
 		return nil, errors.New("not a sprig package (it isn't a gzipped archive)")
 	}
-	tr := tar.NewReader(io.LimitReader(gz, galleryMaxTotal+1<<20))
+	stream := io.LimitReader(gz, galleryMaxTotal+1<<20)
+	tr := tar.NewReader(stream)
 	files := map[string][]byte{}
 	total := 0
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			// Past the end marker there may be only zero padding, then a
+			// clean end of the gzip stream (its checksum included):
+			// nothing the signature doesn't cover rides along.
+			rest, err := io.ReadAll(stream)
+			if err != nil {
+				return nil, fmt.Errorf("not a sprig package: %w", err)
+			}
+			if len(bytes.Trim(rest, "\x00")) > 0 {
+				return nil, errors.New("the package has data after its last file")
+			}
+			if n, _ := gz.Read(make([]byte, 1)); n > 0 {
+				return nil, fmt.Errorf("the package is too large (at most %d MB)", galleryMaxTotal>>20)
+			}
 			break
 		}
 		if err != nil {
@@ -712,11 +748,17 @@ func checkGalleryFile(name string, b []byte) error {
 	return nil
 }
 
-// validateYAML decodes YAML and checks it against a schema.
+// validateYAML decodes YAML and checks it against a schema. It must be
+// one document: a second one would be installed unchecked.
 func validateYAML(b []byte, schemaName, what string) error {
 	var raw any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	var more any
+	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s: must be a single YAML document", what)
 	}
 	raw, err := normalize(raw)
 	if err != nil {
@@ -898,7 +940,7 @@ func (g *Gallery) Prepare(id, name string, update bool) error {
 // the rest with valid (agent.ValidateSkill).
 func (g *Gallery) PlanSkills(ctx context.Context, db *store.Store, valid func(store.Skill) error) error {
 	var keep []store.Skill
-	g.Skipped = nil
+	g.Skipped, g.SkippedSkills = nil, nil
 	for _, k := range g.Skills {
 		if valid != nil {
 			if err := valid(k); err != nil {
@@ -912,9 +954,11 @@ func (g *Gallery) PlanSkills(ctx context.Context, db *store.Store, valid func(st
 			return err
 		case cur.Shared():
 			g.Skipped = append(g.Skipped, fmt.Sprintf("%s (your shared library already has a skill with this id; the sprig is offered that one)", k.ID))
+			g.SkippedSkills = append(g.SkippedSkills, k)
 			continue
 		case cur.SprigID != g.Char.ID:
 			g.Skipped = append(g.Skipped, fmt.Sprintf("%s (another sprig here has its own skill with this id)", k.ID))
+			g.SkippedSkills = append(g.SkippedSkills, k)
 			continue
 		}
 		keep = append(keep, k)
@@ -960,6 +1004,13 @@ func (g *Gallery) Preview(t Trust) (string, error) {
 		}
 		b.WriteString(NewFileDiff(c.ID+"/skills/"+k.ID+".md"+PendingSuffix, string(f)))
 	}
+	for _, k := range g.SkippedSkills {
+		f, err := FormatSkillFile(k)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(NewFileDiff("(in the package, NOT imported) skills/"+k.ID+".md", string(f)))
+	}
 	b.WriteString("```\n")
 	if len(g.Skills) > 0 {
 		b.WriteString("Skills arrive as the sprig's own, inactive until you approve each one.\n")
@@ -972,7 +1023,10 @@ func (g *Gallery) Preview(t Trust) (string, error) {
 	} else {
 		b.WriteString("It asks for no scopes.\n")
 	}
-	b.WriteString("Every tool starts at draft. No routines, memories, chats or secrets come with it.\n")
+	if !t.Update {
+		b.WriteString("Every tool starts at draft. ")
+	}
+	b.WriteString("No routines, memories, chats or secrets come with it.\n")
 	return b.String(), nil
 }
 
@@ -997,23 +1051,27 @@ type GalleryInstalled struct {
 // replaces what the package describes. The author key is trusted and the
 // sprig recorded as coming from it.
 func (g *Gallery) Install(ctx context.Context, db *store.Store, charsDir string, opts GalleryInstallOptions) (*GalleryInstalled, error) {
-	if opts.Update {
-		return g.update(ctx, db, charsDir, opts)
+	// Checked again here, after the person said yes: a key revoked while
+	// the preview waited isn't installed (CLI and chat both come here).
+	revoked, err := RevokedKeys(ctx, db)
+	if err != nil {
+		return nil, err
 	}
-	c := g.Char
+	if slices.Contains(revoked, g.Signer.KeyID) {
+		return nil, fmt.Errorf("the author key %s has been revoked, so packages signed with it aren't imported", g.Signer.KeyID)
+	}
 	if err := os.MkdirAll(charsDir, 0o755); err != nil {
 		return nil, err
 	}
-	lock := filepath.Join(charsDir, c.ID+lockSuffix)
-	lf, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	c := g.Char
+	unlock, err := lockSprig(charsDir, c.ID)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("%q is being imported already", c.ID)
-		}
 		return nil, err
 	}
-	lf.Close()
-	defer os.Remove(lock)
+	defer unlock()
+	if opts.Update {
+		return g.update(ctx, db, charsDir, opts)
+	}
 	if _, err := os.Stat(filepath.Join(charsDir, c.ID+".md")); err == nil {
 		return nil, &Clash{What: "id", Value: c.ID}
 	}
@@ -1133,11 +1191,30 @@ func (g *Gallery) Install(ctx context.Context, db *store.Store, charsDir string,
 		return nil, undo(err)
 	}
 	res.Path = dest
-	// Trusted once the sprig is in: a failed import trusts nothing.
-	if err := db.TrustGalleryKey(ctx, store.GalleryKey{KeyID: g.Signer.KeyID, PublicKey: g.Signer.EncodedKey(), FirstSprig: c.ID, TrustedBy: opts.By}); err != nil {
-		return res, fmt.Errorf("%s was imported, but its author key couldn't be stored: %w", c.DisplayName(), err)
+	// Trusted once the sprig is in: a failed import trusts nothing. If
+	// this write fails, the sprig's gallery record is already there, so
+	// importing the package again takes the update path, which stores the
+	// key (update does).
+	if err := db.TrustGalleryKey(bg, store.GalleryKey{KeyID: g.Signer.KeyID, PublicKey: g.Signer.EncodedKey(), FirstSprig: c.ID, TrustedBy: opts.By}); err != nil {
+		return res, fmt.Errorf("%s was imported, but its author key couldn't be stored (import the same package again to finish): %w", c.DisplayName(), err)
 	}
 	return res, nil
+}
+
+// lockSprig reserves a sprig id while its files are written (an import,
+// an update, or a pending skill's approval), across processes: the CLI and
+// a running Thicket use the same lock file.
+func lockSprig(charsDir, id string) (func(), error) {
+	lock := filepath.Join(charsDir, id+lockSuffix)
+	lf, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("%q is being imported or changed already; try again in a moment", id)
+		}
+		return nil, err
+	}
+	lf.Close()
+	return func() { os.Remove(lock) }, nil
 }
 
 // update replaces an earlier import with a newer package from the same
@@ -1169,35 +1246,117 @@ func (g *Gallery) update(ctx context.Context, db *store.Store, charsDir string, 
 		return nil, errors.New(strings.Join(probs, "; "))
 	}
 	res := &GalleryInstalled{Path: path}
+	// Every new file is written beside its destination first; only when
+	// all are staged are they moved into place, and if one move fails the
+	// ones already moved are put back as they were.
+	var plan []stagedFile
 	for _, rel := range sortedKeys(g.Files) {
 		if !galleryPath.MatchString(sprigDirPrefix + rel) {
 			return nil, fmt.Errorf("refusing to write %q", rel)
 		}
-		if err := writeAtomic(filepath.Join(charsDir, id, filepath.FromSlash(rel)), g.Files[rel]); err != nil {
-			return nil, err
-		}
+		plan = append(plan, stagedFile{dest: filepath.Join(charsDir, id, filepath.FromSlash(rel)), data: g.Files[rel]})
 	}
 	for _, k := range g.Skills {
 		f, err := FormatSkillFile(k)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeAtomic(pendingPath(charsDir, id, k.ID), f); err != nil {
-			return nil, err
-		}
+		plan = append(plan, stagedFile{dest: pendingPath(charsDir, id, k.ID), data: f})
 		res.Pending = append(res.Pending, k.ID)
 	}
 	md, err := character.Marshal(c)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeAtomic(path, md); err != nil {
-		return nil, err
+	plan = append(plan, stagedFile{dest: path, data: md}) // last: the sprig changes once the rest is in
+	if err := publishAll(plan); err != nil {
+		return nil, fmt.Errorf("%w (the sprig was left as it was)", err)
 	}
-	if err := db.PutGallerySprig(ctx, store.GallerySprig{SprigID: id, PackageID: g.Manifest.ID, KeyID: g.Signer.KeyID}); err != nil {
+	bg := context.WithoutCancel(ctx)
+	if err := db.PutGallerySprig(bg, store.GallerySprig{SprigID: id, PackageID: g.Manifest.ID, KeyID: g.Signer.KeyID}); err != nil {
 		return res, err
 	}
+	// Finishes a first import whose key write failed (Install).
+	if err := db.TrustGalleryKey(bg, store.GalleryKey{KeyID: g.Signer.KeyID, PublicKey: g.Signer.EncodedKey(), FirstSprig: id, TrustedBy: opts.By}); err != nil {
+		return res, fmt.Errorf("%s was updated, but its author key couldn't be stored: %w", c.DisplayName(), err)
+	}
 	return res, nil
+}
+
+// stagedFile is one file an update writes.
+type stagedFile struct {
+	dest string
+	data []byte
+	tmp  string
+	old  []byte // what was there (when existed)
+	had  bool
+}
+
+// publishAll writes every file in plan, all or none: each is staged in a
+// temporary file next to its destination, then the temporary files are
+// renamed into place in order. If a rename fails, the files already
+// replaced get their old contents back (and new ones are removed).
+func publishAll(plan []stagedFile) error {
+	cleanup := func() {
+		for _, f := range plan {
+			if f.tmp != "" {
+				os.Remove(f.tmp)
+			}
+		}
+	}
+	for i := range plan {
+		f := &plan[i]
+		if old, err := os.ReadFile(f.dest); err == nil {
+			f.old, f.had = old, true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			cleanup()
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(f.dest), 0o755); err != nil {
+			cleanup()
+			return err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(f.dest), ".gallery-*")
+		if err != nil {
+			cleanup()
+			return err
+		}
+		f.tmp = tmp.Name()
+		_, err = tmp.Write(f.data)
+		if cerr := tmp.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			err = os.Chmod(f.tmp, 0o644)
+		}
+		if err != nil {
+			cleanup()
+			return err
+		}
+	}
+	for i := range plan {
+		if err := os.Rename(plan[i].tmp, plan[i].dest); err != nil {
+			cleanup()
+			var left []string
+			for j := i - 1; j >= 0; j-- {
+				var rerr error
+				if plan[j].had {
+					rerr = writeAtomic(plan[j].dest, plan[j].old)
+				} else {
+					rerr = os.Remove(plan[j].dest)
+				}
+				if rerr != nil {
+					left = append(left, plan[j].dest)
+				}
+			}
+			if len(left) > 0 {
+				return fmt.Errorf("%w; putting back the files already changed failed too: check %s", err, strings.Join(left, ", "))
+			}
+			return err
+		}
+		plan[i].tmp = ""
+	}
+	return nil
 }
 
 func sortedKeys(m map[string][]byte) []string {
@@ -1288,17 +1447,41 @@ func PendingSkill(charsDir, sprig, id string) (*store.Skill, error) {
 	return &k, nil
 }
 
+// ErrPendingChanged means a pending skill isn't the version that was
+// shown, so it wasn't approved.
+var ErrPendingChanged = errors.New("the skill changed since it was shown, so it wasn't approved; ask again to see it as it is now")
+
 // ApprovePendingSkill makes a pending skill the sprig's own: the file is
 // renamed to <id>.md, which the skill loader picks up (a newer version of
-// a skill it already has replaces it, with history kept).
-func ApprovePendingSkill(charsDir, sprig, id string) (*store.Skill, error) {
+// a skill it already has replaces it, with history kept). want, if not
+// nil, is the skill file as the person was shown it (FormatSkillFile): a
+// different version (a gallery update since) isn't approved. The check
+// and the rename hold the sprig's lock, which gallery updates take too.
+func ApprovePendingSkill(charsDir, sprig, id string, want []byte) (*store.Skill, error) {
+	unlock, err := lockSprig(charsDir, sprig)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	k, err := PendingSkill(charsDir, sprig, id)
 	if err != nil {
 		return nil, err
+	}
+	if want != nil {
+		if f, err := FormatSkillFile(*k); err != nil || !bytes.Equal(f, want) {
+			return nil, ErrPendingChanged
+		}
 	}
 	p := pendingPath(charsDir, sprig, id)
 	if err := os.Rename(p, strings.TrimSuffix(p, PendingSuffix)); err != nil {
 		return nil, err
 	}
 	return k, nil
+}
+
+// RestorePendingSkill puts an approved skill back to waiting (its
+// approval couldn't be completed).
+func RestorePendingSkill(charsDir, sprig, id string) error {
+	p := pendingPath(charsDir, sprig, id)
+	return os.Rename(strings.TrimSuffix(p, PendingSuffix), p)
 }

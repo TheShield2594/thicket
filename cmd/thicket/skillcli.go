@@ -136,7 +136,7 @@ func skillCmd(args []string) error {
 			return errors.New("usage: thicket skill approve SPRIG ID")
 		}
 		sprig, id := strings.ToLower(args[1]), strings.ToLower(args[2])
-		k, err := sprigpkg.ApprovePendingSkill(cfg.CharactersDir, sprig, id)
+		k, err := sprigpkg.ApprovePendingSkill(cfg.CharactersDir, sprig, id, nil)
 		if err != nil {
 			return err
 		}

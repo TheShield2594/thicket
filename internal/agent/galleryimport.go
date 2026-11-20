@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/sprigpkg"
@@ -83,7 +85,11 @@ func (e *Engine) proposeGalleryImport(ctx context.Context, t *turn, raw []byte, 
 	if err != nil {
 		return "", err
 	}
-	b, _ := json.Marshal(sprigImportArgs{File: file, ID: id, Name: name, Package: base64.StdEncoding.EncodeToString(raw)})
+	b, err := json.Marshal(sprigImportArgs{File: file, ID: id, Name: name, Package: base64.StdEncoding.EncodeToString(raw),
+		Gallery: &galleryShown{Sprig: g.Char.ID, Update: trust.Update, Skills: g.SkillIDs()}})
+	if err != nil {
+		return "", err
+	}
 	who := g.Char.DisplayName()
 	verb := "import"
 	if trust.Update {
@@ -101,6 +107,11 @@ func (e *Engine) importGallery(ctx context.Context, user *store.User, a sprigImp
 	g, trust, err := e.readGallery(ctx, user, raw, a.ID, a.Name)
 	if err != nil {
 		return "", err
+	}
+	// Exactly what was approved: the same sprig, a new import or an
+	// update as shown, and the same skills. Anything else needs a new look.
+	if s := a.Gallery; s == nil || s.Sprig != g.Char.ID || s.Update != trust.Update || !slices.Equal(s.Skills, g.SkillIDs()) {
+		return "", errors.New("what this package would do changed since it was shown (another import or update happened, or a skill id was taken or freed), so nothing was imported; ask again to see it as it is now")
 	}
 	res, err := g.Install(ctx, e.DB, e.Chars.Dir(), sprigpkg.GalleryInstallOptions{By: user.ID, Update: trust.Update})
 	if err != nil {
@@ -130,6 +141,13 @@ func (e *Engine) importGallery(ctx context.Context, user *store.User, a sprigImp
 		out += " Its skills wait for approval (manage_skill approve): " + strings.Join(res.Pending, ", ") + "."
 	}
 	return out, nil
+}
+
+// galleryShown is what a gallery import's approval prompt showed.
+type galleryShown struct {
+	Sprig  string   `json:"sprig"`
+	Update bool     `json:"update"`
+	Skills []string `json:"skills"`
 }
 
 // --- skills from a gallery package, waiting for approval ---
@@ -199,15 +217,30 @@ func (e *Engine) approveSkill(ctx context.Context, user *store.User, args json.R
 		return "", err
 	}
 	if f, err := sprigpkg.FormatSkillFile(*k); err != nil || string(f) != a.Body {
-		return "", errors.New("the skill changed since it was shown, so it wasn't approved; ask again to see it as it is now")
+		return "", sprigpkg.ErrPendingChanged
 	}
-	if _, err := sprigpkg.ApprovePendingSkill(e.Chars.Dir(), a.Sprig, a.ID); err != nil {
+	// The id must still be free for this sprig: a shared skill or another
+	// sprig's may have taken it while this waited.
+	if cur, err := e.DB.SkillByID(ctx, a.ID, 0); err == nil && cur.SprigID != a.Sprig {
+		return "", fmt.Errorf("a skill called %s is already in use here (the shared library or another sprig's), so %s's can't be approved under that id", a.ID, c.DisplayName())
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+	// Approved only as shown, checked again under the sprig's lock.
+	if _, err := sprigpkg.ApprovePendingSkill(e.Chars.Dir(), a.Sprig, a.ID, []byte(a.Body)); err != nil {
 		return "", err
 	}
 	if err := e.Chars.Load(); err != nil {
 		e.Log.Warn("reload sprigs after approving a skill", "err", err)
 	}
-	e.SyncSprigSkills(ctx)
+	for _, p := range e.SyncSprigSkills(ctx) {
+		if filepath.Base(p.Path) == a.ID+".md" && filepath.Base(filepath.Dir(filepath.Dir(p.Path))) == a.Sprig {
+			if rerr := sprigpkg.RestorePendingSkill(e.Chars.Dir(), a.Sprig, a.ID); rerr != nil {
+				return "", fmt.Errorf("%s's skill %s couldn't be made its own (%s), and putting it back to waiting failed too: %w", c.DisplayName(), a.ID, p.Problem, rerr)
+			}
+			return "", fmt.Errorf("%s's skill %s couldn't be made its own: %s. It's still waiting for approval", c.DisplayName(), a.ID, p.Problem)
+		}
+	}
 	e.addTrail(ctx, user.ID, c.ID, store.TrailSkill, fmt.Sprintf("skill %s (from a gallery package) approved for %s", a.ID, c.DisplayName()), "", nil)
 	return fmt.Sprintf("%s's skill %s is approved: it's %s's own now.", c.DisplayName(), a.ID, c.DisplayName()), nil
 }

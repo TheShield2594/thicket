@@ -46,8 +46,15 @@ func galleryCmd(cfg *config.Config, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if sec.Has(ctx, sprigpkg.GallerySecret) && !*replace {
-			return errors.New("you already have an author key (thicket gallery key shows it). A new one can't sign updates of sprigs you've already shared; pass --replace if you really want one")
+		// Only a missing key may be made without --replace: one that is
+		// stored but can't be read now (a changed secret key) still exists.
+		if _, err := sec.Get(ctx, sprigpkg.GallerySecret); !*replace {
+			switch {
+			case err == nil:
+				return errors.New("you already have an author key (thicket gallery key shows it). A new one can't sign updates of sprigs you've already shared; pass --replace if you really want one")
+			case !errors.Is(err, secrets.ErrNotFound):
+				return fmt.Errorf("your author key is stored but can't be read (%w); fix that, or pass --replace to make a new one, which can't sign updates of sprigs you've already shared", err)
+			}
 		}
 		seed, pub, err := sprigpkg.NewSigningKey()
 		if err != nil {

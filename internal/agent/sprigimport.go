@@ -32,6 +32,8 @@ type sprigImportArgs struct {
 	// Plans are the skill changes shown; if the library changes before
 	// the approval, nothing is imported.
 	Plans []sprigpkg.SkillPlan `json:"plans,omitempty"`
+	// Gallery is what a gallery package's prompt showed (galleryimport.go).
+	Gallery *galleryShown `json:"gallery,omitempty"`
 }
 
 // pendingPackageAge is how long packages sent in chat stay available
