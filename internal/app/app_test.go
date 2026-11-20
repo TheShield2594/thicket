@@ -391,6 +391,12 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 	}
 	u := strings.ToLower(last.Content)
 	switch {
+	case strings.Contains(u, "call tool ") && strings.Contains(strings.ToLower(lastUserText(req.Messages)), "call tool "):
+		// "[sprig, ]call tool NAME {json}": any tool, with exactly these
+		// arguments (from the person's own message, not an event).
+		raw := lastUserText(req.Messages)
+		name, args, _ := strings.Cut(raw[strings.Index(strings.ToLower(raw), "call tool ")+len("call tool "):], " ")
+		return toolCall(name, json.RawMessage(args)), nil
 	case strings.HasPrefix(u, "limit bramble to "):
 		// "limit bramble to N messages a day"
 		var n int

@@ -19,6 +19,7 @@ internal/llm         OpenAI-compatible client (OpenRouter or a local server), re
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
 internal/plugin      known plugins (optional containers): names, addresses, token files, kid policy
+internal/mail        core's side of the mail plugin: its admin API client, allowlist entries
 plugins/<name>       each plugin's own module, Dockerfile and tests (plugins/hello is a template)
 internal/channel     channel interface; adapters in channel/discord, channel/telegram and channel/matrix
 internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
@@ -334,7 +335,8 @@ it, routing and ownership agree.
 
 Every tool call passes `Engine.gate` before it runs. The level comes from
 `tool_levels` (a sprig's own row, else the `*` row for every sprig, else
-the default: `ask` for `Tool.Risky`, `act` otherwise). A solo sprig skips
+the default: `draft` for a tool that gates itself, `ask` for
+`Tool.Risky`, `act` otherwise). A solo sprig skips
 the every-sprig row (`store.LevelFor.Private`), core tools included: only
 its person decides what it may do, so a household-wide level covers
 shared sprigs and leaves private ones on their own rows and the defaults. `read` refuses risky
@@ -400,6 +402,32 @@ checked when tools are offered (`toolsFor`) and when they're granted
 token, version from `serverInfo`, `Spec.Check`). Tests:
 `internal/plugin`, `app/plugins_test.go` (a stub plugin),
 `app/sandbox_test.go`.
+
+Calls to a plugin Thicket set up (`agent.managedPlugins`: its row has the
+shared token header) carry `_meta` `thicket/call` (sprig, approved,
+draft only) through `mcp.WithMeta`; `runApproved` marks approved calls
+and `gate` returns draft-only for a tool that gates itself. Tool hints
+(`thicket/gates_itself`, `thicket/trailed`) are honoured only from such
+plugins. Trigger polls on them carry the sprig too.
+
+### Mail
+
+`agent/mail.go`, `internal/mail`, `dashboard/mail.go`,
+`plugins/mail` (contract: `plugins/mail/PROTOCOL.md`). Addresses and
+allowlists are tables (`mail_accounts`, `mail_allow`, schema v36);
+passwords are secrets (`mail_<sprig>_password`). `RunMail` pushes the
+accounts to the plugin (on change and every 30 s) and long-polls its
+events: `received` and `sent` become `TrailMail` entries (headers only),
+a `received` one polls the sprig's mail triggers at once
+(`PollTriggersFor`; `pollOne` takes one poll per trigger at a time), and
+an OTP one becomes a `code` item in "needs you". Each call carries the
+allowlist as it is then (`thicket/mail`), so the plugin decides send or
+draft; a result's `thicket/drafted` becomes a draft item whose action is
+`{"mail": {sprig, draft_id}}`: `RunDraft` sends it and `DismissInbox`
+discards it, through the plugin's admin API. `ChangeMailAllow` checks
+`mayManage`, writes the trail with an undo (`mailallow`). `MayReadMail`
+decides the dashboard mailbox: a solo sprig's for its person only, a
+family sprig's for adults.
 
 ## Sandboxing
 

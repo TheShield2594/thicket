@@ -355,13 +355,18 @@ func (d *Doctor) pluginCheck(ctx context.Context, ep plugin.Endpoint, sec *secre
 	} else {
 		ver = "version " + ver
 	}
+	note := ""
 	if ep.Check != nil {
-		if err := ep.Check(cctx, ep.URL, tok); err != nil {
-			c.Detail = fmt.Sprintf("%s, token accepted, %s, but: %s", ep.URL, ver, redact(err.Error()))
+		n, err := ep.Check(cctx, ep.URL, tok)
+		if n != "" {
+			note = "; " + redact(n)
+		}
+		if err != nil {
+			c.Detail = fmt.Sprintf("%s, token accepted, %s, but: %s%s", ep.URL, ver, redact(err.Error()), note)
 			return c
 		}
 	}
-	c.OK, c.Detail = true, fmt.Sprintf("%s, token accepted, %s, %d tools", ep.URL, ver, len(tools))
+	c.OK, c.Detail = true, fmt.Sprintf("%s, token accepted, %s, %d tools%s", ep.URL, ver, len(tools), note)
 	return c
 }
 

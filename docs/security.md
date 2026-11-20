@@ -79,6 +79,19 @@ provider seeing what it's sent.
   Thicket's data or key, as a non-root user with no capabilities, under
   memory, CPU and process limits, reached with a token compared in
   constant time. Each command needs the owner's approval by default.
+- **Sprigs' email** ([Email](mail.md)): mail is outside content (wrapped,
+  taints the turn, HTML turned into text in the plugin, links shown with
+  their real target, no remote images, one-time codes hidden from the
+  sprig). A sprig sends on its own only when every recipient is on an
+  allowlist that only its owner changes (in the trail), at `act`, under a
+  daily limit; the plugin checks this in code on each message, with the
+  allowlist Thicket sends on that call, and the sprig is named by Thicket,
+  never by the model. Anything else is a draft a person sends. Passwords
+  sit in the encrypted store and the plugin's memory, never on its disk
+  or in logs; IMAP, SMTP and JMAP are TLS only (plaintext and servers
+  without STARTTLS are refused). Kid sprigs can't have it. The dashboard
+  shows a private sprig's mailbox only to its person, never escapes text
+  into markup, and serves attachments only as sandboxed downloads.
 
 ## What was checked
 

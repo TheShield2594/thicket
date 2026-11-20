@@ -13,6 +13,7 @@ const (
 	InboxInterrupted = "interrupted" // Thicket stopped while it ran
 	InboxUndelivered = "undelivered" // it worked, but the message didn't reach the user
 	InboxDraft       = "draft"       // a sprig at draft level wrote up an action
+	InboxCode        = "code"        // a one-time code arrived in a sprig's mailbox: for a person, not the sprig
 )
 
 // InboxItem is something that needs a person. Nothing that fails is
@@ -89,6 +90,24 @@ func (s *Store) OpenInbox(ctx context.Context, userID int64) ([]InboxItem, error
 	return out, rows.Err()
 }
 
+// OpenDrafts lists a sprig's open drafts, whoever they're for.
+func (s *Store) OpenDrafts(ctx context.Context, character string) ([]InboxItem, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+inboxCols+" FROM inbox WHERE status = 'open' AND kind = ? AND character = ? ORDER BY id", InboxDraft, character)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InboxItem
+	for rows.Next() {
+		it, err := scanInbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *it)
+	}
+	return out, rows.Err()
+}
+
 const inboxCols = "id, user_id, character, kind, ref, title, detail, count, status, action, created_at, updated_at"
 
 func scanInbox(r interface{ Scan(...any) error }) (*InboxItem, error) {
@@ -136,6 +155,13 @@ func (s *Store) ResolveInbox(ctx context.Context, id, userID int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ReopenInbox puts a resolved item back in front of its person (an action
+// claimed from it that then failed).
+func (s *Store) ReopenInbox(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE inbox SET status = 'open', resolved_at = NULL WHERE id = ?", id)
+	return err
 }
 
 // ApprovalByID returns one approval, whatever its status.

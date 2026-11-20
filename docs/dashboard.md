@@ -15,6 +15,11 @@ pause, and change what sprigs remember about you.
 - **Needs you**: requests waiting for your OK (approve or deny), drafts a
   sprig wrote up instead of doing (do it, or dismiss), and failed,
   interrupted or undelivered work (clear it once you've dealt with it).
+  An email a sprig drafted shows who it's to, the subject and why it
+  wasn't sent, with **Send** and **Discard**. When a one-time code
+  arrives in a sprig's mailbox, an item here gives the sender and
+  subject; the code itself is in the sprig's mailbox (**Mail**), where
+  you read it.
   The sprig reports back in the chat the request came from.
 - **Pause**: the owner has **Pause everything**, and each sprig you own
   has a **Pause** button (the person a private sprig belongs to, or the
@@ -43,6 +48,26 @@ Someone else's solo sprig is private, admins included: the roster shows
 it as "Kim's private sprig" with only its state and whether it has
 logged errors in the last day, and Costs show what it spends under that
 label. Its name, role, tools, activity and changes never appear.
+
+## Mail
+
+With the [mail plugin](mail.md) running, **Mail** (top of the page)
+opens each sprig's mailbox you may see: inbox and drafts, newest first.
+
+- **Who sees it**: a private sprig's mailbox only for the person it
+  belongs to (admins don't see it, or that it has one); a shared
+  sprig's for every adult, not kids. Kid sprigs have no mail.
+- **Reading**: text only. The plugin turns HTML into text on the server
+  and the page escapes every byte of it: nothing runs, no remote images
+  are loaded, and links are written out with where they really go
+  (`text <https://real.target>`). Open one only if you trust it.
+- **Attachments** are listed with their name, type and size, and only
+  download when you click, always as a file (never opened in the page).
+- **Drafts**: **Send** or **Discard**, the same as in "needs you" (which
+  is cleared too).
+- **Allowlist**: who the sprig may email without you. Its owner adds and
+  removes addresses or `@domain`s here; every change is in the trail and
+  can be undone. Others see the list.
 
 ## Signing in
 

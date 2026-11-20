@@ -79,12 +79,16 @@ services:
       # ask Juni to give one access; commands ask for your approval. Set to "" to turn it off.
       THICKET_SANDBOX_URL: ${THICKET_SANDBOX_URL-http://sandbox:7070}
       THICKET_SANDBOX_TOKEN_FILE: /sandbox-auth/token
+      # Sprigs' own email addresses (the mail service below, off unless you start it
+      # with `docker compose --profile mail up -d`). See docs/mail.md.
+      THICKET_MAIL_TOKEN_FILE: /mail-auth/token
     # Lets the container reach a model server on this machine as host.docker.internal.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - thicket-data:/data
       - sandbox-auth:/sandbox-auth
+      - mail-auth:/mail-auth
     # The web app, /dashboard, /health, /avatars, /hooks and /api/v1. Open
     # http://localhost:8080 on this machine, or put it behind your reverse proxy (with
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
@@ -122,11 +126,33 @@ services:
     cap_drop:
       - ALL
 
+  # Optional: sprigs' own email addresses over JMAP, or IMAP and SMTP (TLS only).
+  # Off unless started with `docker compose --profile mail up -d`; no sprig can use
+  # it until its owner grants mcp:mail/*. Passwords stay in Thicket's encrypted
+  # store and only in this container's memory. See docs/mail.md.
+  mail:
+    image: ghcr.io/theshield2594/thicket-mail:${THICKET_VERSION:-latest}
+    build:
+      context: plugins/mail
+    container_name: thicket-mail
+    profiles: [mail]
+    restart: unless-stopped
+    volumes:
+      - mail-auth:/plugin-auth:ro
+      - mail-state:/var/lib/thicket-mail
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   thicket-data:
   sandbox-workspace:
   sandbox-home:
   sandbox-auth:
+  mail-auth:
+  mail-state:
 
 # secrets:
 #   thicket_secret_key:

@@ -59,7 +59,7 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 <body><main>
 <header><h1>🌱 Thicket</h1>
 <span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} · <a href="/">Open the chat app</a></span></header>
-<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a><a href="#signin">Sign-in</a>{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
+<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a><a href="#signin">Sign-in</a>{{if .HasMail}}<a href="/dashboard/mail">Mail</a>{{end}}{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
 {{if .Flash}}<section class="flash" role="status">{{.Flash}}</section>{{end}}
 {{if .Problem}}<section class="problem" role="alert">{{.Problem}}</section>{{end}}
 <p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>
@@ -85,8 +85,8 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 </div></div>{{end}}
 {{range .Inbox}}<div class="item"><span class="tag {{if eq .Kind "failed" "interrupted"}}bad{{end}}">{{.Kind}}</span><b>{{.Title}}</b>{{if gt .Count 1}} <span class="tag">×{{.Count}}</span>{{end}} <span class="muted small">{{.Sprig}} · {{.At}}</span>
 {{if .Detail}}<pre>{{.Detail}}</pre>{{end}}<div class="actions">
-{{if .Draft}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button class="primary" name="action" value="run">Do it</button></form>{{end}}
-<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="resolve">{{if .Draft}}Dismiss{{else}}Clear{{end}}</button></form>
+{{if .Draft}}<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button class="primary" name="action" value="run">{{if .Mail}}Send{{else}}Do it{{end}}</button></form>{{end}}
+<form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="inbox"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="resolve">{{if .Mail}}Discard{{else if .Draft}}Dismiss{{else}}Clear{{end}}</button></form>
 </div></div>{{end}}
 {{if not (or .Approvals .Inbox)}}<p class="muted">Nothing needs you.</p>{{end}}
 </section>

@@ -263,6 +263,10 @@ cookies (`Secure` over HTTPS).
   Linux machine where sprigs run commands and keep files ("clone this
   repo and run its tests"). It can't see Thicket's data, and commands ask
   for your OK unless you say otherwise. See [The sandbox](docs/sandbox.md).
+- Give a sprig its own email address for signups, receipts and vendors
+  (an optional plugin, JMAP or IMAP/SMTP). It only sends on its own to
+  addresses you allowed; everything else waits in "needs you", and you
+  can read its mailbox on the dashboard. See [Email](docs/mail.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -424,6 +428,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Integrations (MCP) setup](docs/mcp.md)
 - [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Plugins: optional abilities in their own containers](docs/plugins.md)
+- [Email: a sprig's own address](docs/mail.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)

@@ -26,6 +26,10 @@ var migrationFS embed.FS
 // ErrNotFound is returned when a single-row lookup finds nothing.
 var ErrNotFound = errors.New("not found")
 
+// ErrStorage marks a database failure passed up through another layer,
+// so an API can answer 500 rather than blame the request.
+var ErrStorage = errors.New("storage error")
+
 type Store struct {
 	db   *sql.DB
 	path string

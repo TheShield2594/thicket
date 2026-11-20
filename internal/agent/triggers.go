@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/store"
@@ -180,6 +181,31 @@ func (e *Engine) PollTriggers(ctx context.Context) {
 }
 
 func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
+	// One poll of a trigger at a time (new mail polls at once, besides
+	// the clock), so the same item can't fire twice. A poll asked for
+	// while one runs isn't lost: the running one polls again once after.
+	again := &atomic.Bool{}
+	if cur, busy := e.pollBusy.LoadOrStore(tr.JobID, again); busy {
+		cur.(*atomic.Bool).Store(true)
+		return
+	}
+	defer e.pollBusy.Delete(tr.JobID)
+	for {
+		e.pollOnce(ctx, tr.JobID)
+		if !again.Swap(false) || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// pollOnce is one poll of a trigger, read fresh (what was seen may have
+// changed since the caller read it).
+func (e *Engine) pollOnce(ctx context.Context, jobID int64) {
+	fresh, err := e.DB.TriggerFor(ctx, jobID)
+	if err != nil {
+		return // never with a stale list of what was seen
+	}
+	tr := *fresh
 	j, err := e.DB.JobByID(ctx, tr.JobID)
 	if err != nil {
 		return
@@ -216,6 +242,12 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 	tctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("poll:%d", tr.JobID), j.UserID, j.Name)
 	defer done()
 	flight.setChar(j.Character)
+	if e.managedPlugins(ctx)[tr.Server] {
+		if tctx, err = e.pluginCtx(tctx, j.Character, tr.Server); err != nil {
+			_ = e.DB.SavePollError(ctx, tr.JobID, err.Error())
+			return
+		}
+	}
 	cctx, cancel := context.WithTimeout(tctx, pollCallTimeout)
 	// The read-only and exec checks run on the connection actually used,
 	// so a change between pollRefusal and the call can't slip through.

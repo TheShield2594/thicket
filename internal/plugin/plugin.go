@@ -40,8 +40,9 @@ type Spec struct {
 	KidsAllowed bool
 	// Check is an optional extra check for `thicket doctor`, run after
 	// the plugin answered and accepted its token. It gets the plugin's
-	// base URL and token.
-	Check func(ctx context.Context, url, token string) error
+	// base URL and token. note is added to the line either way (advice,
+	// such as missing DNS records); err fails the check.
+	Check func(ctx context.Context, url, token string) (note string, err error)
 }
 
 var nameRE = regexp.MustCompile(`^[a-z][a-z0-9]{1,30}$`)
@@ -96,8 +97,12 @@ func MustNew(specs ...Spec) *Registry {
 // (docker-compose.yml sets it).
 var Sandbox = Spec{Name: "sandbox", Exec: true}
 
+// Mail gives sprigs their own email addresses (thicket-mail,
+// docs/mail.md): JMAP, or IMAP and SMTP. Kid sprigs can't have it.
+var Mail = Spec{Name: "mail", Profile: "mail", DefaultURL: "http://mail:7072", Check: mailCheck}
+
 // Builtin is every plugin Thicket knows.
-func Builtin() *Registry { return MustNew(Sandbox) }
+func Builtin() *Registry { return MustNew(Sandbox, Mail) }
 
 // All lists the plugins, in order.
 func (r *Registry) All() []Spec {

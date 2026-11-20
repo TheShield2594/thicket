@@ -6,11 +6,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/dashboard"
+	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -347,4 +350,21 @@ func hasServerScope(scopes []string, server string) bool {
 		}
 	}
 	return false
+}
+
+// setUpMail gives the engine the mail plugin's admin API when the plugin
+// is configured (docs/mail.md), and the dashboard its mailbox view. It
+// reports whether it did.
+func (a *App) setUpMail() bool {
+	ep, ok := a.pluginEndpoint(mail.Plugin)
+	if !ok {
+		return false
+	}
+	cl := &mail.Client{URL: ep.URL, HTTP: &http.Client{Timeout: 60 * time.Second},
+		Token: func(ctx context.Context) (string, error) { return a.Secrets.Get(ctx, ep.Secret()) }}
+	a.Engine.Mail = cl
+	if a.Dashboard != nil {
+		a.Dashboard.Mail = &dashboard.Mailbox{Client: cl, Engine: a.Engine}
+	}
+	return true
 }

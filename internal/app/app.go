@@ -359,7 +359,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	a.API = api.New(a.Engine, db, a.Scheduler, a.Chars, log)
 	a.Engine.AddChannel(a.API)
 	a.Dashboard = &dashboard.Dashboard{DB: db, Chars: a.Chars, Settings: a.Settings, Version: version, Log: log,
-		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft, Undo: a.Engine.UndoTrail,
+		States: a.Engine.SprigStates, Decide: a.Engine.DecideApproval, RunDraft: a.Engine.RunDraft, Dismiss: a.Engine.DismissInbox, Undo: a.Engine.UndoTrail,
 		Pause: func(ctx context.Context, u *store.User, sprig string, on bool) error {
 			if on {
 				return a.Engine.Pause(ctx, u, sprig, "from the dashboard")
@@ -374,6 +374,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			}
 			return out
 		}}
+	a.setUpMail() // before the dashboard serves anything
 
 	if !opts.NoHTTP {
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
@@ -610,6 +611,9 @@ func (a *App) Run(parent context.Context) error {
 		}
 	})
 	goRun("plugins", func() { a.watchDefaultPlugins(ctx) })
+	if a.Engine.Mail != nil {
+		goRun("mail", func() { a.Engine.RunMail(ctx) })
+	}
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })

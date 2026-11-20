@@ -55,6 +55,9 @@ func (e *Engine) handleSecrets(ctx context.Context, in channel.Incoming, user *s
 		_ = e.DB.ClearPendingSecret(ctx, user.ID)
 		e.scrub(ctx, in)
 		e.logActivity(ctx, "info", "system", "", user.ID, "secret "+pending.Name+" stored", "")
+		if strings.HasPrefix(pending.Name, "mail_") {
+			e.NudgeMail() // a sprig's mail password: the plugin gets it now
+		}
 		return true, e.continueAfterEvent(ctx, in, user, host,
 			fmt.Sprintf("The user sent the secret for %s. Thicket stored it encrypted as {{secret:%s}} (you can't see the value). Carry on with the setup.", pending.Purpose, pending.Name))
 	}

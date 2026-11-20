@@ -48,6 +48,12 @@ type Dashboard struct {
 	// Decide answers a pending approval; RunDraft has a draft done.
 	Decide   func(ctx context.Context, u *store.User, id int64, approve bool) error
 	RunDraft func(ctx context.Context, u *store.User, id int64) error
+	// Dismiss clears an inbox item (a mail draft is discarded too); nil
+	// just resolves it.
+	Dismiss func(ctx context.Context, u *store.User, id int64) error
+	// Mail is the sprigs' mailboxes (mail.go); nil when the mail plugin
+	// isn't configured.
+	Mail *Mailbox
 	// Undo reverses a trail entry (permission changes, sprig calendar entries).
 	Undo func(ctx context.Context, u *store.User, id int64) (string, error)
 	// Pause pauses (on) or resumes everything (sprig "") or one sprig; it
@@ -84,6 +90,10 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /dashboard", d.page)
 	mux.HandleFunc("GET /dashboard/state.json", d.state)
 	mux.HandleFunc("POST /dashboard/act", d.act)
+	mux.HandleFunc("GET /dashboard/mail", d.mailbox)
+	mux.HandleFunc("GET /dashboard/mail/message", d.mailMessage)
+	mux.HandleFunc("GET /dashboard/mail/attachment", d.mailAttachment)
+	mux.HandleFunc("POST /dashboard/mail/act", d.mailAct)
 	mux.HandleFunc("GET /dashboard/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/dashboard", http.StatusSeeOther) })
 	return secureHeaders(mux)
 }
@@ -252,6 +262,11 @@ func (d *Dashboard) act(w http.ResponseWriter, r *http.Request) {
 		anchor = "memories"
 	case kind == "inbox" && action == "run" && d.RunDraft != nil:
 		err, ok = d.RunDraft(ctx, u, id), "done"
+	case kind == "inbox" && action == "resolve" && d.Dismiss != nil:
+		err, ok = d.Dismiss(ctx, u, id), "resolved"
+		if errors.Is(err, store.ErrNotFound) {
+			err = errors.New("that item was already cleared")
+		}
 	case kind == "inbox" && action == "resolve":
 		err, ok = d.DB.ResolveInbox(ctx, id, u.ID), "resolved"
 		if errors.Is(err, store.ErrNotFound) {
@@ -310,6 +325,7 @@ type pageData struct {
 	Models         []costRow
 	User           *store.User
 	Name           string
+	HasMail        bool // a mailbox they may open (the Mail link)
 	Admin          bool
 	Version        string
 	Now            string
@@ -406,6 +422,7 @@ type inboxView struct {
 	At                         string
 	Count                      int
 	Draft                      bool
+	Mail                       bool // a mail draft: Send or Discard
 }
 
 type costRow struct {
@@ -623,6 +640,9 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		}
 		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: prettyJSON(a.Args), Floor: a.Floor})
 	}
+	if d.Mail != nil {
+		p.HasMail = len(d.mailboxesFor(ctx, u)) > 0
+	}
 	items, err := d.DB.OpenInbox(ctx, u.ID)
 	if err != nil {
 		return nil, err
@@ -634,6 +654,8 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 			// "Do it" runs the stored action: show exactly that.
 			if exact, ok := draftArgs(it.Action); ok {
 				v.Detail, v.Draft = exact, true
+			} else if mailDraft(it.Action) {
+				v.Draft, v.Mail = true, true // Detail is the email as the plugin saved it
 			}
 		}
 		p.Inbox = append(p.Inbox, v)

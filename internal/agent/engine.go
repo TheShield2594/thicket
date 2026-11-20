@@ -23,6 +23,7 @@ import (
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/llm"
+	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/secrets"
@@ -77,6 +78,14 @@ type Engine struct {
 	Now             func() time.Time
 	// Fire starts an event-driven job now (the scheduler's Fire).
 	Fire func(store.Job) error
+	// Mail is the mail plugin's admin API (mail.go); nil when the plugin
+	// isn't configured.
+	Mail          *mail.Client
+	mailNudgeOnce sync.Once
+	mailNudgeCh   chan struct{}
+	pollBusy      sync.Map       // trigger job id -> *atomic.Bool: a poll in flight (true: another was asked for meanwhile)
+	mailWork      sync.WaitGroup // RunMail's goroutines
+	mailAllowMu   sync.Mutex     // allowlist changes and their undo, one at a time
 
 	// ConnectChat connects a chat app ("discord", "telegram") with a bot
 	// token while Thicket runs, replacing a connection it already has. It
