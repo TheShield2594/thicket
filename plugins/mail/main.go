@@ -6,11 +6,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -49,6 +51,7 @@ type timing struct {
 	retryMin    time.Duration // first reconnect delay after an error
 	retryMax    time.Duration // longest reconnect delay
 	connectWait time.Duration // how long PUT /v1/accounts waits for a first answer
+	bodyRead    time.Duration // how long a client may take to send a request body
 	pushFails   int           // failed EventSource attempts in a row before polling
 }
 
@@ -58,6 +61,7 @@ var defaultTiming = timing{
 	retryMin:    5 * time.Second,
 	retryMax:    5 * time.Minute,
 	connectWait: 5 * time.Second,
+	bodyRead:    30 * time.Second,
 	pushFails:   3,
 }
 
@@ -71,6 +75,7 @@ type server struct {
 	tokenFile string
 	events    *eventLog
 	sends     *sendLog
+	drafts    draftClaims // a draft is sent once (tools.go)
 	resolver  txtResolver
 	timing    timing
 	// rootCAs is nil in production (the system's roots). Tests set it to
@@ -127,12 +132,34 @@ func (s *server) handler() http.Handler {
 	return mux
 }
 
-// guard refuses a request without the right token.
+// maxBody is the biggest request body any route takes.
+const maxBody = 1 << 20
+
+// guard refuses a request without the right token, and reads its body
+// (if any) under a deadline, so a client that sends it slowly can't hold
+// a connection. The deadline is per request, not the server's
+// ReadTimeout: that one would also cut the long poll on /v1/events and
+// long sends short. After the body, the deadline is lifted.
 func (s *server) guard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		if r.Body != nil && r.Body != http.NoBody {
+			rc := http.NewResponseController(w)
+			_ = rc.SetReadDeadline(time.Now().Add(s.timing.bodyRead))
+			b, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+			if err != nil {
+				http.Error(w, "request body too slow or broken", http.StatusRequestTimeout)
+				return
+			}
+			if len(b) > maxBody {
+				http.Error(w, "request body too big", http.StatusRequestEntityTooLarge)
+				return
+			}
+			_ = rc.SetReadDeadline(time.Time{})
+			r.Body = io.NopCloser(bytes.NewReader(b))
 		}
 		h(w, r)
 	}

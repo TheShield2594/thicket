@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emersion/go-message"
 	_ "github.com/emersion/go-message/charset" // decode legacy charsets in received mail
 	"github.com/emersion/go-message/mail"
 )
@@ -78,15 +79,28 @@ func mailAddrs(l []Address) []*mail.Address {
 // maxTextPart bounds how much of one text part is read.
 const maxTextPart = 4 << 20
 
-// parseRaw reads a whole RFC 5322 message: headers, the text (text/plain
-// preferred, else the HTML converted), and the attachment list. With
-// wantAID it also returns that attachment's bytes.
+// maxAttachment is the most of one attachment the plugin hands out (a
+// variable so tests can shrink it).
+var maxAttachment = 50 << 20
+
+// errTooBig: an attachment is bigger than the plugin hands out. Its bytes
+// are never cut short and passed off as the whole file.
+var errTooBig = errors.New("the attachment is too big to download here (more than 50 MiB)")
+
+// maxMIMEDepth bounds how deep multiparts nest before the rest is ignored.
+const maxMIMEDepth = 16
+
+// parseRaw reads a whole RFC 5322 message: headers, the text and the
+// attachment list. The text follows the MIME tree: within a
+// multipart/alternative, text/plain is preferred over HTML (converted);
+// within any other multipart (mixed, related, ...) every inline text part
+// counts, in order. With wantAID it also returns that attachment's bytes.
 func parseRaw(raw []byte, wantAID string) (*Message, []byte, error) {
-	mr, err := mail.CreateReader(bytes.NewReader(raw))
-	if mr == nil {
+	e, err := message.Read(bytes.NewReader(raw))
+	if e == nil {
 		return nil, nil, fmt.Errorf("unreadable message: %w", err)
 	}
-	h := mr.Header
+	h := mail.Header{Header: e.Header}
 	m := &Message{}
 	m.From = firstAddr(addrList(h, "From"))
 	m.To = addrList(h, "To")
@@ -104,80 +118,132 @@ func parseRaw(raw []byte, wantAID string) (*Message, []byte, error) {
 	m.InReplyTo, _ = h.MsgIDList("In-Reply-To")
 	m.References, _ = h.MsgIDList("References")
 
-	var plain, htm string
-	havePlain, haveHTML := false, false
-	var wanted []byte
-	n := 0
-	for {
-		p, err := mr.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			if p == nil {
-				break // a broken part ends what we can read
-			}
-		}
-		switch ph := p.Header.(type) {
-		case *mail.InlineHeader:
-			ct, params, _ := ph.ContentType()
-			if ct == "" {
-				ct = "text/plain"
-			}
-			if ct == "text/plain" && !havePlain {
-				b, _ := io.ReadAll(io.LimitReader(p.Body, maxTextPart))
-				plain, havePlain = string(b), true
-				continue
-			}
-			if ct == "text/html" && !haveHTML {
-				b, _ := io.ReadAll(io.LimitReader(p.Body, maxTextPart))
-				htm, haveHTML = string(b), true
-				continue
-			}
-			if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "multipart/") {
-				continue // another alternative of the same text
-			}
-			n++
-			name := params["name"]
-			if name == "" {
-				name = "inline-" + strconv.Itoa(n)
-			}
-			wanted = addAttachment(m, p.Body, strconv.Itoa(n), name, ct, wantAID, wanted)
-		case *mail.AttachmentHeader:
-			n++
-			ct, _, _ := ph.ContentType()
-			name, _ := ph.Filename()
-			if name == "" {
-				name = "attachment-" + strconv.Itoa(n)
-			}
-			wanted = addAttachment(m, p.Body, strconv.Itoa(n), name, ct, wantAID, wanted)
-		}
-	}
-	switch {
-	case havePlain:
-		m.Text = tidyPlain(plain)
-	case haveHTML:
-		m.Text = htmlToText(htm)
+	w := &mimeWalk{m: m, want: wantAID}
+	m.Text, _ = w.entity(e, 0)
+	if w.wantErr != nil {
+		return nil, nil, w.wantErr
 	}
 	m.Attachments = len(m.AttachmentList)
 	m.Size = int64(len(raw))
-	m.Preview = preview(m.Text)
-	return m, wanted, nil
+	m.Preview, m.SprigPreview = previewsOf(m.Subject, m.Text)
+	return m, w.wanted, nil
 }
 
-func addAttachment(m *Message, body io.Reader, id, name, ct, want string, wanted []byte) []byte {
+// mimeWalk goes through a message's MIME tree once.
+type mimeWalk struct {
+	m         *Message
+	want      string // the attachment id whose bytes are wanted
+	wanted    []byte
+	wantErr   error
+	n         int // attachments numbered in tree order: their ids
+	textBytes int // text read so far, all parts together
+}
+
+// Kinds of text a subtree gave, for multipart/alternative's choice.
+const (
+	kindNone = iota
+	kindHTML
+	kindPlain
+)
+
+// entity returns the text of e's subtree and what kind it is; attachments
+// on the way are added to the message.
+func (w *mimeWalk) entity(e *message.Entity, depth int) (string, int) {
+	if mr := e.MultipartReader(); mr != nil {
+		if depth >= maxMIMEDepth {
+			return "", kindNone
+		}
+		ct, _, _ := e.Header.ContentType()
+		type alt struct {
+			text string
+			kind int
+		}
+		var parts []alt
+		for {
+			p, err := mr.NextPart()
+			if p == nil || (err != nil && errors.Is(err, io.EOF)) {
+				break // the end, or a broken part that ends what we can read
+			}
+			t, k := w.entity(p, depth+1)
+			parts = append(parts, alt{t, k})
+		}
+		if ct == "multipart/alternative" {
+			for _, want := range []int{kindPlain, kindHTML} {
+				for _, p := range parts {
+					if p.kind == want && p.text != "" {
+						return p.text, p.kind
+					}
+				}
+			}
+			return "", kindNone
+		}
+		var texts []string
+		kind := kindNone
+		for _, p := range parts {
+			if p.text != "" {
+				texts = append(texts, p.text)
+				kind = max(kind, p.kind)
+			}
+		}
+		return strings.Join(texts, "\n\n"), kind
+	}
+
+	ct, params, _ := e.Header.ContentType()
+	if ct == "" {
+		ct = "text/plain"
+	}
+	disp, dparams, _ := e.Header.ContentDisposition()
+	if strings.EqualFold(disp, "attachment") {
+		w.n++
+		name := firstNonEmpty(dparams["filename"], params["name"])
+		if name == "" {
+			name = "attachment-" + strconv.Itoa(w.n)
+		}
+		w.attachment(e.Body, name, ct)
+		return "", kindNone
+	}
+	switch {
+	case ct == "text/plain" || ct == "text/html":
+		if w.textBytes >= maxTextPart {
+			return "", kindNone // enough text already
+		}
+		b, _ := io.ReadAll(io.LimitReader(e.Body, maxTextPart))
+		w.textBytes += len(b)
+		if ct == "text/plain" {
+			return tidyPlain(string(b)), kindPlain
+		}
+		return htmlToText(string(b)), kindHTML
+	case strings.HasPrefix(ct, "text/"):
+		return "", kindNone // another rendering of the same text (calendar, enriched...)
+	}
+	w.n++
+	name := params["name"]
+	if name == "" {
+		name = "inline-" + strconv.Itoa(w.n)
+	}
+	w.attachment(e.Body, name, ct)
+	return "", kindNone
+}
+
+// attachment lists one attachment, and keeps its bytes when it is the one
+// wanted (whole, or errTooBig).
+func (w *mimeWalk) attachment(body io.Reader, name, ct string) {
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
+	id := strconv.Itoa(w.n)
 	var size int64
-	if id == want {
-		b, _ := io.ReadAll(io.LimitReader(body, 50<<20))
-		wanted, size = b, int64(len(b))
+	if id == w.want {
+		b, _ := io.ReadAll(io.LimitReader(body, int64(maxAttachment)+1))
+		if len(b) > maxAttachment {
+			w.wantErr = errTooBig
+			b = nil
+		}
+		w.wanted, size = b, int64(len(b))
 	} else {
 		size, _ = io.Copy(io.Discard, body)
 	}
-	m.AttachmentList = append(m.AttachmentList, Attachment{ID: id, Name: cleanLine(name), Type: cleanLine(ct), Size: size})
-	return wanted
+	w.m.AttachmentList = append(w.m.AttachmentList, Attachment{ID: id, Name: cleanLine(name), Type: cleanLine(ct), Size: size})
 }
 
 // tidyPlain cleans a text/plain body: control characters out, lines kept.

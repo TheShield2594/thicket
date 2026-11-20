@@ -69,6 +69,7 @@ var fastTiming = timing{
 	retryMin:    50 * time.Millisecond,
 	retryMax:    200 * time.Millisecond,
 	connectWait: 5 * time.Second,
+	bodyRead:    5 * time.Second,
 	pushFails:   2,
 }
 
@@ -203,12 +204,16 @@ func (h *harness) tool(name string, args any, m callMeta) toolResult {
 		h.t.Fatalf("%s: HTTP %d %s", name, code, b)
 	}
 	var resp struct {
-		Result toolResult `json:"result"`
+		Result *toolResult     `json:"result"`
+		Error  json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(b, &resp); err != nil {
 		h.t.Fatalf("%s: %v %s", name, err, b)
 	}
-	return resp.Result
+	if len(resp.Error) > 0 || resp.Result == nil {
+		h.t.Fatalf("%s: JSON-RPC error or no result: %s", name, b)
+	}
+	return *resp.Result
 }
 
 // mustTool calls a tool and fails the test on a tool error.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	netmail "net/mail"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -135,10 +136,9 @@ func (s *server) listMail(ctx context.Context, a *account, be Backend, args json
 	}
 	out := []map[string]any{}
 	for _, m := range list {
-		prev, _ := maskOTP(m.Subject, m.Preview)
 		out = append(out, map[string]any{
 			"id": m.ID, "from": m.From.String(), "to": addrStrings(m.To), "subject": maskSubject(m.Subject),
-			"date": rfc3339(m.Date), "unread": m.Unread, "attachments": m.Attachments, "preview": prev,
+			"date": rfc3339(m.Date), "unread": m.Unread, "attachments": m.Attachments, "preview": sprigPreview(m),
 		})
 	}
 	return jsonText(map[string]any{"folder": in.Folder, "messages": out}), nil
@@ -184,6 +184,17 @@ func (s *server) readMail(ctx context.Context, a *account, be Backend, args json
 		_ = be.MarkSeen(ctx, m.ID)
 	}
 	return jsonText(out), nil
+}
+
+// sprigPreview is a listing's preview with one-time codes hidden. The
+// backend masks it when it had the whole text (a code's keyword can be past
+// the preview's cut); a preview only the provider made is masked
+// conservatively: every number that could be a code.
+func sprigPreview(m Summary) string {
+	if m.SprigPreview != "" || m.Preview == "" {
+		return m.SprigPreview
+	}
+	return maskDigits(m.Preview)
 }
 
 // parseAddrs checks addresses given by a sprig.
@@ -292,13 +303,15 @@ func (s *server) replyMail(ctx context.Context, a *account, be Backend, args jso
 	if err != nil {
 		return nil, err
 	}
-	to := orig.ReplyTo
-	if len(to) == 0 && orig.From.Email != "" {
-		to = []Address{orig.From}
+	// Reply-To if it names a real address, else From: an empty or broken
+	// Reply-To must not stop the reply from reaching the sender.
+	to := validAddrs(orig.ReplyTo)
+	if len(to) == 0 {
+		to = validAddrs([]Address{orig.From})
 	}
 	var cc []Address
 	if in.ReplyAll {
-		cc = append(append(cc, orig.To...), orig.Cc...)
+		cc = validAddrs(append(append(cc, orig.To...), orig.Cc...))
 	}
 	// Never to ourselves, never twice.
 	seen := map[string]bool{strings.ToLower(a.cfg.Address): true}
@@ -318,7 +331,9 @@ func (s *server) replyMail(ctx context.Context, a *account, be Backend, args jso
 	if len(toS) == 0 {
 		toS, ccS = ccS, nil
 	}
-	subject := orig.Subject
+	// The subject goes into the drafted _meta, core's "needs you" title and
+	// back to the sprig: a one-time code in it stays hidden.
+	subject := maskSubject(orig.Subject)
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "re:") {
 		subject = "Re: " + subject
 	}
@@ -331,6 +346,17 @@ func (s *server) replyMail(ctx context.Context, a *account, be Backend, args jso
 	}
 	threadOnto(out, orig)
 	return s.deliver(ctx, a, be, out, pol)
+}
+
+// validAddrs keeps the addresses that parse as one.
+func validAddrs(l []Address) []Address {
+	var out []Address
+	for _, a := range l {
+		if p, err := netmail.ParseAddress(a.Email); err == nil && p.Address != "" && !strings.ContainsAny(p.Address, " \r\n<>") {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // allowed reports whether an address is on the allowlist: an exact
@@ -381,16 +407,28 @@ func (s *server) deliver(ctx context.Context, a *account, be Backend, out *Outgo
 	if reason := blocked(a, out.recipients(), pol); reason != "" {
 		return s.saveDraft(ctx, a, be, out, reason)
 	}
-	ok, release := s.sends.reserve(a.cfg.Sprig, a.cfg.sendLimit(), pol.approved, s.now())
-	if !ok {
-		return s.saveDraft(ctx, a, be, out, s.limitReason(a))
+	release, err := s.sends.reserve(a.cfg.Sprig, a.cfg.sendLimit(), pol.approved, s.now())
+	if err != nil {
+		return s.saveDraft(ctx, a, be, out, s.reserveReason(a, err))
 	}
 	if err := be.Send(ctx, out); err != nil {
+		if errors.Is(err, errUnconfirmed) {
+			// It may have gone out: the send keeps its count.
+			return nil, fmt.Errorf("sending to %s: %w", strings.Join(emails(out.recipients()), ", "), err)
+		}
 		release()
 		return nil, fmt.Errorf("sending failed: %w", err)
 	}
 	s.sentEvent(a, out, pol.approved)
 	return result("Sent to "+strings.Join(addrStrings(out.recipients()), ", ")+". Message-ID "+bracket(out.MessageID)+".", nil), nil
+}
+
+// reserveReason says why the send count refused a send.
+func (s *server) reserveReason(a *account, err error) string {
+	if errors.Is(err, errLimit) {
+		return s.limitReason(a)
+	}
+	return err.Error()
 }
 
 func (s *server) sentEvent(a *account, out *Outgoing, approved bool) {
@@ -440,47 +478,136 @@ func firstOr(l []string) string {
 	return l[0]
 }
 
-// errNotDraft is returned for an id that isn't in Drafts.
-var errNotDraft = errors.New("that message isn't a draft")
+var (
+	// errNotDraft is returned for an id that isn't in Drafts.
+	errNotDraft = errors.New("that message isn't a draft")
+	// errDraftSent: this draft was already sent (or handed to the server
+	// unconfirmed); it is never sent twice.
+	errDraftSent = errors.New("that draft was already sent (or may have been: check Sent); it won't be sent again")
+	// errDraftBusy: the draft is being sent right now by another call.
+	errDraftBusy = errors.New("that draft is being sent right now")
+	// errBadDraft: the draft can't be sent as it is (no recipients, too many).
+	errBadDraft = errors.New("the draft can't be sent")
+)
 
-// sendDraft sends a draft if the rules allow it. A draft that still can't
-// go out stays where it is: nothing new is drafted.
-func (s *server) sendDraft(ctx context.Context, a *account, be Backend, id string, pol policy) (map[string]any, error) {
-	if id == "" {
-		return nil, errors.New("draft_id is required")
+// draftClaims makes sure one draft is sent once: the sprig's send_draft
+// (a person's "Do it") and a person's send from the dashboard share it. A
+// draft is claimed from the moment it is read and checked until it is
+// handed to the server; a definite failure gives the claim back, a send
+// (confirmed or not) keeps it, so a draft whose cleanup failed, or whose
+// submission wasn't confirmed, isn't sent again by a later call.
+type draftClaims struct {
+	mu   sync.Mutex
+	busy map[string]bool
+	done map[string]time.Time
+}
+
+// keepSent is how long a sent draft's id is remembered. Ids aren't reused
+// (IMAP ids carry UIDVALIDITY), so this only bounds memory.
+const keepSent = 7 * 24 * time.Hour
+
+func claimKey(sprig, id string) string { return sprig + "\x00" + id }
+
+func (d *draftClaims) claim(sprig, id string, now time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.busy == nil {
+		d.busy, d.done = map[string]bool{}, map[string]time.Time{}
 	}
-	m, err := be.Get(ctx, id)
+	for k, t := range d.done {
+		if now.Sub(t) > keepSent {
+			delete(d.done, k)
+		}
+	}
+	k := claimKey(sprig, id)
+	if _, ok := d.done[k]; ok {
+		return errDraftSent
+	}
+	if d.busy[k] {
+		return errDraftBusy
+	}
+	d.busy[k] = true
+	return nil
+}
+
+// end gives the claim back (sent false) or marks the draft sent.
+func (d *draftClaims) end(sprig, id string, sent bool, now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := claimKey(sprig, id)
+	delete(d.busy, k)
+	if sent {
+		d.done[k] = now
+	}
+}
+
+// sendDraftCore sends a draft if the rules allow it: the one path for the
+// sprig's send_draft and a person's send from the dashboard. forSprig
+// applies the retention window (a person's approval of that very draft
+// lifts it). It returns the draft as sent and the Message-ID the server
+// got, or a reason it wasn't sent (the draft stays where it is).
+func (s *server) sendDraftCore(ctx context.Context, a *account, be Backend, id string, pol policy, forSprig bool) (out *Outgoing, msgID, reason string, err error) {
+	if id == "" {
+		return nil, "", "", errors.New("draft_id is required")
+	}
+	if err := s.drafts.claim(a.cfg.Sprig, id, s.now()); err != nil {
+		return nil, "", "", err
+	}
+	sent := false
+	defer func() { s.drafts.end(a.cfg.Sprig, id, sent, s.now()) }()
+	var m *Message
+	if forSprig && !pol.approved {
+		m, err = s.getForSprig(ctx, a, be, id)
+	} else {
+		m, err = be.Get(ctx, id)
+	}
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	if !m.Draft {
-		return nil, errNotDraft
+		return nil, "", "", errNotDraft
 	}
-	out := s.draftOutgoing(a, m)
+	out = s.draftOutgoing(a, m)
 	n := len(out.recipients())
 	if n == 0 {
-		return nil, errors.New("the draft has no recipients")
+		return nil, "", "", fmt.Errorf("%w: it has no recipients", errBadDraft)
 	}
 	if n > maxRecipients {
-		return nil, fmt.Errorf("the draft has %d recipients: at most %d per message", n, maxRecipients)
+		return nil, "", "", fmt.Errorf("%w: it has %d recipients, at most %d per message", errBadDraft, n, maxRecipients)
 	}
-	reason := blocked(a, out.recipients(), pol)
-	release := func() {}
-	if reason == "" {
-		var ok bool
-		if ok, release = s.sends.reserve(a.cfg.Sprig, a.cfg.sendLimit(), pol.approved, s.now()); !ok {
-			reason = s.limitReason(a)
+	if reason := blocked(a, out.recipients(), pol); reason != "" {
+		return out, "", reason, nil
+	}
+	release, err := s.sends.reserve(a.cfg.Sprig, a.cfg.sendLimit(), pol.approved, s.now())
+	if err != nil {
+		return out, "", s.reserveReason(a, err), nil
+	}
+	msgID, err = be.SendDraft(ctx, id, m)
+	if err != nil {
+		if errors.Is(err, errUnconfirmed) {
+			sent = true // may have gone out: never again, and it counts
+			return nil, "", "", err
 		}
+		release()
+		return nil, "", "", fmt.Errorf("sending failed: %w", err)
+	}
+	sent = true
+	out.MessageID = msgID
+	s.sentEvent(a, out, pol.approved)
+	return out, msgID, "", nil
+}
+
+// sendDraft is the send_draft tool. A draft that still can't go out stays
+// where it is: nothing new is drafted.
+func (s *server) sendDraft(ctx context.Context, a *account, be Backend, id string, pol policy) (map[string]any, error) {
+	out, msgID, reason, err := s.sendDraftCore(ctx, a, be, id, pol, true)
+	if err != nil {
+		return nil, err
 	}
 	if reason != "" {
 		return result(fmt.Sprintf("Not sent: %s. The draft is waiting for a person in \"needs you\".", reason), nil), nil
 	}
-	if err := be.SendDraft(ctx, id, m); err != nil {
-		release()
-		return nil, fmt.Errorf("sending failed: %w", err)
-	}
-	s.sentEvent(a, out, pol.approved)
-	return result("Sent to "+strings.Join(addrStrings(out.recipients()), ", ")+". Message-ID "+bracket(out.MessageID)+".", nil), nil
+	return result("Sent to "+strings.Join(addrStrings(out.recipients()), ", ")+". Message-ID "+bracket(msgID)+".", nil), nil
 }
 
 func (s *server) discard(ctx context.Context, a *account, be Backend, id string) error {
@@ -493,6 +620,14 @@ func (s *server) discard(ctx context.Context, a *account, be Backend, id string)
 	}
 	if !m.Draft {
 		return errNotDraft
+	}
+	// Not while it is being sent.
+	switch err := s.drafts.claim(a.cfg.Sprig, id, s.now()); {
+	case errors.Is(err, errDraftSent): // sent, but still in Drafts: removing it is fine
+	case err != nil:
+		return err
+	default:
+		defer s.drafts.end(a.cfg.Sprig, id, false, s.now())
 	}
 	if err := be.Discard(ctx, id); err != nil {
 		return err

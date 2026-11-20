@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHTMLToText(t *testing.T) {
@@ -150,3 +151,84 @@ func TestScrub(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// TestHTMLUnparseable: HTML the parser refuses never reaches the sprig raw.
+func TestHTMLUnparseable(t *testing.T) {
+	src := strings.Repeat("<div>", 600) + `<script>steal()</script><span style="display:none">hidden 123456</span>`
+	if out := htmlToText(src); out != htmlUnreadable {
+		t.Fatalf("got %q", out)
+	}
+}
+
+// TestPreviewOTP: a code whose keyword is past the preview's cut is still
+// hidden in the sprig's preview; a provider-only preview hides every
+// number that could be a code.
+func TestPreviewOTP(t *testing.T) {
+	text := strings.Repeat("x ", 70) + "482913 " + strings.Repeat("y ", 40) + "is your verification code"
+	plain, masked := previewsOf("Hello", text)
+	if !strings.Contains(plain, "482913") || strings.Contains(masked, "482913") {
+		t.Fatalf("plain %q masked %q", plain, masked)
+	}
+	if got := sprigPreview(Summary{Preview: "Order 1234 and 555-1234 from 2026"}); got != "Order [number hidden] and 555-1234 from [number hidden]" {
+		t.Fatalf("provider preview: %q", got)
+	}
+	if got := sprigPreview(Summary{Preview: "x 482913", SprigPreview: "x masked"}); got != "x masked" {
+		t.Fatalf("backend preview: %q", got)
+	}
+}
+
+// TestOTPLinear: many numbers and many keywords don't take quadratic time.
+func TestOTPLinear(t *testing.T) {
+	// Four times the input should take about four times as long, not
+	// sixteen (the timing is generous: it runs under -race too).
+	run := func(n int) time.Duration {
+		text := strings.Repeat("code 12345678 ", n)
+		start := time.Now()
+		out, found := maskOTP("", text)
+		if !found || strings.Contains(out, "12345678") {
+			t.Fatal("not masked")
+		}
+		return time.Since(start)
+	}
+	run(1000) // warm up
+	small, big := run(10000), run(40000)
+	if big > 12*small && big > 200*time.Millisecond {
+		t.Fatalf("not linear: %s for 10k, %s for 40k", small, big)
+	}
+	// The single-walk version agrees with the definition at the edges.
+	near := "code " + strings.Repeat(" ", otpNear-1) + "1234"
+	far := "code " + strings.Repeat(" ", otpNear+1) + "1234"
+	after := "1234" + strings.Repeat(" ", otpNear) + "code"
+	if _, ok := maskIn(near, false); !ok {
+		t.Error("near")
+	}
+	if _, ok := maskIn(far, false); ok {
+		t.Error("far")
+	}
+	if _, ok := maskIn(after, false); !ok {
+		t.Error("after")
+	}
+}
+
+// TestMIMETree: text parts in a multipart/mixed all count; plain beats
+// HTML only within one multipart/alternative.
+func TestMIMETree(t *testing.T) {
+	raw := "From: a@x.example\r\nSubject: s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=X\r\n\r\n" +
+		"--X\r\nContent-Type: text/plain\r\n\r\nfirst part\r\n" +
+		"--X\r\nContent-Type: image/png\r\nContent-Disposition: inline\r\n\r\nPNG\r\n" +
+		"--X\r\nContent-Type: text/html\r\n\r\n<p>second part</p>\r\n" +
+		"--X\r\nContent-Type: multipart/alternative; boundary=Y\r\n\r\n" +
+		"--Y\r\nContent-Type: text/plain\r\n\r\nthird plain\r\n" +
+		"--Y\r\nContent-Type: text/html\r\n\r\n<p>third html</p>\r\n--Y--\r\n" +
+		"--X\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=notes.txt\r\n\r\nnot body\r\n--X--\r\n"
+	m, _, err := parseRaw([]byte(raw), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Text != "first part\n\nsecond part\n\nthird plain" {
+		t.Fatalf("text %q", m.Text)
+	}
+	if len(m.AttachmentList) != 2 || m.AttachmentList[0].Type != "image/png" || m.AttachmentList[1].Name != "notes.txt" {
+		t.Fatalf("attachments %+v", m.AttachmentList)
+	}
+}

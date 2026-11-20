@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +56,15 @@ type jmapSession struct {
 }
 
 func newJMAP(cfg AccountConfig, tlsFor func(string) *tls.Config, t timing, onNew func(*Message)) *jmapBackend {
-	tr := &http.Transport{TLSClientConfig: tlsFor(""), ForceAttemptHTTP2: true, IdleConnTimeout: 90 * time.Second}
+	// Every step before the answer is bounded: connecting, TLS, and waiting
+	// for the response headers. The EventSource client has no overall
+	// timeout (the stream is long-lived), so without these a server that
+	// never answers would hang it instead of falling back to polling.
+	tr := &http.Transport{
+		TLSClientConfig: tlsFor(""), ForceAttemptHTTP2: true, IdleConnTimeout: 90 * time.Second,
+		DialContext:         (&net.Dialer{Timeout: 20 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 20 * time.Second, ResponseHeaderTimeout: 60 * time.Second,
+	}
 	httpsOnly := func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != "https" {
 			return errors.New("refusing a redirect away from https")
@@ -130,8 +141,15 @@ type jcall struct {
 	args map[string]any
 }
 
-// call sends method calls in one request and returns each answer's
-// arguments. A method error fails the whole call.
+// errTransport: a request may or may not have reached the server (no
+// answer, or an unreadable one). For a submission that means unconfirmed.
+var errTransport = errors.New("no answer from the JMAP server")
+
+// call sends method calls in one request and returns each call's answer
+// arguments. Answers are matched by call id and method name: a server adds
+// responses of its own (RFC 8620 3.4: EmailSubmission/set with
+// onSuccessUpdateEmail answers with an implicit Email/set under the same
+// call id), and those are skipped. A method error fails the whole call.
 func (j *jmapBackend) call(ctx context.Context, calls ...jcall) ([]json.RawMessage, error) {
 	j.mu.Lock()
 	sess, acct := j.sess, j.acct
@@ -140,13 +158,19 @@ func (j *jmapBackend) call(ctx context.Context, calls ...jcall) ([]json.RawMessa
 		return nil, errors.New("not connected")
 	}
 	mc := make([]any, len(calls))
+	using := []string{jmapCore, jmapMail}
 	for i, c := range calls {
 		if _, ok := c.args["accountId"]; !ok {
 			c.args["accountId"] = acct
 		}
 		mc[i] = []any{c.name, c.args, fmt.Sprint(i)}
+		// Only ask for submission when sending: a server without it must
+		// still serve reading.
+		if needsSubmission(c.name) && !slices.Contains(using, jmapSubmission) {
+			using = append(using, jmapSubmission)
+		}
 	}
-	body, _ := json.Marshal(map[string]any{"using": []string{jmapCore, jmapMail, jmapSubmission}, "methodCalls": mc})
+	body, _ := json.Marshal(map[string]any{"using": using, "methodCalls": mc})
 	req, err := http.NewRequestWithContext(ctx, "POST", sess.APIURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -155,7 +179,7 @@ func (j *jmapBackend) call(ctx context.Context, calls ...jcall) ([]json.RawMessa
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := j.hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("JMAP: %w", err)
+		return nil, fmt.Errorf("JMAP: %w: %w", errTransport, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -165,26 +189,40 @@ func (j *jmapBackend) call(ctx context.Context, calls ...jcall) ([]json.RawMessa
 		MethodResponses [][]json.RawMessage `json:"methodResponses"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("JMAP: %w", err)
-	}
-	if len(out.MethodResponses) != len(calls) {
-		return nil, errors.New("JMAP: unexpected answer")
+		return nil, fmt.Errorf("JMAP: %w: %w", errTransport, err)
 	}
 	args := make([]json.RawMessage, len(calls))
-	for i, r := range out.MethodResponses {
-		if len(r) < 2 {
+	for _, r := range out.MethodResponses {
+		if len(r) < 3 {
 			return nil, errors.New("JMAP: unexpected answer")
 		}
-		var name string
+		var name, tag string
 		_ = json.Unmarshal(r[0], &name)
-		if name == "error" {
+		_ = json.Unmarshal(r[2], &tag)
+		i, err := strconv.Atoi(tag)
+		if err != nil || i < 0 || i >= len(calls) || args[i] != nil {
+			continue // not one of ours, or an implicit answer after ours
+		}
+		switch name {
+		case "error":
 			var e jmapError
 			_ = json.Unmarshal(r[1], &e)
 			return nil, &e
+		case calls[i].name:
+			args[i] = r[1]
 		}
-		args[i] = r[1]
+	}
+	for _, a := range args {
+		if a == nil {
+			return nil, errors.New("JMAP: unexpected answer (a method went unanswered)")
+		}
 	}
 	return args, nil
+}
+
+// needsSubmission: the method is in the submission capability.
+func needsSubmission(method string) bool {
+	return strings.HasPrefix(method, "EmailSubmission/") || strings.HasPrefix(method, "Identity/")
 }
 
 type jmapError struct {
@@ -398,8 +436,9 @@ func (j *jmapBackend) toMessage(e *jEmail) *Message {
 		if truncated {
 			m.Text += "\n\n[cut: the server sent only the start of this message]"
 		}
-		m.Preview = preview(m.Text)
+		m.Preview, m.SprigPreview = previewsOf(m.Subject, m.Text)
 	} else {
+		// Only the server's preview: the sprig gets it masked conservatively.
 		m.Preview = preview(cleanLine(e.Preview))
 	}
 	return m
@@ -523,8 +562,16 @@ func (j *jmapBackend) Attachment(ctx context.Context, id, aid string) (Attachmen
 		if resp.StatusCode != http.StatusOK {
 			return att, nil, fmt.Errorf("JMAP download: HTTP %d", resp.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
-		return att, data, err
+		// Read one byte past the limit: a file cut short must never pass
+		// for the whole file.
+		data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxAttachment)+1))
+		if err != nil {
+			return att, nil, fmt.Errorf("JMAP download: %w", err)
+		}
+		if len(data) > maxAttachment {
+			return att, nil, errTooBig
+		}
+		return att, data, nil
 	}
 	return Attachment{}, nil, errNotFound
 }
@@ -632,7 +679,45 @@ func (j *jmapBackend) submission(identity, emailID string) jcall {
 	}}
 }
 
+// canSend checks the session offers submission at all.
+func (j *jmapBackend) canSend() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if _, ok := j.sess.Capabilities[jmapSubmission]; !ok {
+		return errors.New("this JMAP account doesn't offer sending (the server has no submission)")
+	}
+	return nil
+}
+
+// submitted reads EmailSubmission/set's answer. Only a created submission
+// is a send; an answer that names neither success nor failure is
+// unconfirmed. Whether the message then moved to Sent (the implicit
+// Email/set) doesn't matter: it went out.
+func submitted(raw json.RawMessage) error {
+	var sub setResult
+	_ = json.Unmarshal(raw, &sub)
+	if e, ok := sub.NotCreated["s"]; ok {
+		return &e
+	}
+	if _, ok := sub.Created["s"]; !ok {
+		return fmt.Errorf("%w (the JMAP server didn't say whether it created the submission)", errUnconfirmed)
+	}
+	return nil
+}
+
+// unconfirmedIf turns "no answer" from a request that carried a submission
+// into errUnconfirmed: it may have been sent.
+func unconfirmedIf(err error) error {
+	if errors.Is(err, errTransport) {
+		return fmt.Errorf("%w (%v)", errUnconfirmed, err)
+	}
+	return err
+}
+
 func (j *jmapBackend) Send(ctx context.Context, out *Outgoing) error {
+	if err := j.canSend(); err != nil {
+		return err
+	}
 	identity, err := j.identityID(ctx)
 	if err != nil {
 		return err
@@ -641,39 +726,51 @@ func (j *jmapBackend) Send(ctx context.Context, out *Outgoing) error {
 		jcall{"Email/set", map[string]any{"create": map[string]any{"d": j.emailObject(out)}}},
 		j.submission(identity, "#d"))
 	if err != nil {
-		return err
+		return unconfirmedIf(err)
 	}
-	var made, sub setResult
+	var made setResult
 	_ = json.Unmarshal(res[0], &made)
-	_ = json.Unmarshal(res[1], &sub)
 	if e, ok := made.NotCreated["d"]; ok {
 		return &e
 	}
-	if e, ok := sub.NotCreated["s"]; ok {
-		// Don't leave the message behind as a draft nobody asked for.
-		if id := made.Created["d"].ID; id != "" {
-			_, _ = j.call(ctx, jcall{"Email/set", map[string]any{"destroy": []string{id}}})
+	if err := submitted(res[1]); err != nil {
+		var je *jmapError
+		if errors.As(err, &je) {
+			// Refused: don't leave the message behind as a draft nobody
+			// asked for.
+			if id := made.Created["d"].ID; id != "" {
+				_, _ = j.call(ctx, jcall{"Email/set", map[string]any{"destroy": []string{id}}})
+			}
 		}
-		return &e
+		return err
 	}
 	return nil
 }
 
-func (j *jmapBackend) SendDraft(ctx context.Context, id string, _ *Message) error {
+func (j *jmapBackend) SendDraft(ctx context.Context, id string, m *Message) (string, error) {
+	if err := j.canSend(); err != nil {
+		return "", err
+	}
 	identity, err := j.identityID(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	res, err := j.call(ctx, j.submission(identity, id))
 	if err != nil {
-		return err
+		return "", unconfirmedIf(err)
 	}
-	var sub setResult
-	_ = json.Unmarshal(res[0], &sub)
-	if e, ok := sub.NotCreated["s"]; ok {
-		return &e
+	if err := submitted(res[0]); err != nil {
+		return "", err
 	}
-	return nil
+	if m.MessageID != "" {
+		return m.MessageID, nil
+	}
+	// A draft without a Message-ID gets one from the server: ask which
+	// (best effort; it went out either way).
+	if list, err := j.getEmails(ctx, []string{id}, []string{"id", "messageId"}); err == nil && len(list) > 0 && len(list[0].MessageID) > 0 {
+		return cleanLine(list[0].MessageID[0]), nil
+	}
+	return "", nil
 }
 
 func (j *jmapBackend) Discard(ctx context.Context, id string) error {
@@ -802,20 +899,40 @@ func (j *jmapBackend) listen(ctx context.Context, tmpl string) (got bool, err er
 	return true, sc.Err()
 }
 
+// getBatch is how many emails one Email/get asks for: the server's
+// maxObjectsInGet, at most 50 (full messages, bodies included).
+func (j *jmapBackend) getBatch() int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var core struct {
+		MaxObjectsInGet int `json:"maxObjectsInGet"`
+	}
+	if j.sess != nil {
+		_ = json.Unmarshal(j.sess.Capabilities[jmapCore], &core)
+	}
+	if core.MaxObjectsInGet <= 0 {
+		return 50
+	}
+	return min(core.MaxObjectsInGet, 50)
+}
+
 // checkNew asks what changed since the last state and reports new mail
-// in the inbox (not drafts, not our own sent copies).
+// in the inbox (not drafts, not our own sent copies). It goes one page of
+// changes at a time, each page no bigger than one Email/get, and moves the
+// saved state on after each page it finished: a failure later doesn't
+// report the earlier pages again, and nothing is skipped.
 func (j *jmapBackend) checkNew(ctx context.Context) error {
 	j.mu.Lock()
 	since := j.state
 	j.mu.Unlock()
-	var created []string
+	batch := j.getBatch()
 	for {
 		var r struct {
 			NewState       string   `json:"newState"`
 			HasMoreChanges bool     `json:"hasMoreChanges"`
 			Created        []string `json:"created"`
 		}
-		err := j.call1(ctx, "Email/changes", map[string]any{"sinceState": since, "maxChanges": 256}, &r)
+		err := j.call1(ctx, "Email/changes", map[string]any{"sinceState": since, "maxChanges": batch}, &r)
 		var je *jmapError
 		if errors.As(err, &je) && je.Type == "cannotCalculateChanges" {
 			// The server forgot that far back: start again from now.
@@ -831,32 +948,30 @@ func (j *jmapBackend) checkNew(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		created = append(created, r.Created...)
-		if r.NewState == since || r.NewState == "" {
-			break
-		}
-		since = r.NewState
-		if !r.HasMoreChanges {
-			break
-		}
-	}
-	if len(created) > 0 {
-		list, err := j.getEmails(ctx, created, fullProps)
-		if err != nil {
-			return err
-		}
 		inbox := j.box("inbox")
-		for i := range list {
-			e := &list[i]
-			if e.MailboxIDs[inbox] && !e.Keywords["$draft"] {
-				j.onNew(j.toMessage(e))
+		for start := 0; start < len(r.Created); start += batch {
+			list, err := j.getEmails(ctx, r.Created[start:min(start+batch, len(r.Created))], fullProps)
+			if err != nil {
+				return err
+			}
+			for i := range list {
+				e := &list[i]
+				if e.MailboxIDs[inbox] && !e.Keywords["$draft"] {
+					j.onNew(j.toMessage(e))
+				}
 			}
 		}
+		if r.NewState == since || r.NewState == "" {
+			return nil
+		}
+		since = r.NewState
+		j.mu.Lock()
+		j.state = since
+		j.mu.Unlock()
+		if !r.HasMoreChanges {
+			return nil
+		}
 	}
-	j.mu.Lock()
-	j.state = since
-	j.mu.Unlock()
-	return nil
 }
 
 func (j *jmapBackend) Checks(ctx context.Context) []Check {

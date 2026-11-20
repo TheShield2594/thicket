@@ -58,7 +58,7 @@ All take the mailbox from `_meta`, never from arguments.
 
 `thicket/gates_itself` tells core the tool enforces its own sending rules:
 core calls it at `act` and `draft` levels (with `draft_only` at draft),
-asks first at `ask`, refuses at `read`, and its default level is `act`.
+asks first at `ask`, refuses at `read`, and its default level is `draft`.
 `thicket/trailed` tells core the plugin's events trail it, so core doesn't
 add its own trail entry with the arguments (bodies stay out of the trail).
 
@@ -103,7 +103,8 @@ Replying to someone who wrote first does not add them to `allow`.
   attachments listed (name, type, size; never content), 20 recipients per
   message, 64 KiB body when composing, subject 300 characters.
 - Mail older than the account's `retention_days` is not listed or read for
-  the sprig (the provider keeps it; the dashboard still shows it).
+  the sprig (the provider keeps it; the dashboard still shows it), nor sent
+  with an unapproved `send_draft` (a person's approval of that draft lifts it).
 - A received message that looks like a one-time code (a 4–8 digit code near
   "code", "verification", "one-time", "OTP", "2FA", "security code",
   "passcode") has the code replaced in `read_mail` with
@@ -173,7 +174,19 @@ from `after=0`.
   `{"message_id": "…"}` (event `sent`, `approved: true`).
 - `POST /v1/mailbox/{sprig}/drafts/{id}/discard` → `{}` (event `discarded`).
 
-Errors are `{"error": "…"}` with 4xx/5xx. Unknown sprig: 404.
+Errors are `{"error": "…"}` with 4xx/5xx. Under `/v1/mailbox/{sprig}`:
+
+- **503**: the account is unavailable: not connected right now, or no
+  account for that sprig at all (unknown, or not pushed yet after a plugin
+  restart). Nothing is known about the draft or message; try again later.
+- **404**: the account is connected and the message, draft or attachment
+  doesn't exist there (or isn't a draft, for send/discard, or the draft
+  was already sent).
+- **409**: the draft is being sent right now by another call.
+- **400**: the draft can't be sent as it is (no recipients, too many).
+- **502**: the mail server failed or refused. When the server took a
+  message but never confirmed it, the error says so; that draft is not
+  sent again (a later send answers 404).
 
 ### `GET /v1/doctor`
 
@@ -200,5 +213,17 @@ Errors are `{"error": "…"}` with 4xx/5xx. Unknown sprig: 404.
 - Events may carry `bcc`, `reason` and `size` (drafted), `id` (archived);
   empty arrays are left out.
 - The mailbox listing also takes `folder=sent|archive`; `limit` defaults
-  to 50, at most 200. A disconnected account answers 503.
-- A one-time code is hidden in the subject too, for the sprig.
+  to 50, at most 200.
+- A one-time code is hidden in the subject too, for the sprig, and in a
+  reply's "Re:" subject. `list_mail` previews are made from the masked text;
+  where only the provider's own preview is known, every number that could be
+  a code is shown as `[number hidden]`.
+- `send_draft` and the dashboard's send submit the draft as it is in Drafts
+  (IMAP: its original MIME, attachments included, with the Bcc header
+  removed and the Bcc recipients in the envelope only). A draft is sent at
+  most once: a second send of the same draft, at the same time or after it
+  went out, is refused. A submission the server took but never confirmed
+  is reported as an error saying it may have been sent; it still counts
+  toward the daily limit and is not sent again automatically.
+- When the daily send count can't be saved, unapproved sends are drafted
+  instead (approved ones still go).

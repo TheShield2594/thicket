@@ -17,7 +17,9 @@ import (
 func (s *server) adminAccount(w http.ResponseWriter, r *http.Request) (*account, Backend, bool) {
 	a := s.lookup(r.PathValue("sprig"))
 	if a == nil {
-		jsonError(w, http.StatusNotFound, "no mail account for that sprig")
+		// Not 404: after a plugin restart no account exists until core pushes
+		// them again, and a 404 would tell core the draft is gone.
+		jsonError(w, http.StatusServiceUnavailable, "that sprig's mail account isn't connected yet (or isn't set up)")
 		return nil, nil, false
 	}
 	be, err := a.ready()
@@ -28,10 +30,18 @@ func (s *server) adminAccount(w http.ResponseWriter, r *http.Request) (*account,
 	return a, be, true
 }
 
+// adminFail answers an error. 404 means the draft or message is gone
+// (core drops its "needs you" item), 503 the account is unavailable (see
+// adminAccount); anything else is a failure to show.
 func (s *server) adminFail(w http.ResponseWriter, a *account, err error) {
 	code := http.StatusBadGateway
-	if errors.Is(err, errNotDraft) || errors.Is(err, errNotFound) {
+	switch {
+	case errors.Is(err, errNotDraft), errors.Is(err, errNotFound), errors.Is(err, errDraftSent):
 		code = http.StatusNotFound
+	case errors.Is(err, errDraftBusy):
+		code = http.StatusConflict
+	case errors.Is(err, errBadDraft):
+		code = http.StatusBadRequest
 	}
 	jsonError(w, code, a.cfg.scrub(err))
 }
@@ -122,29 +132,12 @@ func (s *server) mailboxSend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id := r.PathValue("id")
-	m, err := be.Get(r.Context(), id)
+	_, msgID, _, err := s.sendDraftCore(r.Context(), a, be, r.PathValue("id"), policy{approved: true}, false)
 	if err != nil {
 		s.adminFail(w, a, err)
 		return
 	}
-	if !m.Draft {
-		s.adminFail(w, a, errNotDraft)
-		return
-	}
-	out := s.draftOutgoing(a, m)
-	if len(out.recipients()) == 0 {
-		jsonError(w, http.StatusBadRequest, "the draft has no recipients")
-		return
-	}
-	_, release := s.sends.reserve(a.cfg.Sprig, a.cfg.sendLimit(), true, s.now())
-	if err := be.SendDraft(r.Context(), id, m); err != nil {
-		release()
-		s.adminFail(w, a, err)
-		return
-	}
-	s.sentEvent(a, out, true)
-	writeJSON(w, http.StatusOK, map[string]any{"message_id": bracket(m.MessageID)})
+	writeJSON(w, http.StatusOK, map[string]any{"message_id": bracket(msgID)})
 }
 
 func (s *server) mailboxDiscard(w http.ResponseWriter, r *http.Request) {

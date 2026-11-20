@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,14 +27,25 @@ func (s *server) mcp(w http.ResponseWriter, r *http.Request) {
 	result, err := s.answer(r, req)
 	resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
 	if err != nil {
-		resp["error"] = map[string]any{"code": -32601, "message": err.Error()}
+		resp["error"] = map[string]any{"code": err.code, "message": err.msg}
 	} else {
 		resp["result"] = result
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *server) answer(r *http.Request, req request) (any, error) {
+// JSON-RPC error codes.
+const (
+	rpcMethodNotFound = -32601
+	rpcInvalidParams  = -32602
+)
+
+type rpcError struct {
+	code int
+	msg  string
+}
+
+func (s *server) answer(r *http.Request, req request) (any, *rpcError) {
 	switch req.Method {
 	case "initialize":
 		return map[string]any{
@@ -47,14 +57,14 @@ func (s *server) answer(r *http.Request, req request) (any, error) {
 		return map[string]any{"tools": toolList()}, nil
 	case "tools/call":
 		var p toolCall
-		if err := json.Unmarshal(req.Params, &p); err != nil {
-			return nil, errors.New("bad params")
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.Name == "" {
+			return nil, &rpcError{rpcInvalidParams, "invalid params: a tool name and an arguments object are required"}
 		}
 		return s.callTool(r.Context(), p), nil
 	case "ping":
 		return map[string]any{}, nil
 	}
-	return nil, fmt.Errorf("method %s not found", req.Method)
+	return nil, &rpcError{rpcMethodNotFound, fmt.Sprintf("method %s not found", cleanLine(req.Method))}
 }
 
 // toolCall is a tools/call's params, with what core adds in _meta.

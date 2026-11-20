@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -73,7 +74,17 @@ func smtpDial(ctx context.Context, cfg AccountConfig, tlsFor func(string) *tls.C
 	return c, nil
 }
 
-// smtpSend submits one message. raw must not carry a Bcc header.
+// errUnconfirmed means a message was handed over in full but the server
+// never said whether it took it (the connection dropped while waiting for
+// the answer to DATA). It may well have gone out, so it must not be sent
+// again automatically, and the send still counts against the daily limit.
+var errUnconfirmed = errors.New("the mail server took the message but never confirmed it: it may have been sent, so it won't be sent again automatically")
+
+// smtpSend submits one message. raw must not carry a Bcc header. An
+// explicit refusal from the server, or a failure before the whole message
+// was written, is an ordinary error (nothing went out). A lost answer after
+// the whole message was written is errUnconfirmed. Once the server has
+// accepted the message, a failing QUIT doesn't matter.
 func smtpSend(ctx context.Context, cfg AccountConfig, tlsFor func(string) *tls.Config, from string, rcpts []string, raw []byte) error {
 	c, err := smtpDial(ctx, cfg, tlsFor)
 	if err != nil {
@@ -95,8 +106,14 @@ func smtpSend(ctx context.Context, cfg AccountConfig, tlsFor func(string) *tls.C
 	if _, err := w.Write(raw); err != nil {
 		return fmt.Errorf("SMTP DATA: %w", err)
 	}
+	// Close writes the final "." and reads the server's answer.
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("SMTP DATA: %w", err)
+		var te *textproto.Error
+		if errors.As(err, &te) {
+			return fmt.Errorf("SMTP DATA: %w", err) // the server said no
+		}
+		return fmt.Errorf("%w (%v)", errUnconfirmed, err)
 	}
-	return c.Quit()
+	_ = c.Quit() // accepted: the message is on its way whatever QUIT says
+	return nil
 }

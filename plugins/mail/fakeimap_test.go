@@ -164,6 +164,9 @@ type fakeIMAP struct {
 
 	mu   sync.Mutex
 	sent []fakeSent
+	// dropAfterData: take the message, then hang up instead of answering
+	// DATA (an unconfirmed submission).
+	dropAfterData bool
 }
 
 // newFakeIMAP starts both servers. imapSec/smtpSec "tls" serve TLS from
@@ -184,7 +187,7 @@ func newFakeIMAP(t *testing.T, cert tls.Certificate, address, imapSec, smtpSec s
 	}
 	go func() { _ = is.Serve(f.imapLn) }()
 
-	ss := smtp.NewServer(smtp.BackendFunc(func(c *smtp.Conn) (smtp.Session, error) { return &fakeSMTPSession{f: f}, nil }))
+	ss := smtp.NewServer(smtp.BackendFunc(func(c *smtp.Conn) (smtp.Session, error) { return &fakeSMTPSession{f: f, conn: c}, nil }))
 	ss.Domain = "localhost"
 	ss.ErrorLog = quiet
 	ss.AllowInsecureAuth = smtpSec == "none"
@@ -287,6 +290,7 @@ func (f *fakeIMAP) sentMail() []fakeSent {
 
 type fakeSMTPSession struct {
 	f     *fakeIMAP
+	conn  *smtp.Conn
 	authd bool
 	rcpts []string
 }
@@ -320,13 +324,17 @@ func (s *fakeSMTPSession) Data(r io.Reader) error {
 	if bytes.Contains(raw, []byte("\nBcc:")) {
 		return errors.New("a Bcc header went over the wire")
 	}
-	sent := fakeSent{rcpts: s.rcpts, subject: m.Subject, body: m.Text}
+	sent := fakeSent{rcpts: s.rcpts, subject: m.Subject, body: m.Text, raw: raw}
 	if len(m.InReplyTo) > 0 {
 		sent.inReply = m.InReplyTo[0]
 	}
 	s.f.mu.Lock()
 	s.f.sent = append(s.f.sent, sent)
+	drop := s.f.dropAfterData
 	s.f.mu.Unlock()
+	if drop {
+		_ = s.conn.Conn().Close() // the message is taken; the answer never comes
+	}
 	return nil
 }
 func (s *fakeSMTPSession) Reset()        { s.rcpts = nil }

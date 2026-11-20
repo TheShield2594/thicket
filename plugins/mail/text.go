@@ -20,12 +20,17 @@ import (
 func htmlToText(src string) string {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {
-		return cleanText(src)
+		// Never the raw source: it would carry scripts, hidden text and
+		// tracking links straight to the sprig. (The parser refuses, for
+		// example, nesting deeper than it allows.)
+		return htmlUnreadable
 	}
 	var w textWriter
 	w.node(doc)
 	return tidy(w.b.String())
 }
+
+const htmlUnreadable = "[this message's HTML couldn't be read]"
 
 // skipped elements: their content is never shown.
 var skipped = map[atom.Atom]bool{
@@ -327,16 +332,27 @@ func maskIn(s string, nearStart bool) (string, bool) {
 	codes := otpCode.FindAllStringIndex(s, -1)
 	var b strings.Builder
 	last, found := 0, false
+	// Codes and words both come in order, so one walk through each finds,
+	// for every code, the last word ending before it and the first word
+	// starting after it: linear, however many numbers and words there are.
+	w := 0
 	for _, c := range codes {
 		if !standalone(s, c[0], c[1]) {
 			continue
 		}
+		for w < len(words) && words[w][1] <= c[0] {
+			w++
+		}
 		near := nearStart && c[0] < 500
-		for _, wd := range words {
-			if (wd[1] <= c[0] && c[0]-wd[1] <= otpNear) || (c[1] <= wd[0] && wd[0]-c[1] <= otpNear) {
-				near = true
-				break
-			}
+		if w > 0 && c[0]-words[w-1][1] <= otpNear {
+			near = true
+		}
+		after := w
+		for after < len(words) && words[after][0] < c[1] {
+			after++ // overlaps the code: neither before nor after it
+		}
+		if after < len(words) && words[after][0]-c[1] <= otpNear {
+			near = true
 		}
 		if !near {
 			continue
@@ -351,6 +367,34 @@ func maskIn(s string, nearStart bool) (string, bool) {
 	}
 	b.WriteString(s[last:])
 	return b.String(), true
+}
+
+// digitsHidden replaces a number in a preview only the provider made.
+const digitsHidden = "[number hidden]"
+
+// maskDigits hides every number that could be a one-time code. It is for
+// previews where the rest of the text (and so the word that would say it
+// is a code) isn't known: better an order number hidden than a code shown.
+func maskDigits(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, c := range otpCode.FindAllStringIndex(s, -1) {
+		if !standalone(s, c[0], c[1]) {
+			continue
+		}
+		b.WriteString(s[last:c[0]])
+		b.WriteString(digitsHidden)
+		last = c[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// previewsOf is the preview of a whole text, as is (for the person) and
+// with one-time codes hidden (for the sprig).
+func previewsOf(subject, text string) (plain, masked string) {
+	m, _ := maskOTP(subject, text)
+	return preview(text), preview(m)
 }
 
 // standalone: the digits aren't part of a longer number like a phone

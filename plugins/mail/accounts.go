@@ -121,17 +121,21 @@ func (a Address) String() string {
 
 // Summary is one message in a listing.
 type Summary struct {
-	ID          string
-	Folder      string // inbox, drafts, sent, archive or other
-	From        Address
-	To          []Address
-	Subject     string
-	Date        time.Time
-	Size        int64
-	Preview     string
-	Attachments int
-	Unread      bool
-	Draft       bool
+	ID      string
+	Folder  string // inbox, drafts, sent, archive or other
+	From    Address
+	To      []Address
+	Subject string
+	Date    time.Time
+	Size    int64
+	Preview string
+	// SprigPreview is Preview with one-time codes hidden, made from the
+	// whole text when the backend had it ("" means: mask Preview
+	// conservatively, see sprigPreview).
+	SprigPreview string
+	Attachments  int
+	Unread       bool
+	Draft        bool
 }
 
 // Attachment describes one attachment (never its content).
@@ -197,8 +201,10 @@ type Backend interface {
 	// Send submits a new message and keeps a copy in Sent.
 	Send(ctx context.Context, out *Outgoing) error
 	// SendDraft submits a draft already in Drafts (msg is that draft, read
-	// with Get) and moves it to Sent.
-	SendDraft(ctx context.Context, id string, msg *Message) error
+	// with Get) and moves it to Sent. It returns the Message-ID the message
+	// went out with (bare). A submission handed over in full but never
+	// confirmed is errUnconfirmed.
+	SendDraft(ctx context.Context, id string, msg *Message) (string, error)
 	Discard(ctx context.Context, id string) error
 	Archive(ctx context.Context, id string) error
 	Checks(ctx context.Context) []Check
@@ -414,12 +420,14 @@ func (s *server) putAccounts(w http.ResponseWriter, r *http.Request) {
 		go a.stop()
 	}
 
-	// Give new connections a moment so the answer is useful.
-	deadline := time.After(s.timing.connectWait)
+	// Give new connections a moment so the answer is useful: one deadline
+	// for all of them, and never past the request itself.
+	wait, cancel := context.WithTimeout(r.Context(), s.timing.connectWait)
+	defer cancel()
 	for _, a := range current {
 		select {
 		case <-a.settled:
-		case <-deadline:
+		case <-wait.Done():
 		}
 	}
 	out := []accountStatus{}

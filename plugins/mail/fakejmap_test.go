@@ -21,6 +21,7 @@ type fakeJMAP struct {
 	user, pass string
 	address    string
 	offerES    bool
+	noSubmit   bool // the session offers no submission (read-only account)
 
 	mu          sync.Mutex
 	emails      map[string]*jEmail
@@ -31,6 +32,9 @@ type fakeJMAP struct {
 	submissions []fakeSent
 	subs        map[chan struct{}]bool
 	born        map[string]int // id -> state it was created in
+	// readUsedSubmission is set when a request with no submission method
+	// still asked for the submission capability.
+	readUsedSubmission bool
 }
 
 type fakeChange struct {
@@ -44,6 +48,7 @@ type fakeSent struct {
 	subject string
 	body    string
 	inReply string
+	raw     []byte // what went over SMTP (IMAP fake only)
 }
 
 var fakeBoxes = []map[string]string{
@@ -100,6 +105,9 @@ func (f *fakeJMAP) session(w http.ResponseWriter, _ *http.Request) {
 		"primaryAccounts": map[string]string{jmapMail: "acct1", jmapSubmission: "acct1"},
 		"apiUrl":          f.srv.URL + "/jmap/api",
 		"downloadUrl":     f.srv.URL + "/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+	}
+	if f.noSubmit {
+		delete(s["capabilities"].(map[string]any), jmapSubmission)
 	}
 	if f.offerES {
 		s["eventSourceUrl"] = f.srv.URL + "/jmap/es?types={types}&closeafter={closeafter}&ping={ping}"
@@ -256,17 +264,36 @@ func (f *fakeJMAP) api(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	created := map[string]string{} // creation id -> id, across the request
 	var out [][]any
+	sends := false
+	for _, mc := range req.MethodCalls {
+		var name string
+		_ = json.Unmarshal(mc[0], &name)
+		sends = sends || needsSubmission(name)
+	}
+	if !sends && slices.Contains(req.Using, jmapSubmission) {
+		f.readUsedSubmission = true
+	}
 	for _, mc := range req.MethodCalls {
 		var name, tag string
 		var args map[string]json.RawMessage
 		_ = json.Unmarshal(mc[0], &name)
 		_ = json.Unmarshal(mc[1], &args)
 		_ = json.Unmarshal(mc[2], &tag)
+		if needsSubmission(name) && !slices.Contains(req.Using, jmapSubmission) {
+			out = append(out, []any{"error", map[string]string{"type": "unknownMethod"}, tag})
+			continue
+		}
 		res, errType := f.method(name, args, created)
 		if errType != "" {
 			out = append(out, []any{"error", map[string]string{"type": errType}, tag})
-		} else {
-			out = append(out, []any{name, res, tag})
+			continue
+		}
+		out = append(out, []any{name, res, tag})
+		// RFC 8620 5.3 / RFC 8621 7.5: onSuccessUpdateEmail runs as an
+		// implicit Email/set whose answer follows, under the same call id.
+		if implicit, ok := res.(map[string]any)["implicit"]; ok {
+			delete(res.(map[string]any), "implicit")
+			out = append(out, []any{"Email/set", implicit, tag})
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -393,6 +420,7 @@ func (f *fakeJMAP) method(name string, args map[string]json.RawMessage, created 
 	case "Identity/get":
 		return map[string]any{"list": []map[string]string{{"id": "ident1", "email": f.address, "name": "Pip"}}}, ""
 	case "EmailSubmission/set":
+		updated := map[string]any{}
 		made := map[string]any{}
 		notMade := map[string]any{}
 		for cid, obj := range get[map[string]map[string]string](args, "create") {
@@ -423,9 +451,14 @@ func (f *fakeJMAP) method(name string, args map[string]json.RawMessage, created 
 			made[cid] = map[string]string{"id": "sub" + strconv.Itoa(len(f.submissions))}
 			if patch, ok := get[map[string]map[string]json.RawMessage](args, "onSuccessUpdateEmail")["#"+cid]; ok {
 				f.patch(e, patch)
+				updated[e.ID] = nil
 			}
 		}
-		return map[string]any{"created": made, "notCreated": notMade}, ""
+		res := map[string]any{"created": made, "notCreated": notMade}
+		if len(updated) > 0 {
+			res["implicit"] = map[string]any{"accountId": "acct1", "updated": updated, "newState": strconv.Itoa(f.state)}
+		}
+		return res, ""
 	}
 	return nil, "unknownMethod"
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -159,7 +160,8 @@ func TestAccountsLifecycle(t *testing.T) {
 	if r := h.tool("list_mail", map[string]any{}, callMeta{}); !r.IsError || !strings.Contains(r.text(), "no mail address") {
 		t.Fatalf("%+v", r)
 	}
-	if code, _ := h.do("GET", "/v1/mailbox/pip", nil); code != 404 {
+	// 503, not 404: core must not take "no account (yet)" for "draft gone".
+	if code, _ := h.do("GET", "/v1/mailbox/pip", nil); code != 503 {
 		t.Fatalf("admin: %d", code)
 	}
 }
@@ -223,14 +225,14 @@ func TestSendLimitPersists(t *testing.T) {
 	l, _ := openSendLog(dir)
 	now := time.Now()
 	for i := range 3 {
-		if ok, _ := l.reserve("pip", 3, false, now.Add(-time.Duration(i)*time.Hour)); !ok {
+		if _, err := l.reserve("pip", 3, false, now.Add(-time.Duration(i)*time.Hour)); err != nil {
 			t.Fatal("refused under the limit")
 		}
 	}
-	if ok, _ := l.reserve("pip", 3, false, now); ok {
+	if _, err := l.reserve("pip", 3, false, now); !errors.Is(err, errLimit) {
 		t.Fatal("over the limit")
 	}
-	if ok, _ := l.reserve("pip", 3, true, now); !ok {
+	if _, err := l.reserve("pip", 3, true, now); err != nil {
 		t.Fatal("approved send refused")
 	}
 	// After a restart the count is still there; old sends age out.
@@ -245,7 +247,7 @@ func TestSendLimitPersists(t *testing.T) {
 		t.Fatalf("rolling window: %d", n)
 	}
 	// A failed send gives its slot back.
-	_, release := l2.reserve("wren", 1, false, now)
+	release, _ := l2.reserve("wren", 1, false, now)
 	release()
 	if n := l2.count("wren", now); n != 0 {
 		t.Fatalf("released: %d", n)

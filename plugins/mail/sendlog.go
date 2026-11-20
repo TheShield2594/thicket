@@ -65,29 +65,45 @@ func (l *sendLog) recent(sprig string, now time.Time) []time.Time {
 	return keep
 }
 
+// errLimit is reserve's answer when the sprig is at its daily limit.
+var errLimit = errors.New("daily send limit reached")
+
 // reserve counts one send for the sprig if it is under its limit (or the
 // send is approved: approved sends count but are never refused). It
 // returns a release function to undo the count if sending then fails.
-func (l *sendLog) reserve(sprig string, limit int, approved bool, now time.Time) (bool, func()) {
+//
+// The count must survive a restart, or a restart would reset the limit.
+// So when the count can't be written to disk, an unapproved send is
+// refused (the reservation rolled back) with that error; an approved one
+// still goes, since a person said so and approved sends are never refused.
+func (l *sendLog) reserve(sprig string, limit int, approved bool, now time.Time) (func(), error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !approved && len(l.recent(sprig, now)) >= limit {
-		return false, func() {}
+		return func() {}, errLimit
 	}
 	l.recent(sprig, now)
 	l.sends[sprig] = append(l.sends[sprig], now)
-	l.save()
-	return true, func() {
+	if err := l.save(); err != nil && !approved {
+		l.drop(sprig, now)
+		return func() {}, fmt.Errorf("the daily send count couldn't be saved (%v)", err)
+	}
+	return func() {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		list := l.sends[sprig]
-		for i := len(list) - 1; i >= 0; i-- {
-			if list[i].Equal(now) {
-				l.sends[sprig] = append(list[:i:i], list[i+1:]...)
-				break
-			}
+		l.drop(sprig, now)
+		_ = l.save() // logged; a send that didn't happen counting once is harmless
+	}, nil
+}
+
+// drop removes one send at exactly t (call with mu held).
+func (l *sendLog) drop(sprig string, t time.Time) {
+	list := l.sends[sprig]
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].Equal(t) {
+			l.sends[sprig] = append(list[:i:i], list[i+1:]...)
+			return
 		}
-		l.save()
 	}
 }
 
@@ -99,13 +115,13 @@ func (l *sendLog) count(sprig string, now time.Time) int {
 }
 
 // save writes the file atomically: a temp file, synced, renamed over the
-// old one (call with mu held).
-func (l *sendLog) save() {
+// old one (call with mu held). Failures are logged and returned.
+func (l *sendLog) save() error {
 	b, _ := json.Marshal(map[string]any{"sends": l.sends})
 	tmp, err := os.CreateTemp(filepath.Dir(l.path), ".sends-*.json")
 	if err != nil {
 		log.Printf("mail: saving send counts: %v", err)
-		return
+		return err
 	}
 	_, err = tmp.Write(b)
 	if err == nil {
@@ -121,4 +137,5 @@ func (l *sendLog) save() {
 		os.Remove(tmp.Name())
 		log.Printf("mail: saving send counts: %v", err)
 	}
+	return err
 }
