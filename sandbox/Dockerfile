@@ -1,7 +1,7 @@
 # The sandbox: sprigs' own Linux computer. A small Go server (speaking MCP
 # to Thicket) on Debian with everyday tools. Build from the repo root:
 #   docker build -f sandbox/Dockerfile -t thicket-sandbox .
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
