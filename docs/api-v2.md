@@ -61,6 +61,8 @@ The web app uses the same endpoints under `/api/`.
 | `GET /api/v2/trail` | permission changes, sprig calendar entries and what sprigs did (admins: all) |
 | `POST /api/v2/trail/{id}/undo` | undo one |
 | `PUT /api/v2/levels` | admins: `{"sprig": "hal", "tool": "mcp_ha__turn_on", "level": "ask"}` (`""` resets) |
+| `GET /api/v2/sprigs/{id}/mail/allowlist` | a sprig's mail allowlist, for whoever may read its mail: `{"allowlist": ["shop@vendor.example", "@vendor.example"]}` |
+| `PATCH /api/v2/sprigs/{id}/mail/allowlist` | its owner only: `{"add": [...], "remove": [...]}`; in the trail. See [Email](mail.md) |
 
 ## Calendar
 

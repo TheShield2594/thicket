@@ -21,7 +21,7 @@ import (
 
 // trailUndo is the undo payload. Type decides which fields matter.
 type trailUndo struct {
-	Type      string   `json:"type"` // level | grant | allow | limits (Args = the limits to restore) | event | role | cap (Tool = period, Level = the cap to restore)
+	Type      string   `json:"type"` // level | grant | allow | limits (Args = the limits to restore) | event | role | cap (Tool = period, Level = the cap to restore) | mailallow (Tools = entries to put back, Args = entries to take off)
 	Character string   `json:"character,omitempty"`
 	Tool      string   `json:"tool,omitempty"`
 	Level     string   `json:"level,omitempty"` // the level to restore ("" = none set)
@@ -146,7 +146,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 		return ok && c.IsParent(by.ID)
 	}
 	switch {
-	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
+	case (u.Type == "level" || u.Type == "grant" || u.Type == "allow" || u.Type == "exec" || u.Type == "path" || u.Type == "mailallow") && u.Character != store.AllSprigs && e.Chars.PrivateFrom(u.Character, by.ID):
 		// someone else's private sprig: theirs to change, not undo
 		return "", fmt.Errorf("no sprig %q: %w", u.Character, store.ErrNotFound)
 	case u.Type == "limits" && !parentOf():
@@ -162,7 +162,7 @@ func (e *Engine) UndoTrail(ctx context.Context, by *store.User, id int64) (strin
 	case (u.Type == "mcp" || u.Type == "job") && t.UserID == by.ID:
 		// the person it was done for
 	case u.Type == "event", u.Type == "restore_event", by.IsAdmin():
-	case (u.Type == "level" || u.Type == "exec" || u.Type == "path") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
+	case (u.Type == "level" || u.Type == "exec" || u.Type == "path" || u.Type == "mailallow") && u.Character != store.AllSprigs && e.ownsSolo(u.Character, by.ID):
 		// a member undoing a change to their own private sprig
 	case (u.Type == "grant" || u.Type == "allow" || u.Type == "limits") && parentOf():
 		// a parent undoing a change to their kid's sprig
@@ -289,6 +289,8 @@ func (e *Engine) undo(ctx context.Context, by *store.User, u trailUndo) (string,
 		done = fmt.Sprintf("the invite for user %d is withdrawn", u.UserID)
 	case "exec", "path":
 		return e.undoAccess(ctx, by, u)
+	case "mailallow":
+		return e.undoMailAllow(ctx, by, u)
 	case "mcp", "job":
 		return e.undoAction(ctx, by, u)
 	case "cap":

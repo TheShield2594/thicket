@@ -41,6 +41,8 @@ type Household interface {
 	AddMCPCalendar(ctx context.Context, u *store.User, name string, m calendar.MCPSource, shared bool) (*store.CalendarSource, error)
 	RemoveCalendar(ctx context.Context, u *store.User, id int64) error
 	RemoveSprigEvent(ctx context.Context, u *store.User, id int64) (*store.SprigEvent, int64, error)
+	MailAllowlist(ctx context.Context, u *store.User, sprig string) ([]string, error)
+	ChangeMailAllow(ctx context.Context, by *store.User, sprig string, add, remove []string, via string) ([]string, error)
 }
 
 // KidSprigMaker creates kid sprigs (the engine's CreateKidSprig, adapted).
@@ -79,6 +81,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/trail", a.bearer(a.v2Trail))
 	mux.HandleFunc("POST /api/v2/trail/{id}/undo", a.bearer(a.v2Undo))
 	mux.HandleFunc("PUT /api/v2/levels", a.bearer(a.v2SetLevel))
+	mux.HandleFunc("GET /api/v2/sprigs/{id}/mail/allowlist", a.bearer(a.v2MailAllow))
+	mux.HandleFunc("PATCH /api/v2/sprigs/{id}/mail/allowlist", a.bearer(a.v2ChangeMailAllow))
 	// Household.
 	mux.HandleFunc("GET /api/v2/household", a.bearer(a.v2Household))
 	mux.HandleFunc("POST /api/v2/household/invites", a.bearer(a.v2Invite))
@@ -514,6 +518,33 @@ func (a *Adapter) v2SetLevel(w http.ResponseWriter, r *http.Request, u *store.Us
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// --- a sprig's mail allowlist (docs/mail.md) ---
+
+func (a *Adapter) v2MailAllow(w http.ResponseWriter, r *http.Request, u *store.User) {
+	list, err := a.Household.MailAllowlist(r.Context(), u, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowlist": list})
+}
+
+func (a *Adapter) v2ChangeMailAllow(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var b struct {
+		Add    []string `json:"add"`
+		Remove []string `json:"remove"`
+	}
+	if !decodeBody(w, r, &b) {
+		return
+	}
+	list, err := a.Household.ChangeMailAllow(r.Context(), u, r.PathValue("id"), b.Add, b.Remove, "through the API")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowlist": list})
 }
 
 // --- household ---

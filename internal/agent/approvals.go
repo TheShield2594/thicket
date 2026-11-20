@@ -432,7 +432,7 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 		runCtx, m = budget.WithMeter(ctx)
 		finish = func() { _ = e.DB.FinishEstimate(context.WithoutCancel(ctx), id, m.USD()) }
 	}
-	out, err := tool.Run(runCtx, t, args)
+	out, err := tool.Run(withFlag(runCtx, approvedFlag), t, args) // a person said yes to this exact call
 	finish()
 	raw := out
 	if err != nil {
@@ -466,6 +466,9 @@ func (e *Engine) RunDraft(ctx context.Context, user *store.User, id int64) error
 	}
 	if it.Kind != store.InboxDraft || it.Status != "open" || it.Action == "" {
 		return errors.New("that isn't an open draft")
+	}
+	if sprig, draftID, ok := MailDraftOf(it.Action); ok {
+		return e.sendMailDraft(ctx, user, it, sprig, draftID)
 	}
 	var act draftAction
 	if err := json.Unmarshal([]byte(it.Action), &act); err != nil {

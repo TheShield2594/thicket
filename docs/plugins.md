@@ -89,6 +89,32 @@ by adding to a tool result:
 It can only raise a floor, never lower one. See
 [Calls that always ask](mcp.md#calls-that-always-ask-level-floors).
 
+### Who is calling, and tools that gate themselves
+
+A plugin Thicket set up (its integration carries the shared token) is
+told who is calling. Every `tools/call` carries, in its params' `_meta`:
+
+```json
+{"thicket/call": {"sprig": "pip", "approved": false, "draft_only": false}}
+```
+
+`sprig` is the sprig making the call (never take it from the model's
+arguments), `approved` that a person said yes to this exact call, and
+`draft_only` that the sprig is at draft level for it. A plugin can then
+mark tools in `tools/list` with hints of its own, in the tool's `_meta`:
+
+- `"thicket/gates_itself": true`: the tool enforces its own rules for
+  what it does on its own and drafts otherwise (the mail plugin's
+  allowlist). Thicket calls it at `draft` level too (with `draft_only`),
+  asks first at `ask`, refuses at `read`, and its default level is `act`.
+- `"thicket/trailed": true`: the plugin reports what the tool did
+  itself, so Thicket doesn't copy its arguments into the trail.
+
+Hints from any other integration are ignored, and it isn't told who is
+calling. The mail plugin also returns `"thicket/drafted"` in a result's
+`_meta` when it saved a draft for a person, which Thicket puts in "needs
+you" (see [Email](mail.md)).
+
 ### Registering it in Thicket
 
 A plugin Thicket knows is one line in `internal/plugin` (`Builtin`):
@@ -100,11 +126,13 @@ plugin.Spec{
 	DefaultURL:  "http://voice:7071", // tried when THICKET_VOICE_URL is unset
 	KidsAllowed: false,              // kid sprigs can't be given it
 	Exec:        false,              // true if it runs commands (needs exec on)
-	Check:       nil,                // optional extra doctor check
+	Check:       nil,                // optional extra doctor check: (note, error)
 }
 ```
 
-Core gets nothing else from a plugin: no new tables and no special cases.
+Core gets nothing else from a plugin unless its feature needs it (email
+has its own addresses, allowlist and dashboard page in core, see
+[Email](mail.md)).
 And in `docker-compose.yml`, a service under its profile:
 
 ```yaml

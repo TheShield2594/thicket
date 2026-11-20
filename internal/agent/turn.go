@@ -425,8 +425,12 @@ func (e *Engine) executeTool(ctx context.Context, t *turn, tools map[string]*Too
 	if msg := e.kidOutbound(ctx, t, tool, args); msg != "" {
 		return msg // personal details a kid shared stay in Thicket
 	}
-	if msg, ok := e.gate(ctx, t, tool, args); !ok {
+	msg, ok, draftOnly := e.gate(ctx, t, tool, args)
+	if !ok {
 		return msg
+	}
+	if draftOnly {
+		ctx = withFlag(ctx, draftOnlyFlag)
 	}
 	if msg := e.rateLimited(ctx, t, tool, true); msg != "" {
 		return msg

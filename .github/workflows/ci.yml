@@ -119,3 +119,5 @@ jobs:
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             -f sandbox/Dockerfile \
             -t "$IMAGE-sandbox:edge" -t "$IMAGE-sandbox:${{ github.sha }}" .
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -t "$IMAGE-mail:edge" -t "$IMAGE-mail:${{ github.sha }}" plugins/mail

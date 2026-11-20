@@ -4,7 +4,34 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v35)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v36)
+
+- Sprigs' own email addresses (schema v36, #88, #89, #90): the optional
+  `thicket-mail` plugin (`docker compose --profile mail up -d`) gives a
+  sprig its own address over JMAP, or IMAP and SMTP (TLS only; plaintext
+  and servers without STARTTLS are refused). You make the address and an
+  app password and give them to Juni in a DM; the password goes to the
+  encrypted store and the redactor, and to the plugin's memory only. The
+  sprig lists, reads, drafts, sends, replies and archives; mail is
+  untrusted content, HTML turned into text, links shown with their real
+  target, one-time codes hidden from the sprig and shown to you in
+  "needs you". It sends on its own only at `act`, to recipients that are
+  **all** on its allowlist (addresses or `@domain`s only its owner
+  changes, in chat, on the dashboard or through
+  `/api/v2/sprigs/{id}/mail/allowlist`; every change in the trail and
+  undoable), under a daily limit (20); anything else is a draft in its
+  Drafts and in "needs you" with **Send** and **Discard**. Every send and
+  receive is in the trail (from, to, subject, size, message id, never
+  the body); new mail checks the sprig's mail triggers at once; mail
+  older than 90 days isn't offered to it. The dashboard's new **Mail**
+  page shows each mailbox you may see (a private sprig's only to its
+  person, a shared one's to adults), as text, with attachments as
+  downloads. Kid sprigs can't have email. `thicket doctor` checks each
+  address, with advice on SPF, DKIM and DMARC. Plugins Thicket set up are
+  now told which sprig is calling and whether a person approved the call
+  (`_meta` `thicket/call`), and may mark tools that gate themselves or
+  trail themselves. "Needs you" gains a `code` kind (the inbox table is
+  rebuilt by the migration). See [Email](docs/mail.md).
 
 - Plugins (#78): optional abilities run in their own containers, started
   by a compose profile and connected as built-in integrations named after

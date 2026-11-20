@@ -30,6 +30,7 @@ const (
 	TrailLimit   = "limit"   // a kid sprig stopped at a time limit
 	TrailSkill   = "skill"   // a sprig's own skill was moved to the shared library
 	TrailFloor   = "floor"   // a call had a level floor: it asked first whatever its level
+	TrailMail    = "mail"    // a sprig's address sent or received a message (never the body)
 )
 
 type TrailEntry struct {

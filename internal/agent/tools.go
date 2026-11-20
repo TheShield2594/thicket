@@ -15,6 +15,8 @@ import (
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
+	"github.com/theshield2594/thicket/internal/mail"
+	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
 	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/scheduler"
@@ -58,6 +60,11 @@ type Tool struct {
 	// Trailed: the tool records itself in the trail (calendar entries),
 	// so a finished call isn't recorded again (actions.go).
 	Trailed bool
+	// GatesItself: one of Thicket's own plugins enforces its own rules for
+	// what the tool does on its own (the mail plugin's allowlist) and
+	// drafts otherwise. It is called at draft level too, told to only
+	// draft, and acts by default (levels.go).
+	GatesItself bool
 	// Remote is an integration tool's own name (Name is the model-facing
 	// mcp_<server>__<tool>).
 	Remote string
@@ -123,6 +130,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 	}
 	if e.MCP != nil {
 		execOK := e.execAllowed(ctx, t.char)
+		own := e.managedPlugins(ctx)
 		for _, st := range e.MCP.Tools() {
 			if !t.char.AllowsMCP(st.Server, st.Tool.Name) {
 				continue
@@ -148,6 +156,9 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 				Risky:       !st.Tool.ReadOnly(),
 				Untrusted:   true,
 				Exec:        st.Exec,
+				// Hints are honoured only from Thicket's own plugins.
+				GatesItself: own[st.Server] && !st.Tool.ReadOnly() && st.Tool.Hint(mcp.GatesItselfHint),
+				Trailed:     own[st.Server] && st.Tool.Hint(mcp.TrailedHint),
 				Run: func(ctx context.Context, t *turn, args json.RawMessage) (string, error) {
 					// Checked again here, in code, for every way a call
 					// runs (straight away, approved, from a draft).
@@ -161,11 +172,21 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 							return "", err
 						}
 					}
+					// One of Thicket's own plugins is told who is calling.
+					if own[st.Server] {
+						var err error
+						if ctx, err = e.pluginCtx(ctx, t.char.ID, st.Server); err != nil {
+							return "", err
+						}
+					}
 					// Exec is checked again on the connection that serves the
 					// call: the integration may have been re-marked since.
 					res, err := e.MCP.CallAs(ctx, t.char.ID, st.Server, st.Tool.Name, args, st.Tool.ReadOnly(), e.execAllowed(ctx, t.char))
 					if err != nil {
 						return "", err
+					}
+					if res.Drafted != nil && own[st.Server] && st.Server == mail.Plugin {
+						e.mailDrafted(ctx, t, res.Drafted)
 					}
 					if res.Floor != nil {
 						f := pluginFloor(st.Server, res.Floor)
@@ -508,6 +529,30 @@ func (e *Engine) builtinTools() []*Tool {
 			Scope:       "admin",
 			AdminOnly:   true,
 			Run:         e.toolActivity,
+		},
+		{
+			Name:   "mail_address",
+			Config: true,
+			Shows:  true, ShowWith: []string{"sprig"},
+			Description: "Show, set up or remove a sprig's own email address (the thicket-mail plugin: signups, receipts, newsletters, writing to vendors for the person). " +
+				"The person makes the address themselves (an alias or a mailbox on a domain they own) and an app password for it. action set: address, backend jmap (session_url, e.g. https://api.fastmail.com/jmap/session; username = the login) or imap (imap_host, smtp_host, ports and security tls or starttls; username defaults to the address); " +
+				"Thicket then asks for the app password in their next DM (you never see it). Only the sprig's owner may; kid sprigs can't have email. After setup: grant_tools mcp:mail/* and mail_allowlist.",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string"},"action":{"type":"string","enum":["show","set","remove"]},"address":{"type":"string"},"backend":{"type":"string","enum":["jmap","imap"]},"session_url":{"type":"string"},"username":{"type":"string"},"imap_host":{"type":"string"},"imap_port":{"type":"integer"},"imap_security":{"type":"string","enum":["tls","starttls"]},"smtp_host":{"type":"string"},"smtp_port":{"type":"integer"},"smtp_security":{"type":"string","enum":["tls","starttls"]},"retention_days":{"type":"integer","description":"mail older than this isn't offered to the sprig (default 90)"},"send_limit":{"type":"integer","description":"emails a day it may send on its own (default 20)"},"new_password":{"type":"boolean","description":"ask for the password again"}},"required":["sprig"]}`,
+			Scope:    "characters",
+			ChatOnly: true,
+			Run:      e.toolMailAddress,
+		},
+		{
+			Name:   "mail_allowlist",
+			Config: true,
+			Shows:  true, ShowWith: []string{"sprig"},
+			Description: "Show or change who a sprig may email without asking: exact addresses (shop@vendor.example) or whole domains (@vendor.example). " +
+				"Every recipient (to, cc, bcc) must be on it, and the sprig's mail tools at act level, for an email to go straight out; anything else is drafted for the person to send from needs you. " +
+				"Replying to someone doesn't add them. Only the sprig's owner may change it; every change is in the trail. Omit add and remove to show it.",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["sprig"]}`,
+			Scope:    "characters",
+			ChatOnly: true,
+			Run:      e.toolMailAllowlist,
 		},
 		{
 			Name:        "request_secret",

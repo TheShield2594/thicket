@@ -60,15 +60,28 @@ func (e *Engine) toolLevel(ctx context.Context, c *character.Character, tool *To
 	if lv != "" {
 		return lv
 	}
-	if tool.Risky {
+	if tool.Risky && !tool.GatesItself {
 		return store.LevelAsk
 	}
-	return store.LevelAct
+	return store.LevelAct // a tool that gates itself drafts unless its own rules allow
 }
 
 // gate applies the level to a call. It returns ok=true when the tool may
-// run now; otherwise msg is what the model is told instead.
-func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok bool) {
+// run now; otherwise msg is what the model is told instead. draftOnly:
+// the tool gates itself and runs only to draft (draft level).
+func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok, draftOnly bool) {
+	msg, ok = e.gateLevel(ctx, t, tool, args)
+	if msg == gateDraftOnly {
+		return "", true, true
+	}
+	return msg, ok, false
+}
+
+// gateDraftOnly is gateLevel's answer for a tool that gates itself, at
+// draft level: run it, told to only draft.
+const gateDraftOnly = "\x00draft-only"
+
+func (e *Engine) gateLevel(ctx context.Context, t *turn, tool *Tool, args json.RawMessage) (msg string, ok bool) {
 	lv := e.toolLevel(ctx, t.char, tool)
 	floor, floored := e.floorFor(ctx, t, tool)
 	if floored {
@@ -92,6 +105,8 @@ func (e *Engine) gate(ctx context.Context, t *turn, tool *Tool, args json.RawMes
 	case lv == store.LevelRead:
 		e.logActivity(ctx, "warn", "tool", t.char.ID, t.user.ID, "refused "+tool.Name+": read-only access", "")
 		return fmt.Sprintf("Error: you only have read access to %s, so you can't use it to change anything. Tell the user what you would have done; they can raise your access.", tool.Label()), false
+	case tool.GatesItself: // draft: the plugin drafts it where the person can send it
+		return gateDraftOnly, false
 	default: // draft
 		return e.draftAction(ctx, t, tool, args), false
 	}

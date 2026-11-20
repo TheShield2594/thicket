@@ -180,6 +180,15 @@ func (e *Engine) PollTriggers(ctx context.Context) {
 }
 
 func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
+	// One poll of a trigger at a time (new mail polls at once, besides
+	// the clock), so the same item can't fire twice.
+	if _, busy := e.pollBusy.LoadOrStore(tr.JobID, struct{}{}); busy {
+		return
+	}
+	defer e.pollBusy.Delete(tr.JobID)
+	if fresh, err := e.DB.TriggerFor(ctx, tr.JobID); err == nil {
+		tr = *fresh // what was seen may have changed since tr was read
+	}
 	j, err := e.DB.JobByID(ctx, tr.JobID)
 	if err != nil {
 		return
@@ -216,6 +225,12 @@ func (e *Engine) pollOne(ctx context.Context, tr store.Trigger) {
 	tctx, flight, done := e.track(ctx, &e.jobsRunning, fmt.Sprintf("poll:%d", tr.JobID), j.UserID, j.Name)
 	defer done()
 	flight.setChar(j.Character)
+	if e.managedPlugins(ctx)[tr.Server] {
+		if tctx, err = e.pluginCtx(tctx, j.Character, tr.Server); err != nil {
+			_ = e.DB.SavePollError(ctx, tr.JobID, err.Error())
+			return
+		}
+	}
 	cctx, cancel := context.WithTimeout(tctx, pollCallTimeout)
 	// The read-only and exec checks run on the connection actually used,
 	// so a change between pollRefusal and the call can't slip through.

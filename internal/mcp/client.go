@@ -30,7 +30,28 @@ type Tool struct {
 		ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
 		DestructiveHint *bool `json:"destructiveHint,omitempty"`
 	} `json:"annotations"`
+	// Meta is the tool's _meta. Thicket reads hints under "thicket/" from
+	// it (Hint), honoured only for its own plugins (see agent/tools.go).
+	Meta map[string]json.RawMessage `json:"_meta,omitempty"`
 }
+
+// Hint reports whether the tool's _meta sets key to true.
+func (t Tool) Hint(key string) bool {
+	var v bool
+	return t.Meta != nil && json.Unmarshal(t.Meta[key], &v) == nil && v
+}
+
+// Tool hints a plugin can give in a tool's _meta (docs/plugins.md).
+const (
+	// GatesItselfHint: the tool enforces its own rules for what it does
+	// on its own (a mail plugin's allowlist) and drafts otherwise, so it
+	// is called at draft level too (told to only draft) and acts by
+	// default.
+	GatesItselfHint = "thicket/gates_itself"
+	// TrailedHint: the plugin reports what the tool did itself, so its
+	// arguments aren't copied into the trail.
+	TrailedHint = "thicket/trailed"
+)
 
 // ReadOnly reports whether the server says this tool has no side effects.
 func (t Tool) ReadOnly() bool {
@@ -44,6 +65,27 @@ type CallResult struct {
 	// that follow (its result's _meta "thicket/floor"), nil if none. It
 	// can only make Thicket stricter: see agent/floors.go.
 	Floor *FloorMeta
+	// Drafted is the result's _meta "thicket/drafted": the plugin saved a
+	// draft for a person to send or discard (nil if not).
+	Drafted json.RawMessage
+}
+
+// DraftedMetaKey is the _meta key a plugin uses to say it drafted
+// something for a person instead of doing it.
+const DraftedMetaKey = "thicket/drafted"
+
+type metaKey struct{}
+
+// WithMeta returns a context whose tool calls carry meta as the request's
+// _meta (who is calling, for Thicket's own plugins).
+func WithMeta(ctx context.Context, meta map[string]any) context.Context {
+	return context.WithValue(ctx, metaKey{}, meta)
+}
+
+// MetaFrom returns the _meta WithMeta set, or nil.
+func MetaFrom(ctx context.Context) map[string]any {
+	m, _ := ctx.Value(metaKey{}).(map[string]any)
+	return m
 }
 
 // FloorMeta is what a server puts in a tool result's _meta under
@@ -268,7 +310,11 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 		IsError           bool                       `json:"isError"`
 		Meta              map[string]json.RawMessage `json:"_meta"`
 	}
-	if err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": args}, &res); err != nil {
+	params := map[string]any{"name": name, "arguments": args}
+	if m := MetaFrom(ctx); len(m) > 0 {
+		params["_meta"] = m
+	}
+	if err := c.call(ctx, "tools/call", params, &res); err != nil {
 		return nil, err
 	}
 	var b strings.Builder
@@ -291,6 +337,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 			f = FloorMeta{} // present but unreadable: still a floor (fail closed)
 		}
 		out.Floor = &f
+	}
+	if raw, ok := res.Meta[DraftedMetaKey]; ok && len(raw) > 0 && string(raw) != "null" {
+		out.Drafted = raw
 	}
 	return out, nil
 }
