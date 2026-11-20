@@ -188,3 +188,17 @@ Errors are `{"error": "…"}` with 4xx/5xx. Unknown sprig: 404.
 ```
 
 `warn: true` is advice only (SPF/DKIM/DMARC for the sending domain).
+
+## Details the implementation settled
+
+- `send_limit` 0 or missing means 20; `retention_days` 0 or missing, 90.
+- `list_mail` and `read_mail` answer with indented JSON as their text;
+  `read_mail` adds `reply_to` and `more_attachments` when relevant and
+  marks the message read.
+- `draft_mail`'s `in_reply_to` is a message id from `list_mail` or a
+  literal `<Message-ID>`.
+- Events may carry `bcc`, `reason` and `size` (drafted), `id` (archived);
+  empty arrays are left out.
+- The mailbox listing also takes `folder=sent|archive`; `limit` defaults
+  to 50, at most 200. A disconnected account answers 503.
+- A one-time code is hidden in the subject too, for the sprig.
