@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl wget git jq less nano procps file tree \
       zip unzip xz-utils sqlite3 python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 --shell /bin/bash sprig \
+    && groupadd --gid 65532 thicket \
+    && useradd --create-home --uid 1000 --groups thicket --shell /bin/bash sprig \
     && mkdir -p /workspace && chown sprig:sprig /workspace
 COPY --from=build /out/thicket-sandbox /usr/local/bin/thicket-sandbox
 USER sprig

@@ -134,6 +134,24 @@ type Registry struct {
 	conns map[string]*conn  // by connKey
 	gen   map[string]uint64 // by connKey: bumped on every (re)connect or removal
 	sgen  map[string]uint64 // by server: bumped when a server is removed or replaced
+	// blocked servers are never connected (Block).
+	blocked map[string]bool
+}
+
+// ErrBlocked means a server is kept from connecting (Block).
+var ErrBlocked = errors.New("this integration is turned off")
+
+// Block keeps a server from connecting, whatever its stored settings say,
+// and drops any connection it has: for a plugin turned off whose stored
+// integration couldn't be turned off.
+func (r *Registry) Block(name string) {
+	r.mu.Lock()
+	if r.blocked == nil {
+		r.blocked = map[string]bool{}
+	}
+	r.blocked[name] = true
+	r.mu.Unlock()
+	r.Disconnect(name)
 }
 
 func NewRegistry(db *store.Store, sec Expander, log *slog.Logger) *Registry {
@@ -221,6 +239,10 @@ func (r *Registry) connect(ctx context.Context, s store.MCPServer, sprig string,
 	}
 	key := connKey(s.Name, sprig)
 	r.mu.Lock()
+	if r.blocked[s.Name] {
+		r.mu.Unlock()
+		return nil, ErrBlocked
+	}
 	r.gen[key]++
 	myGen, mySGen := r.gen[key], r.sgen[s.Name]
 	r.retireLocked(r.conns[key])

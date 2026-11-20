@@ -436,7 +436,11 @@ func inboxCmd(args []string, out io.Writer) error {
 			return nil
 		}
 		for _, a := range apps {
-			fmt.Fprintf(out, "approval  %s wants to run %s (user %d): answer approve/deny in chat\n", a.Character, a.Tool, a.UserID)
+			always := ""
+			if a.Floor != "" {
+				always = " (always asks: " + a.Floor + ")"
+			}
+			fmt.Fprintf(out, "approval  %s wants to run %s%s (user %d): answer approve/deny in chat\n", a.Character, a.Tool, always, a.UserID)
 		}
 		for _, it := range items {
 			n := ""

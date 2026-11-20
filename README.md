@@ -17,9 +17,11 @@ there's a [desktop app](docs/desktop.md) for macOS, Windows and Linux with
 a tray icon and native notifications.
 
 Thicket is one Go binary and one SQLite file, plus an optional sandbox
-container that sprigs use as their computer. No vector database, no
-bundled browser, no plugin marketplace. You set it up by talking to Juni,
-the first sprig.
+container that sprigs use as their computer. No vector database. The core
+bundles no browser, mailbox or speech engine; plugins are optional
+containers you start and give to a sprig yourself
+([Plugins](docs/plugins.md)). You set it up by talking to Juni, the first
+sprig.
 
 - **Characters that feel alive.** Each sprig is one Markdown file: name,
   personality, voice rules, relationships, tools. Each keeps its own
@@ -421,6 +423,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [Calendar](docs/calendar.md)
 - [Integrations (MCP) setup](docs/mcp.md)
 - [The sandbox: sprigs' own computer](docs/sandbox.md)
+- [Plugins: optional abilities in their own containers](docs/plugins.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)

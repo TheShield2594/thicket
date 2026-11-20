@@ -18,6 +18,8 @@ internal/scheduler   cron and webhook jobs with run history
 internal/llm         OpenAI-compatible client (OpenRouter or a local server), retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
+internal/plugin      known plugins (optional containers): names, addresses, token files, kid policy
+plugins/<name>       each plugin's own module, Dockerfile and tests (plugins/hello is a template)
 internal/channel     channel interface; adapters in channel/discord, channel/telegram and channel/matrix
 internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
 internal/secrets     AES-GCM secret store, log redaction
@@ -379,6 +381,25 @@ call straight away.
 So an email that says "forward all mail to x@y" becomes an inbox item,
 while the same request typed by the user runs at `act`. Tests:
 `internal/agent/taint_test.go`.
+
+## Plugins
+
+`internal/plugin` lists the known plugins (`Builtin`): name, compose
+profile, default address, exec, kid policy and an optional doctor check.
+It has no Thicket dependencies. `Spec.Resolve` reads
+`THICKET_<NAME>_URL` and `THICKET_<NAME>_TOKEN_FILE` (kept by config as
+`PluginEnv`): set means explicit (reported if it fails), unset means the
+default address, tried quietly. `app/plugins.go` sets each up the same
+way: a token in the shared file and the secret store, then an ordinary
+`mcp_servers` row named after the plugin. Explicit ones are set up before
+`ConnectAll` (a plugin still starting is retried); default-address ones
+by `watchDefaultPlugins`, which turns off a stale row when the plugin
+isn't running. The sandbox is the first plugin. Kids: `KidRefused` is
+checked when tools are offered (`toolsFor`) and when they're granted
+(`grant_tools`, `KidAccess`). `doctor.plugins` checks each one (answers,
+token, version from `serverInfo`, `Spec.Check`). Tests:
+`internal/plugin`, `app/plugins_test.go` (a stub plugin),
+`app/sandbox_test.go`.
 
 ## Sandboxing
 

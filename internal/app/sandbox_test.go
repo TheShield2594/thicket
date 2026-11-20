@@ -33,8 +33,8 @@ func TestSandboxComputer(t *testing.T) {
 	srv := httptest.NewServer(box.Handler())
 	defer srv.Close()
 
-	a.Cfg.SandboxURL = srv.URL
-	a.Cfg.SandboxTokenFile = box.TokenFile
+	a.Cfg.SetPluginEnv("THICKET_SANDBOX_URL", srv.URL)
+	a.Cfg.SetPluginEnv("THICKET_SANDBOX_TOKEN_FILE", box.TokenFile)
 	a.ensureSandbox(ctx)
 	// The token is shared through the file, and the integration stored once.
 	tok, err := os.ReadFile(box.TokenFile)

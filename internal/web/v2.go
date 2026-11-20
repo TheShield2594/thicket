@@ -433,7 +433,7 @@ func (a *Adapter) v2Approvals(w http.ResponseWriter, r *http.Request, u *store.U
 	}
 	out := []map[string]any{}
 	for _, ap := range aps {
-		out = append(out, map[string]any{"id": ap.ID, "sprig": ap.Character, "tool": ap.Tool, "args": json.RawMessage(validJSON(ap.Args)), "created_at": ap.CreatedAt})
+		out = append(out, map[string]any{"id": ap.ID, "sprig": ap.Character, "tool": ap.Tool, "args": json.RawMessage(validJSON(ap.Args)), "created_at": ap.CreatedAt, "always_asks": ap.Floor})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": out})
 }

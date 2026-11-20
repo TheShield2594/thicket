@@ -53,12 +53,10 @@ type Config struct {
 	ModelURL    string
 	ModelAPIKey string // optional key for a self-hosted server
 	SearchURL   string // a SearXNG instance for web search (optional)
-	// SandboxURL is the thicket-sandbox container's MCP address; when set,
-	// Thicket connects it as the "sandbox" integration (sprigs' computer).
-	SandboxURL string
-	// SandboxTokenFile is where the token shared with the sandbox lives (a
-	// small volume both containers mount).
-	SandboxTokenFile string
+	// PluginEnv holds the plugins' THICKET_<NAME>_URL and
+	// THICKET_<NAME>_TOKEN_FILE variables as they were at start (a set but
+	// empty one is kept: it turns a plugin off). See internal/plugin.
+	PluginEnv map[string]string
 	// WebProxy sends fetch_page through HTTPS_PROXY/HTTP_PROXY (see
 	// docs/web.md for the trade-off).
 	WebProxy bool
@@ -103,8 +101,7 @@ func Load() (*Config, error) {
 		ModelURL:              strings.TrimRight(env("THICKET_MODEL_URL", env("OPENROUTER_BASE_URL", DefaultModelURL)), "/"),
 		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
 		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
-		SandboxURL:            strings.TrimRight(env("THICKET_SANDBOX_URL", ""), "/"),
-		SandboxTokenFile:      env("THICKET_SANDBOX_TOKEN_FILE", ""),
+		PluginEnv:             pluginEnv(os.Environ()),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
 		CheapModel:            env("THICKET_CHEAP_MODEL", DefaultCheapModel),
@@ -379,4 +376,31 @@ func (c *Config) CommonsListen() {
 	case "matrix":
 		c.MatrixListenRooms = append(c.MatrixListenRooms, id)
 	}
+}
+
+// pluginEnv keeps the variables that say where plugins are.
+func pluginEnv(environ []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range environ {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "THICKET_") && (strings.HasSuffix(k, "_URL") || strings.HasSuffix(k, "_TOKEN_FILE")) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// LookupPluginEnv reads a plugin variable kept at start, the way
+// os.LookupEnv does.
+func (c *Config) LookupPluginEnv(key string) (string, bool) {
+	v, ok := c.PluginEnv[key]
+	return v, ok
+}
+
+// SetPluginEnv sets a plugin variable (tests, and `thicket doctor` flags).
+func (c *Config) SetPluginEnv(key, value string) {
+	if c.PluginEnv == nil {
+		c.PluginEnv = map[string]string{}
+	}
+	c.PluginEnv[key] = value
 }

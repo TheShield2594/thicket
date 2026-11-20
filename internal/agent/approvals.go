@@ -416,7 +416,8 @@ func (e *Engine) runApproved(ctx context.Context, t *turn, name string, args jso
 		}
 	}
 	if changes(tool) {
-		if lv := e.toolLevel(ctx, t.char, tool); lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
+		lv := e.effectiveLevel(ctx, t, tool) // a floor set since it asked counts too
+		if lv == store.LevelRead || (lv == store.LevelDraft && !fromDraft) {
 			return "Error: your access to " + name + " was lowered to " + lv + " since you asked, so it wasn't run."
 		}
 	}
@@ -492,7 +493,9 @@ func (e *Engine) RunDraft(ctx context.Context, user *store.User, id int64) error
 	if tool == nil {
 		return errors.New(char.DisplayName() + " can't use " + act.Tool + " any more")
 	}
-	if e.toolLevel(ctx, char, tool) == store.LevelRead {
+	// Checked before the draft is claimed, floors included, so a draft
+	// that can't run stays open.
+	if e.effectiveLevel(ctx, t, tool) == store.LevelRead {
 		return errors.New(char.DisplayName() + " is at read level for that tool now, so it can't be done")
 	}
 	if err := e.paused(ctx, char.ID); err != nil {
@@ -520,6 +523,8 @@ func (e *Engine) internalAction(ctx context.Context, user *store.User, a *store.
 		return e.raiseLevel(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "import_sprig":
 		return e.importSprig(ctx, user, json.RawMessage(a.Args))
+	case internalPrefix + "approve_skill":
+		return e.approveSkill(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "add_starter":
 		return e.addStarter(ctx, user, json.RawMessage(a.Args))
 	case internalPrefix + "create_kid_sprig":

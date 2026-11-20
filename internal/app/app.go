@@ -31,6 +31,7 @@ import (
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/server"
@@ -57,15 +58,18 @@ type Options struct {
 }
 
 type App struct {
-	Cfg       *config.Config
-	Version   string
-	Log       *slog.Logger
-	DB        *store.Store
-	Secrets   *secrets.Store
-	Settings  *settings.Settings
-	Chars     *character.Registry
-	Guard     *budget.Guard
-	MCP       *mcp.Registry
+	Cfg      *config.Config
+	Version  string
+	Log      *slog.Logger
+	DB       *store.Store
+	Secrets  *secrets.Store
+	Settings *settings.Settings
+	Chars    *character.Registry
+	Guard    *budget.Guard
+	MCP      *mcp.Registry
+	// Plugins are the known optional containers (nil: the built-in list,
+	// plugin.Builtin; tests set their own before Run).
+	Plugins   *plugin.Registry
 	OAuth     *mcp.OAuth
 	Calendar  *calendar.Service
 	Engine    *agent.Engine
@@ -87,8 +91,11 @@ type App struct {
 	live      map[string]*liveChan // the running ones, by name
 	startTok  map[string]string    // tokens of the apps built at startup
 	runCtx    context.Context      // set by Run
-	stopping  bool
-	wg        sync.WaitGroup
+	// offPlugins are plugins turned off whose integration couldn't be
+	// turned off in the database: not connected this run.
+	offPlugins map[string]bool
+	stopping   bool
+	wg         sync.WaitGroup
 }
 
 // goRun runs a background task that Run waits for. A crash is reported,
@@ -586,18 +593,23 @@ func (a *App) Run(parent context.Context) error {
 			}
 		})
 	}
-	if a.ensureSandbox(ctx) {
+	a.Engine.Plugins = a.plugins()
+	if a.ensurePlugins(ctx) {
 		a.keepExecGrants(ctx) // else next start: the sandbox may not be marked exec yet
 	}
 	goRun("mcp", func() {
 		defer close(mcpDone)
 		for name, err := range a.MCP.ConnectAll(ctx) {
-			if name == sandboxName && a.retrySandbox(ctx) == nil {
+			if a.isDefaultPlugin(name) || a.isKeptOff(name) {
+				continue // watchDefaultPlugins connects it, or quietly turns it off
+			}
+			if a.isPlugin(name) && a.retryPlugin(ctx, name) == nil {
 				continue // it was still starting
 			}
 			a.startErr(fmt.Sprintf("The %s integration didn't connect: %s", name, shortErr(err)))
 		}
 	})
+	goRun("plugins", func() { a.watchDefaultPlugins(ctx) })
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })
 	goRun("scheduler", func() { a.Scheduler.Run(ctx) })

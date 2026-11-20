@@ -21,6 +21,10 @@ what happened.
   cut it off, put the `sandbox` service on an `internal: true` network
   that only Thicket shares, or remove the service.
 
+It is a [plugin](plugins.md): Thicket finds it at `THICKET_SANDBOX_URL`
+and shares a token with it through `THICKET_SANDBOX_TOKEN_FILE`, like
+any other.
+
 ## Using it
 
 The sandbox shows up as the `sandbox` integration. No sprig can use it

@@ -78,7 +78,7 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 </div></section>
 
 <section id="inbox"><h2>Needs you</h2>
-{{range .Approvals}}<div class="item"><b>{{.Sprig}}</b> wants to: <b>{{.Tool}}</b> <span class="muted small">{{.At}}</span>
+{{range .Approvals}}<div class="item"><b>{{.Sprig}}</b> wants to: <b>{{.Tool}}</b> <span class="muted small">{{.At}}</span>{{if .Floor}} <span class="tag">always asks: {{.Floor}}</span>{{end}}
 <pre>{{.Args}}</pre><div class="actions">
 <form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="approval"><input type="hidden" name="id" value="{{.ID}}"><button class="primary" name="action" value="approve">Approve</button></form>
 <form class="inline" method="post" action="/dashboard/act"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="approval"><input type="hidden" name="id" value="{{.ID}}"><button name="action" value="deny">Deny</button></form>

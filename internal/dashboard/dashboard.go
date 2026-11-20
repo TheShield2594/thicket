@@ -396,6 +396,8 @@ type approvalView struct {
 	ID              int64
 	Sprig, Tool, At string
 	Args            string
+	// Floor is why it always asks whatever the level ("" if it doesn't).
+	Floor string
 }
 
 type inboxView struct {
@@ -619,7 +621,7 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 		if strings.HasPrefix(what, "thicket:") {
 			what = strings.ReplaceAll(strings.TrimPrefix(what, "thicket:"), "_", " ")
 		}
-		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: prettyJSON(a.Args)})
+		p.Approvals = append(p.Approvals, approvalView{ID: a.ID, Sprig: name(a.Character), Tool: what, At: stamp(a.CreatedAt), Args: prettyJSON(a.Args), Floor: a.Floor})
 	}
 	items, err := d.DB.OpenInbox(ctx, u.ID)
 	if err != nil {

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/voicetest.schema.json",
+  "title": "Gallery sprig sprig/voice_tests/*.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prompt"],
+  "properties": {
+    "prompt": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "reference": {"type": "string", "maxLength": 4000},
+    "notes": {"type": "string", "maxLength": 1000}
+  }
+}

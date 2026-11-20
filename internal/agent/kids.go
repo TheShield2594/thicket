@@ -13,6 +13,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -52,6 +53,22 @@ func kidMayUse(c *character.Character, t *Tool) bool {
 		return false
 	}
 	return kidTools[t.Name]
+}
+
+// plugins returns the known plugins.
+func (e *Engine) plugins() *plugin.Registry {
+	if e.Plugins != nil {
+		return e.Plugins
+	}
+	return plugin.Builtin()
+}
+
+// kidPluginRefused refuses scopes that grant a kid sprig a plugin whose
+// policy keeps kids out (the sandbox, and most Phase 4 abilities: email,
+// the browser, teaching). Checked when tools are offered and when they
+// are granted, whatever the character file says.
+func (e *Engine) kidPluginRefused(scopes ...string) error {
+	return e.plugins().KidRefused(scopes)
 }
 
 // defaultSprigFor is who answers someone who named nobody: the host for
@@ -257,6 +274,9 @@ func (e *Engine) KidAccess(ctx context.Context, parent *store.User, sprig string
 			}
 		}
 		return slices.DeleteFunc(out, func(s string) bool { return slices.Contains(remove, s) })
+	}
+	if err := e.kidPluginRefused(addTools...); err != nil {
+		return nil, err
 	}
 	cp := *c
 	cp.Tools = edit(c.Tools, addTools, removeTools)

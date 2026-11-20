@@ -27,6 +27,10 @@ import (
 // haState is what get_state returns (default "light is off").
 var haState atomic.Value
 
+// haMeta, when set, is the _meta object every tools/call result carries
+// (a level floor, floors_test.go).
+var haMeta atomic.Value
+
 // haCalls records the body of every tools/call the fake HA receives.
 var haCalls struct {
 	sync.Mutex
@@ -36,6 +40,7 @@ var haCalls struct {
 func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	haState.Store("light is off")
+	haMeta.Store("")
 	haCalls.Lock()
 	haCalls.bodies = nil
 	haCalls.Unlock()
@@ -73,7 +78,11 @@ func fakeHA(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 			} else {
 				reads.Add(1)
 			}
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":%q}]}}`, *req.ID, out)
+			meta := ""
+			if m := haMeta.Load().(string); m != "" {
+				meta = `,"_meta":` + m
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":%q}]%s}}`, *req.ID, out, meta)
 		}
 	}))
 	t.Cleanup(srv.Close)

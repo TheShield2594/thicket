@@ -4,7 +4,50 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v33)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v35)
+
+- Plugins (#78): optional abilities run in their own containers, started
+  by a compose profile and connected as built-in integrations named after
+  them; the core bundles none. Each is found at `THICKET_<NAME>_URL` (or
+  its default address, tried quietly: a plugin that isn't running is
+  simply absent) and shares a token through `THICKET_<NAME>_TOKEN_FILE`.
+  No sprig can use one until it is granted `mcp:<name>/*`: by the owner
+  or an admin for a shared sprig, by its person for a private one (a
+  member may grant only plugins, only to their own sprig); kid sprigs
+  are refused plugins whose policy says so. `thicket doctor` checks each
+  one (answers, token accepted, version). Setting a plugin's URL to empty
+  or `off` now turns its integration off. The sandbox is now the first
+  plugin; its token file is now readable only by Thicket's user and group
+  (`0640`), which the sandbox image's user joins, so update both images
+  together. `plugins/hello` is a template; see
+  [Plugins](docs/plugins.md).
+
+- Level floors (schema v34, #79): some calls ask first whatever their
+  permission level. During the first three runs of a sprig's own skill,
+  everything it does that changes something asks first; an integration
+  can floor its next calls by putting `"thicket/floor": {"min_level":
+  "ask", "reason": "payment page"}` in a tool result's `_meta` (it can
+  raise a floor, never lower one). The stricter of the level and the
+  floor applies, so `draft` and `read` stay as they are. The prompt says
+  why ("Always asks: payment page."), as does "needs you"; the trail
+  records the level, the floor and the reason. See
+  [Calls that always ask](docs/mcp.md#calls-that-always-ask-level-floors).
+
+- Signed gallery packages (schema v35, #81). `thicket gallery keygen`
+  makes your Ed25519 author key (kept in the encrypted secret store);
+  `thicket export-sprig ID --for-gallery` writes a signed package holding
+  only `character.md`, `sprig/avatar.json`, voice tests, `skills/*.md`,
+  `manifest.json` and `signature`, and refuses a sprig whose tools name
+  anything but whole scopes. Importing one (`import-sprig`, chat or the
+  web app) checks the signature first, then every hash, and refuses
+  links, `..`, absolute paths, non-UTF-8, anything but Markdown, YAML or
+  JSON, oversized files, files failing their JSON Schema, and MCP server
+  or integration definitions, each with the reason. Author keys are
+  trusted on first use (shown with their fingerprint); an update must be
+  signed by the same key; revoked keys (`thicket gallery revoke`) are
+  refused. The sprig gets no scopes and every tool at draft, can't become
+  a kid sprig, and its skills wait as its own, inactive, until approved
+  (`thicket skill approve`, or in chat). See [docs/gallery.md](docs/gallery.md).
 
 - A sprig's own skills and skill runs (schema v33, #80). A skill can
   belong to one sprig: only it is offered the skill. Its files live in

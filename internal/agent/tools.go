@@ -16,6 +16,7 @@ import (
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/memory"
+	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/scheduler"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
@@ -166,6 +167,11 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 					if err != nil {
 						return "", err
 					}
+					if res.Floor != nil {
+						f := pluginFloor(st.Server, res.Floor)
+						e.raiseFloor(t.char.ID, t.chatRef, "mcp:"+st.Server, f)
+						e.logActivity(ctx, "info", "approval", t.char.ID, t.user.ID, fmt.Sprintf("%s set a floor of %s: %s", st.Server, f.Level, f.Reason), "")
+					}
 					if res.IsError {
 						return "", errors.New(res.Text)
 					}
@@ -179,7 +185,7 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 	}
 	if t.char.IsKid() {
 		for name, tool := range out {
-			if !kidMayUse(t.char, tool) {
+			if !kidMayUse(t.char, tool) || e.kidPluginRefused(tool.Scope) != nil {
 				delete(out, name)
 			}
 		}
@@ -386,8 +392,8 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "manage_skill",
 			Config:      true,
-			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins).",
-			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins). pending lists your skills from a gallery package that wait for approval (id can be empty); approve shows one to the user in full and asks them to approve it.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote","pending","approve"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
 			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolManageSkill,
@@ -423,7 +429,7 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "import_sprig",
-			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories.",
+			Description: "When the user sends a sprig package (a .sprig file made with thicket export-sprig) and wants that sprig: show them every file it will get, its routines and skills, and ask for their OK. Nothing is imported until they approve. It arrives with every tool at draft and no memories. A signed gallery package is checked against its author's key first; one from the same author as a sprig already here updates it.",
 			Params:      `{"type":"object","properties":{"file":{"type":"string","description":"the package's file name, as in the message"},"id":{"type":"string","description":"a different id, if its own is taken"},"name":{"type":"string","description":"a different name, if its own is taken"}},"required":["file"]}`,
 			Scope:       "characters",
 			ChatOnly:    true,
@@ -451,9 +457,10 @@ func (e *Engine) builtinTools() []*Tool {
 			Description: "Change which tool scopes a sprig has: schedule, web (search the web and read pages), or mcp:<integration>/<tool or *>. The sandbox integration is the sprigs' own Linux computer: \"give X the computer\" means mcp:sandbox/* plus exec on (set_sprig_access), since it runs commands. Edits its character file (never overwrites manual edits).",
 			Params:      `{"type":"object","properties":{"character":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["character"]}`,
 			Scope:       "characters",
-			AdminOnly:   true,
-			ChatOnly:    true,
-			Run:         e.toolGrantTools,
+			// Not AdminOnly: a member may give plugins to their own
+			// private sprig (toolGrantTools checks who may change what).
+			ChatOnly: true,
+			Run:      e.toolGrantTools,
 		},
 		{
 			Name: "set_initiative",
@@ -1184,10 +1191,30 @@ func (e *Engine) toolGrantTools(ctx context.Context, t *turn, args json.RawMessa
 	if !ok || c.PrivateFrom(t.user.ID) { // someone else's private sprig is theirs to change
 		return "", fmt.Errorf("no sprig with id %q", a.Character)
 	}
+	// Admins change any sprig's scopes (not someone else's private
+	// sprig). Anyone else may only give or take plugins (mcp:<plugin>/…)
+	// to or from a private sprig of their own.
+	if !t.user.IsAdmin() {
+		if err := e.mayManage(ctx, t.user, c, "change tool scopes"); err != nil {
+			return "", err
+		}
+		for _, s := range append(append([]string{}, a.Add...), a.Remove...) {
+			if _, ok := e.plugins().Get(plugin.ScopeServer(s)); !ok {
+				e.refused(ctx, t.user, c.ID, "tried to change scope "+s+" without being an admin")
+				return "", fmt.Errorf("only the owner or an admin can change %s; you can give or take plugins (mcp:<plugin>/*) for your own private sprig", s)
+			}
+		}
+	}
 	cp := *c
 	set := map[string]bool{}
 	for _, s := range c.Tools {
 		set[s] = true
+	}
+	if c.IsKid() {
+		if err := e.kidPluginRefused(a.Add...); err != nil {
+			e.refused(ctx, t.user, c.ID, "tried to grant a kid sprig a plugin: "+err.Error())
+			return "", err
+		}
 	}
 	for _, s := range a.Add {
 		if (s == character.ScopeAdmin || s == character.ScopeCharacters) && !c.Host {

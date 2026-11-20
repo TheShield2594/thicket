@@ -29,6 +29,7 @@ const (
 	TrailAction  = "action"  // a sprig did something at act level (an integration, a job)
 	TrailLimit   = "limit"   // a kid sprig stopped at a time limit
 	TrailSkill   = "skill"   // a sprig's own skill was moved to the shared library
+	TrailFloor   = "floor"   // a call had a level floor: it asked first whatever its level
 )
 
 type TrailEntry struct {

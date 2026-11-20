@@ -46,7 +46,11 @@ func (e *Engine) toolNeedsYou(ctx context.Context, t *turn, args json.RawMessage
 	}
 	var b strings.Builder
 	for _, ap := range apps {
-		fmt.Fprintf(&b, "- approval waiting: %s wants to run %s (reply approve or deny in that chat)\n", e.charName(ap.Character), ap.Tool)
+		always := ""
+		if ap.Floor != "" {
+			always = " [always asks: " + ap.Floor + "]"
+		}
+		fmt.Fprintf(&b, "- approval waiting: %s wants to run %s%s (reply approve or deny in that chat)\n", e.charName(ap.Character), ap.Tool, always)
 	}
 	for _, it := range items {
 		n := ""
