@@ -88,6 +88,7 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	red.Add(d.Cfg.ModelAPIKey)
 	red.Add(d.Cfg.DiscordToken)
 	red.Add(d.Cfg.TelegramToken)
+	red.Add(d.Cfg.MatrixToken)
 	var sec *secrets.Store
 	if key, _, err := secrets.ResolveKey(d.Cfg.SecretKey, d.Cfg.SecretKeyFile, d.Cfg.DataDir); err != nil {
 		add(Check{Name: "secrets", Detail: err.Error()})
@@ -109,6 +110,9 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 		if v, err := sec.Get(ctx, secrets.TelegramToken); err == nil && cfg.TelegramToken == "" {
 			cfg.TelegramToken = v
 		}
+		if v, err := sec.Get(ctx, secrets.MatrixToken); err == nil && cfg.MatrixToken == "" {
+			cfg.MatrixToken = v
+		}
 		d.Cfg = &cfg
 	}
 
@@ -121,6 +125,9 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 	}
 	if d.Cfg.TelegramToken != "" {
 		add(d.telegram(ctx, red))
+	}
+	if d.Cfg.MatrixOn() && d.Cfg.MatrixToken != "" {
+		add(d.matrix(ctx, red))
 	}
 	if sec != nil {
 		out = append(out, d.mcpServers(ctx, db, sec)...)
@@ -224,6 +231,20 @@ func (d *Doctor) telegram(ctx context.Context, red *secrets.Redactor) Check {
 		return Check{Name: "telegram token", Detail: "unexpected answer from Telegram"}
 	}
 	return Check{Name: "telegram token", OK: true, Detail: "valid, bot @" + me.Result.Username}
+}
+
+func (d *Doctor) matrix(ctx context.Context, red *secrets.Redactor) Check {
+	body, err := d.get(ctx, d.Cfg.MatrixHomeserver+"/_matrix/client/v3/account/whoami", map[string]string{"Authorization": "Bearer " + d.Cfg.MatrixToken})
+	if err != nil {
+		return Check{Name: "matrix token", Detail: "the homeserver refused the access token or isn't reachable: " + red.Redact(err.Error())}
+	}
+	var me struct {
+		UserID string `json:"user_id"`
+	}
+	if json.Unmarshal(body, &me) != nil || me.UserID == "" {
+		return Check{Name: "matrix token", Detail: "unexpected answer from " + d.Cfg.MatrixHomeserver + " (is it the client-server API address?)"}
+	}
+	return Check{Name: "matrix token", OK: true, Detail: "valid, account " + me.UserID}
 }
 
 func (d *Doctor) mcpServers(ctx context.Context, db *store.Store, sec *secrets.Store) []Check {

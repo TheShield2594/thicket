@@ -79,18 +79,19 @@ type Engine struct {
 	// returns once the bot is online; the app sets it.
 	ConnectChat func(ctx context.Context, app, token string) error
 
-	chanMu    sync.RWMutex
-	channels  map[string]channel.Channel
-	chatLocks sync.Map   // chatRef -> *sync.Mutex
-	active    sync.Map   // chatRef -> character id
-	drafts    sync.Map   // user id -> *character.Character
-	kidDrafts sync.Map   // user id -> *kidDraft
-	kidMu     sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
-	kidTurns  sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid
-	userMu    sync.Mutex // serialises first-contact user creation
-	rateMu    sync.Mutex
-	rate      map[int64][]time.Time
-	limits    rateLimits // per-sprig and per-integration tool limits
+	chanMu      sync.RWMutex
+	channels    map[string]channel.Channel
+	skillSyncMu sync.Mutex // one SyncSprigSkills at a time
+	chatLocks   sync.Map   // chatRef -> *sync.Mutex
+	active      sync.Map   // chatRef -> character id
+	drafts      sync.Map   // user id -> *character.Character
+	kidDrafts   sync.Map   // user id -> *kidDraft
+	kidMu       sync.Mutex // serialises changes to a kid sprig's file (access, limits, their undo)
+	kidTurns    sync.Map   // kid's user id -> *sync.Mutex: one turn at a time per kid
+	userMu      sync.Mutex // serialises first-contact user creation
+	rateMu      sync.Mutex
+	rate        map[int64][]time.Time
+	limits      rateLimits // per-sprig and per-integration tool limits
 	// compactBackoff: conversation id -> time before which summarising
 	// isn't retried (it failed).
 	compactBackoff sync.Map
@@ -284,6 +285,16 @@ func (e *Engine) handle(ctx context.Context, in channel.Incoming) error {
 	ctx, flight, done := e.track(ctx, &e.turnsIn, in.ChatRef(), user.ID, "")
 	defer done()
 	defer func() {
+		// However late the stop came, a skill the sprig was following here
+		// was stopped by the person (stopAck may already have said so).
+		// After finish no stop is accepted, so none is missed here.
+		if flight.finish() {
+			if id := flight.charID(); id != "" {
+				if _, err := e.DB.StopSkillRuns(context.WithoutCancel(ctx), id, in.ChatRef()); err != nil {
+					e.Log.Error("stop skill runs", "err", err)
+				}
+			}
+		}
 		// A stop that came after the reply was already out: say so.
 		if flight.stopped.Load() && flight.acked.CompareAndSwap(false, true) {
 			if host, ok := e.Chars.Host(); ok {
@@ -628,7 +639,7 @@ func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.U
 	}
 	role := ""
 	ownerID := e.Cfg.OwnerID(in.Channel)
-	noOwnerConfigured := e.Cfg.DiscordOwnerID == "" && e.Cfg.TelegramOwnerID == ""
+	noOwnerConfigured := !e.Cfg.OwnerConfigured()
 	switch {
 	// A configured owner id makes that account the owner, unless an owner
 	// already exists (from another app): then it links like anyone else,

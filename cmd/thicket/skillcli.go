@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/agent"
+	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -37,7 +39,11 @@ func skillCmd(args []string) error {
 			fmt.Println("no skills")
 		}
 		for _, k := range skills {
-			fmt.Printf("%-24s v%-3d %s: %s\n", k.ID, k.Version, k.Name, k.Description)
+			owner := ""
+			if !k.Shared() {
+				owner = " [" + k.SprigID + " only]"
+			}
+			fmt.Printf("%-24s v%-3d %s%s: %s\n", k.ID, k.Version, k.Name, owner, k.Description)
 		}
 		return nil
 	case "export":
@@ -87,6 +93,9 @@ func skillCmd(args []string) error {
 		k.Author, k.Note = "import", "imported from "+strings.TrimSpace(args[1])
 		base := 0
 		if cur, err := db.SkillByID(ctx, k.ID, 0); err == nil {
+			if !cur.Shared() {
+				return fmt.Errorf("%s is %s's own skill: edit characters/%s/skills/%s.md instead (Thicket picks the change up by itself)", k.ID, cur.SprigID, cur.SprigID, k.ID)
+			}
 			base = cur.Version // an existing skill gets a new version; the old ones stay
 		}
 		v, err := db.SaveSkill(ctx, k, base)
@@ -102,11 +111,44 @@ func skillCmd(args []string) error {
 		return nil
 	case "starter":
 		return skillStarter(ctx, db, args[1:])
+	case "promote":
+		if len(args) != 2 {
+			return errors.New("usage: thicket skill promote ID")
+		}
+		return skillPromote(ctx, cfg.CharactersDir, db, args[1])
 	}
 	return fmt.Errorf("unknown skill command %q", args[0])
 }
 
-const skillUsage = "usage: thicket skill list | export ID [-o FILE] | import FILE | check FILE... | starter [ID... | all]"
+const skillUsage = "usage: thicket skill list | export ID [-o FILE] | import FILE | check FILE... | starter [ID... | all] | promote ID"
+
+// skillPromote moves a sprig's own skill into the shared library. Its file
+// is kept as <id>.md.promoted so the sprig doesn't take it back on the
+// next load.
+func skillPromote(ctx context.Context, charsDir string, db *store.Store, id string) error {
+	k, err := db.SkillByID(ctx, id, 0)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("no skill %q", id)
+	} else if err != nil {
+		return err
+	}
+	if k.Shared() {
+		return fmt.Errorf("%s is already in the shared library", id)
+	}
+	// Shared first: a running server that saw the file go before that
+	// would delete the skill as the sprig's.
+	// The trail entry goes in with the promotion, or neither does.
+	if err := db.PromoteSkill(ctx, id, &store.TrailEntry{Character: k.SprigID, Kind: store.TrailSkill,
+		Summary: fmt.Sprintf("skill %s moved from %s's own skills to the shared library", id, k.SprigID), Detail: "thicket skill promote"}); err != nil {
+		return err
+	}
+	path := filepath.Join(character.SkillDir(charsDir, k.SprigID), id+".md")
+	if err := os.Rename(path, path+".promoted"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s is shared now, but its file couldn't be moved aside (%v): rename %s yourself", id, err, path)
+	}
+	fmt.Printf("%s is in the shared library now: every sprig is offered it\n", id)
+	return nil
+}
 
 func printHints(k store.Skill) {
 	for _, h := range agent.SkillHints(k) {

@@ -31,10 +31,13 @@ type Tool struct {
 	// scope (schedule, characters, admin); or "mcp:<server>".
 	Scope     string
 	AdminOnly bool // the user must be an owner/admin
-	JobOnly   bool
-	ChatOnly  bool
-	Risky     bool // needs approval unless a level says otherwise
-	Writes    bool // changes something, but acts by default (see levels.go)
+	// SprigOwner: the user must be an owner/admin, or someone who may
+	// manage this sprig (its own skills: ownership.go).
+	SprigOwner bool
+	JobOnly    bool
+	ChatOnly   bool
+	Risky      bool // needs approval unless a level says otherwise
+	Writes     bool // changes something, but acts by default (see levels.go)
 	// Config: changes Thicket itself (settings, integrations, people,
 	// permissions, skills) rather than something outside it. Levels don't
 	// apply, but in a tainted turn it's held like a changing tool unless
@@ -96,6 +99,9 @@ func (e *Engine) toolsFor(ctx context.Context, t *turn) map[string]*Tool {
 			continue
 		}
 		if tool.AdminOnly && !t.user.IsAdmin() {
+			continue
+		}
+		if tool.SprigOwner && !t.user.IsAdmin() && !canManage(t.user, t.char) {
 			continue
 		}
 		switch tool.Scope {
@@ -349,28 +355,40 @@ func (e *Engine) builtinTools() []*Tool {
 			Untrusted:   true,
 			Run:         e.toolFetchPage,
 		},
-		// --- skills (a shared library of procedures) ---
+		// --- skills (the shared library, and each sprig's own) ---
 		{
 			Name:        "read_skill",
-			Description: "Read a saved skill (a procedure listed under Skills in your instructions) before doing the task it covers. Returns its steps and version.",
+			Description: "Read a saved skill without following it (to show it or revise it). Returns its steps and version.",
 			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
 			Run:         e.toolReadSkill,
 		},
 		{
+			Name:        "use_skill",
+			Description: "Start following a skill listed under Skills in your instructions: returns its steps and a run number. Call finish_skill with that run when you're done or can't go on.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`,
+			Run:         e.toolUseSkill,
+		},
+		{
+			Name:        "finish_skill",
+			Description: "Record how a skill run you started with use_skill ended.",
+			Params:      `{"type":"object","properties":{"run":{"type":"integer"},"outcome":{"type":"string","enum":["succeeded","failed"]},"note":{"type":"string","description":"one line: what went wrong, or anything worth knowing next time"}},"required":["run","outcome"]}`,
+			Run:         e.toolFinishSkill,
+		},
+		{
 			Name:        "save_skill",
 			Config:      true,
-			Description: "Save a procedure as a skill every sprig can follow, once the user agrees. base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
-			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"}},"required":["id","name","description","steps","base_version"]}`,
-			AdminOnly:   true,
+			Description: "Save a procedure as a skill, once the user agrees: for this_sprig (only you are offered it) or everyone (the shared library; owners and admins only). base_version 0 creates it; to revise, pass the version read_skill returned. Steps are numbered instructions in plain words, no secrets.",
+			Params:      `{"type":"object","properties":{"id":{"type":"string","description":"short lowercase id, e.g. morning-briefing"},"name":{"type":"string"},"description":{"type":"string","description":"one sentence: when to use it, e.g. 'Use when the user asks for…'"},"steps":{"type":"string","description":"optional 'Needs:' line, then numbered steps (one action each), then 'Done when:' and 'Watch out:'"},"note":{"type":"string","description":"what changed and why (for the history)"},"base_version":{"type":"integer"},"for":{"type":"string","enum":["this_sprig","everyone"],"description":"for a new skill: whose it is (a revision keeps its owner)"},"inputs":{"type":"array","description":"optional: what to ask for before starting","items":{"type":"object","properties":{"name":{"type":"string","description":"lowercase, e.g. destination"},"description":{"type":"string"},"required":{"type":"boolean"}},"required":["name"]}},"success_check":{"type":"string","description":"optional: one line on how to tell it worked"}},"required":["id","name","description","steps","base_version"]}`,
+			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolSaveSkill,
 		},
 		{
 			Name:        "manage_skill",
 			Config:      true,
-			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), or delete a skill.",
-			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
-			AdminOnly:   true,
+			Description: "See a skill's version history, restore an earlier version (as a new version; nothing is lost), delete a skill, or promote one of a sprig's own skills to the shared library (owners and admins).",
+			Params:      `{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["history","restore","delete","promote"]},"version":{"type":"integer","description":"for restore"}},"required":["id","action"]}`,
+			SprigOwner:  true,
 			ChatOnly:    true,
 			Run:         e.toolManageSkill,
 		},
@@ -497,9 +515,9 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:   "connect_chat_app",
 			Config: true,
-			Description: "Connect this Thicket to Discord or Telegram (so people can talk to the sprigs there), or check that it is. Thicket does it while running: the user sends the bot token in a DM, Thicket connects, stores the token encrypted and answers with the link to add the bot. Nothing goes in an env file and nothing is restarted. " +
+			Description: "Connect this Thicket to Discord, Telegram or Matrix (so people can talk to the sprigs there), or check that it is. Thicket does it while running: the user sends the bot token in a DM, Thicket connects, stores the token encrypted and answers with the link to add the bot. Nothing goes in an env file and nothing is restarted. " +
 				"Use this, never request_secret, for a chat bot token. If the user already sent the token and it was stored under another name, pass that name as secret.",
-			Params:    `{"type":"object","properties":{"app":{"type":"string","enum":["discord","telegram"]},"secret":{"type":"string","description":"name of an already stored secret holding the bot token (optional)"}},"required":["app"]}`,
+			Params:    `{"type":"object","properties":{"app":{"type":"string","enum":["discord","telegram","matrix"]},"secret":{"type":"string","description":"name of an already stored secret holding the bot token (optional)"}},"required":["app"]}`,
 			Scope:     "admin",
 			AdminOnly: true,
 			ChatOnly:  true,
@@ -568,8 +586,8 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "invite_user",
 			Config:      true,
-			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, and which app. Their memories are kept separate. kid=true makes them a kid: they only talk to kid sprigs set up for them (an admin creates those; parents choose what they may use). To use Thicket from a second app themselves, people use link_account instead.",
-			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"},"kid":{"type":"boolean"}},"required":["user"]}`,
+			Description: "Let another person talk to this Thicket. Pass their numeric user id on Discord (or an @mention) or Telegram, or their full Matrix id (@alice:example.org), and which app. Their memories are kept separate. kid=true makes them a kid: they only talk to kid sprigs set up for them (an admin creates those; parents choose what they may use). To use Thicket from a second app themselves, people use link_account instead.",
+			Params:      `{"type":"object","properties":{"user":{"type":"string"},"app":{"type":"string","enum":["discord","telegram","matrix"],"description":"default: the app you're talking on"},"admin":{"type":"boolean"},"kid":{"type":"boolean"}},"required":["user"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
@@ -578,8 +596,8 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "invite_person",
 			Config:      true,
-			Description: "Make a one-time invite link for someone joining this household (a partner, a housemate, a kid), for the app they'll chat on: web (the web app; always works), telegram or discord. Thicket posts the link right after your reply for the user to send them; you never see it. own_sprig=true (adults only) means you'll help them make their own private sprig as soon as they arrive, e.g. for \"add my wife's sprig\". Use invite_user instead when you already have their Discord or Telegram user id.",
-			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"what they're called"},"app":{"type":"string","enum":["web","telegram","discord"]},"role":{"type":"string","enum":["member","admin","kid"],"description":"default member (an adult)"},"own_sprig":{"type":"boolean"}},"required":["name","app"]}`,
+			Description: "Make a one-time invite link for someone joining this household (a partner, a housemate, a kid), for the app they'll chat on: web (the web app; always works), telegram, discord or matrix. Thicket posts the link right after your reply for the user to send them; you never see it. own_sprig=true (adults only) means you'll help them make their own private sprig as soon as they arrive, e.g. for \"add my wife's sprig\". Use invite_user instead when you already have their Discord or Telegram user id.",
+			Params:      `{"type":"object","properties":{"name":{"type":"string","description":"what they're called"},"app":{"type":"string","enum":["web","telegram","discord","matrix"]},"role":{"type":"string","enum":["member","admin","kid"],"description":"default member (an adult)"},"own_sprig":{"type":"boolean"}},"required":["name","app"]}`,
 			Scope:       "admin",
 			AdminOnly:   true,
 			ChatOnly:    true,
@@ -588,7 +606,7 @@ func (e *Engine) builtinTools() []*Tool {
 		{
 			Name:        "link_account",
 			Config:      true,
-			Description: "When the user wants to talk to Thicket from another chat app too (Discord or Telegram) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
+			Description: "When the user wants to talk to Thicket from another chat app too (Discord, Telegram or Matrix) with the same sprigs and memories: Thicket DMs them a one-time code to send from the other app. You never see the code.",
 			Params:      `{"type":"object","properties":{}}`,
 			Scope:       "host",
 			ChatOnly:    true,
@@ -596,8 +614,8 @@ func (e *Engine) builtinTools() []*Tool {
 		},
 		{
 			Name:        "set_reach",
-			Description: "Choose where your messages reach the user when they haven't just written (check-ins, reminders, job results): \"reach me on Telegram\", or for one sprig (\"Pip should write on Discord\"). app: telegram, discord, web, or auto (the app they last used, preferring a phone app). The app must be linked to them (link_account first). If it fails, their other apps are tried.",
-			Params:      `{"type":"object","properties":{"app":{"type":"string","enum":["telegram","discord","web","auto"]},"sprig":{"type":"string","description":"only for this sprig (id or name); leave out for every sprig"}},"required":["app"]}`,
+			Description: "Choose where your messages reach the user when they haven't just written (check-ins, reminders, job results): \"reach me on Telegram\", or for one sprig (\"Pip should write on Discord\"). app: telegram, discord, matrix, web, or auto (the app they last used, preferring a phone app). The app must be linked to them (link_account first). If it fails, their other apps are tried.",
+			Params:      `{"type":"object","properties":{"app":{"type":"string","enum":["telegram","discord","matrix","web","auto"]},"sprig":{"type":"string","description":"only for this sprig (id or name); leave out for every sprig"}},"required":["app"]}`,
 			Run:         e.toolSetReach,
 		},
 		{
@@ -1426,8 +1444,8 @@ func (e *Engine) toolRequestSecret(ctx context.Context, t *turn, args json.RawMe
 		return "", errors.New("secret names are lowercase letters, digits and underscores")
 	}
 	if n := strings.ReplaceAll(a.Name, "_", ""); chatAppBySecret(a.Name) != nil ||
-		(strings.Contains(n, "discord") || strings.Contains(n, "telegram")) && strings.Contains(n, "token") {
-		return "", errors.New("a Discord or Telegram bot token goes through connect_chat_app, which also connects the app")
+		(strings.Contains(n, "discord") || strings.Contains(n, "telegram") || strings.Contains(n, "matrix")) && strings.Contains(n, "token") {
+		return "", errors.New("a Discord, Telegram or Matrix bot token goes through connect_chat_app, which also connects the app")
 	}
 	if !t.isDM {
 		return "", errors.New("secrets can only be collected in a DM; ask the user to DM you")
@@ -1577,11 +1595,20 @@ func (e *Engine) toolInvite(ctx context.Context, t *turn, args json.RawMessage) 
 	if e.channelFor(app) == nil {
 		return "", fmt.Errorf("this Thicket isn't connected to %q yet (an admin can connect it in chat: connect_chat_app)", app)
 	}
-	id := strings.Trim(a.User, "<@!> ")
+	id := strings.Trim(a.User, "<!> ")
+	if app != "matrix" {
+		id = strings.Trim(id, "@")
+	}
 	if id == "" {
 		return "", errors.New("pass their numeric user id")
 	}
+	if app == "matrix" && (!strings.HasPrefix(id, "@") || !strings.Contains(id, ":") || strings.ContainsAny(id, " \t\n")) {
+		return "", errors.New("pass their full Matrix id, like @alice:example.org")
+	}
 	for _, r := range id {
+		if app == "matrix" {
+			break
+		}
 		if r < '0' || r > '9' {
 			if app == "telegram" {
 				return "", errors.New("Telegram bots can't look people up by @username: pass their numeric user id (they can get it from @userinfobot)")

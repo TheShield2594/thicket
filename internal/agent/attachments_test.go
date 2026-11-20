@@ -53,14 +53,14 @@ func TestSkillFileRoundTrip(t *testing.T) {
 }
 
 func TestSkillIndex(t *testing.T) {
-	if skillIndex(nil) != "" {
+	if skillIndex(nil, "") != "" {
 		t.Fatal("empty library should add nothing")
 	}
 	var ks []store.Skill
 	for i := 0; i < maxSkillsInIndex+3; i++ {
 		ks = append(ks, store.Skill{ID: "s" + strings.Repeat("x", i%5+1), Name: "n", Description: "d"})
 	}
-	idx := skillIndex(ks)
+	idx := skillIndex(ks, "")
 	if strings.Count(idx, "\n- ") != maxSkillsInIndex || !strings.Contains(idx, "(3 more") {
 		t.Fatalf("index not capped:\n%s", idx)
 	}

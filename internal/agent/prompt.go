@@ -122,8 +122,8 @@ func buildSystemPrompt(in promptInput) string {
 	b.WriteString("Use memories naturally; don't recite them. When the user tells you something worth keeping, or asks you to remember something, call remember. ")
 	b.WriteString("When they ask what you remember, call list_memories and answer honestly. When they say \"forget that\", find it and call forget.\n")
 
-	b.WriteString(skillIndex(in.skills))
-	if in.user.IsAdmin() && !in.jobMode {
+	b.WriteString(skillIndex(in.skills, in.char.ID))
+	if (in.user.IsAdmin() || canManage(in.user, in.char)) && !in.jobMode && !in.char.IsKid() {
 		if len(in.skills) == 0 {
 			b.WriteString("\n## Skills\n")
 		}

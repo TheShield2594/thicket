@@ -18,7 +18,7 @@ internal/scheduler   cron and webhook jobs with run history
 internal/llm         OpenAI-compatible client (OpenRouter or a local server), retries, fallback model
 internal/budget      usage metering and spend caps
 internal/mcp         minimal MCP client (stdio, Streamable HTTP) and server registry
-internal/channel     channel interface; adapters in channel/discord and channel/telegram
+internal/channel     channel interface; adapters in channel/discord, channel/telegram and channel/matrix
 internal/web         the web app: channel adapter, sign-in, JSON API, event stream, embedded UI
 internal/secrets     AES-GCM secret store, log redaction
 internal/store       SQLite, versioned migrations, all SQL

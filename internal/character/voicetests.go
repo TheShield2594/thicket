@@ -76,3 +76,16 @@ func SaveVoiceTest(vt VoiceTest) error {
 	}
 	return writeAtomic(vt.Path, b)
 }
+
+// SkillDir is where a sprig's own skills live, one Markdown file each:
+// <characters dir>/<id>/skills/<skill id>.md. The folder is the source of
+// truth; the store mirrors it on every load.
+func SkillDir(charsDir, id string) string {
+	return filepath.Join(charsDir, id, "skills")
+}
+
+// skillFiles lists every sprig's skill files under the characters dir.
+func skillFiles(charsDir string) []string {
+	paths, _ := filepath.Glob(filepath.Join(charsDir, "*", "skills", "*.md"))
+	return paths
+}

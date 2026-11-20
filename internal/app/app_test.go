@@ -364,7 +364,7 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		return toolCall("web_search", map[string]any{"query": q}), nil
 	case strings.HasPrefix(sys, "You are Pip") && last.Role == "tool":
 		return text("Pip here: " + last.Content), nil
-	case strings.HasPrefix(sys, "You are Pip"):
+	case strings.HasPrefix(sys, "You are Pip") && !strings.Contains(last.Content, "skill"):
 		return text("Pip here! I'll sort your calendar."), nil
 	case strings.HasPrefix(sys, "You are Clover") && strings.Contains(last.Content, "saying hello for the very first time"):
 		return text("Hi! I'm Clover, and I love doodling. What should we draw?"), nil
@@ -512,6 +512,22 @@ func (m *fakeModel) Chat(ctx context.Context, req llm.Request) (*llm.Response, e
 		}
 		return toolCall("save_skill", map[string]any{"id": "briefing", "name": "Morning briefing",
 			"description": "When putting together the morning summary", "steps": steps, "base_version": base}), nil
+	case strings.Contains(u, "use skill "):
+		id := strings.Fields(u[strings.Index(u, "use skill ")+len("use skill "):])[0]
+		return toolCall("use_skill", map[string]any{"id": id}), nil
+	case strings.Contains(u, "finish skill run "):
+		var run int
+		var outcome string
+		fmt.Sscanf(u[strings.Index(u, "finish skill run "):], "finish skill run %d %s", &run, &outcome)
+		return toolCall("finish_skill", map[string]any{"run": run, "outcome": outcome, "note": "went fine"}), nil
+	case strings.Contains(u, "save own skill "):
+		id := strings.Fields(u[strings.Index(u, "save own skill ")+len("save own skill "):])[0]
+		return toolCall("save_skill", map[string]any{"id": id, "name": "Tea", "description": "Use when the user wants tea made their way.",
+			"steps": "1. Boil water\n2. Steep four minutes", "base_version": 0, "for": "this_sprig",
+			"inputs": []map[string]any{{"name": "kind", "description": "which tea", "required": true}}, "success_check": "The user has a cup they like."}), nil
+	case strings.Contains(u, "promote skill "):
+		id := strings.Fields(u[strings.Index(u, "promote skill ")+len("promote skill "):])[0]
+		return toolCall("manage_skill", map[string]any{"id": id, "action": "promote"}), nil
 	case strings.Contains(u, "use the briefing skill"):
 		return toolCall("read_skill", map[string]any{"id": "briefing"}), nil
 	case strings.HasPrefix(u, "restore briefing to "):

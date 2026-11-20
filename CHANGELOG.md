@@ -4,7 +4,34 @@ All notable changes are listed here. Thicket uses small releases and
 versioned database migrations; upgrades never require manual steps unless
 stated.
 
-## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v32)
+## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v33)
+
+- A sprig's own skills and skill runs (schema v33, #80). A skill can
+  belong to one sprig: only it is offered the skill. Its files live in
+  `characters/<id>/skills/<skill>.md`, the source of truth, mirrored into
+  the store on start and whenever they change. Teach one in chat
+  (`save_skill` with `for: this_sprig`); whoever may manage the sprig
+  can change it, so a member can teach their own private sprig.
+  Promoting one to the shared library takes the owner or an admin (in
+  chat, or `thicket skill promote ID`) and goes in the trail. Sprigs
+  follow a skill with `use_skill`, which records a run, and
+  `finish_skill` records how it went (succeeded, failed; stopping the
+  reply marks it stopped by you); run counts are kept per sprig and
+  skill. Optional `inputs` and `success_check` skill fields, validated.
+  Shared skills work as before. See
+  [A sprig's own skills](docs/skills.md#a-sprigs-own-skills).
+
+- Matrix (off by default, `docs/matrix.md`): set
+  `THICKET_MATRIX_HOMESERVER` and the bot account's access token
+  (`THICKET_MATRIX_TOKEN`, `thicket secrets set matrix_token`, or sent to
+  Juni in a DM) and sprigs answer DMs, mentions and replies in Matrix
+  rooms, through `/sync` long polling (no open port). Replies start with
+  the sprig's name; images and files come through as attachments;
+  linking, invites, "reach me on Matrix" and remembering by reaction work
+  as on the other apps. End-to-end encrypted rooms aren't supported yet:
+  the bot declines invites to them with the reason, and leaves a room
+  that turns encryption on, saying why. Without the homeserver set,
+  nothing changes.
 
 - API token kinds (schema v32): `cli`, `mcp` and `app`, enforced by the
   server. An agent's token (`thicket api-token create NAME --kind mcp`)

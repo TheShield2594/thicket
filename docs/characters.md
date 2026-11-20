@@ -234,9 +234,14 @@ characters/
   pip/
     avatar.json        its drawn look
     voice_tests/       reference exchanges for thicket voice-check
+    skills/            skills only this sprig is offered, one <id>.md each
 ```
 
-Sprigs Juni brings on get both, written only after you approve them.
+Sprigs Juni brings on get the first two, written only after you approve
+them. `skills/` holds the sprig's own skills, taught in chat or written
+by hand: the folder is the source of truth, and Thicket picks up a new,
+changed or removed file by itself. See
+[A sprig's own skills](skills.md#a-sprigs-own-skills).
 
 ## Bringing on a new sprig
 

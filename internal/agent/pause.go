@@ -222,9 +222,7 @@ func (e *Engine) HaltPaused(ctx context.Context) {
 	}
 	halt := func(_, v any) bool {
 		f := v.(*inFlight)
-		if (all || chars[f.charID()]) && !f.stopped.Load() {
-			f.paused.Store(true)
-			f.stopped.Store(true)
+		if (all || chars[f.charID()]) && !f.stopped.Load() && f.tryStop(func() { f.paused.Store(true) }) {
 			f.cancel()
 		}
 		return true

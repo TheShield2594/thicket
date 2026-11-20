@@ -122,7 +122,7 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 <table><tr><th>Started</th><th>Who</th><th>Task</th><th>Result</th></tr>{{range .Tasks}}<tr><td>{{.At}}</td><td>{{.Sprig}}{{if ne .Sprig .From}} <span class="muted small">from {{.From}}</span>{{end}}</td><td>{{.Task}}</td><td class="{{.Status}}">{{.Status}}{{if .Error}} <span class="muted small">{{.Error}}</span>{{end}}{{if .Ended}} <span class="muted small">{{.Ended}}</span>{{end}}</td></tr>{{end}}</table>{{end}}</section>
 
 <section id="skills"><h2>Skills</h2><ul class="plain">
-{{range .Skills}}<li><b>{{.Name}}</b> <span class="tag">{{.ID}} v{{.Version}}</span><br><span class="muted">{{.Description}}</span></li>{{else}}<li class="muted">None saved yet.</li>{{end}}
+{{range .Skills}}<li><b>{{.Name}}</b> <span class="tag">{{.ID}} v{{.Version}}</span>{{with .SprigID}} <span class="tag">{{.}}'s own</span>{{end}}<br><span class="muted">{{.Description}}</span></li>{{else}}<li class="muted">None saved yet.</li>{{end}}
 </ul></section>
 
 <section id="signin"><h2>Sign-in</h2>
