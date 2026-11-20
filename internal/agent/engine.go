@@ -628,7 +628,7 @@ func (e *Engine) resolveUser(ctx context.Context, in channel.Incoming) (*store.U
 	}
 	role := ""
 	ownerID := e.Cfg.OwnerID(in.Channel)
-	noOwnerConfigured := e.Cfg.DiscordOwnerID == "" && e.Cfg.TelegramOwnerID == ""
+	noOwnerConfigured := !e.Cfg.OwnerConfigured()
 	switch {
 	// A configured owner id makes that account the owner, unless an owner
 	// already exists (from another app): then it links like anyone else,

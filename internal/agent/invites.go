@@ -63,7 +63,7 @@ func (e *Engine) toolInvitePerson(ctx context.Context, t *turn, args json.RawMes
 	var bot channel.Bot
 	switch app {
 	case "web":
-	case "telegram", "discord":
+	case "telegram", "discord", "matrix":
 		ch := e.channelFor(app)
 		if ch == nil {
 			return "", fmt.Errorf("this Thicket isn't connected to %s yet: connect it with connect_chat_app, or invite them to the web app instead", app)
@@ -76,7 +76,7 @@ func (e *Engine) toolInvitePerson(ctx context.Context, t *turn, args json.RawMes
 			return "", fmt.Errorf("%s hasn't finished connecting: try again in a moment, or invite them to the web app instead", app)
 		}
 	default:
-		return "", errors.New("app must be web, telegram or discord")
+		return "", errors.New("app must be web, telegram, discord or matrix")
 	}
 	token, err := e.DB.CreateInvite(ctx, store.Invite{Role: role, Name: name, CreatedBy: t.user.ID, OwnSprig: a.OwnSprig}, inviteTTL)
 	if err != nil {
@@ -90,6 +90,9 @@ func (e *Engine) toolInvitePerson(ctx context.Context, t *turn, args json.RawMes
 	case "telegram":
 		msg = fmt.Sprintf("🔗 Invite for %s (works once, for 7 days). Send them this link; it opens a chat with me on Telegram, and I'll say hello when they press Start:\n%s?start=join-%s",
 			name, bot.URL, token)
+	case "matrix":
+		msg = fmt.Sprintf("🔗 Invite for %s (works once, for 7 days). On Matrix they start a chat with %s (with encryption off) and send this, as it is:\n`join-%s`",
+			name, bot.Name, token)
 	case "discord":
 		msg = fmt.Sprintf("🔗 Invite for %s (works once, for 7 days). On Discord they need to share a server with me (%s). Send them this, to DM me as it is:\n`join-%s`",
 			name, bot.Name, token)

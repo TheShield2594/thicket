@@ -36,6 +36,11 @@ type Config struct {
 	TelegramToken       string
 	TelegramOwnerID     string
 	TelegramListenChats []string
+	// Matrix is on when both the homeserver and an access token are set.
+	MatrixHomeserver  string
+	MatrixToken       string
+	MatrixOwnerID     string
+	MatrixListenRooms []string
 	// CommonsRef is the shared channel where sprigs hand work to each
 	// other by @mention, as "<app>:<chat id>" (a bare id means Discord).
 	CommonsRef string
@@ -108,6 +113,10 @@ func Load() (*Config, error) {
 		TelegramToken:         env("TELEGRAM_TOKEN", ""),
 		TelegramOwnerID:       env("THICKET_OWNER_TELEGRAM_ID", ""),
 		TelegramListenChats:   list(env("THICKET_TELEGRAM_CHATS", "")),
+		MatrixHomeserver:      strings.TrimRight(env("THICKET_MATRIX_HOMESERVER", ""), "/"),
+		MatrixToken:           env("THICKET_MATRIX_TOKEN", ""),
+		MatrixOwnerID:         env("THICKET_OWNER_MATRIX_ID", ""),
+		MatrixListenRooms:     list(env("THICKET_MATRIX_ROOMS", "")),
 		CommonsRef:            commonsRef(env("THICKET_COMMONS_CHANNEL", "")),
 		OIDCIssuer:            strings.TrimRight(env("THICKET_OIDC_ISSUER", ""), "/"),
 		OIDCClientID:          env("THICKET_OIDC_CLIENT_ID", ""),
@@ -186,6 +195,14 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "TELEGRAM_TOKEN is not set, so Telegram is off (unless its token is stored: see `thicket secrets list`)",
 			"For Telegram, message @BotFather, send /newbot, and send the token to Juni in the web app (she connects it straight away), or store it with `thicket secrets set telegram_token`, or set TELEGRAM_TOKEN (see docs/telegram.md)."})
 	}
+	switch {
+	case c.MatrixHomeserver == "":
+		out = append(out, Problem{false, "THICKET_MATRIX_HOMESERVER is not set, so Matrix is off",
+			"For Matrix, set THICKET_MATRIX_HOMESERVER to your homeserver's address and store the bot account's access token with `thicket secrets set matrix_token` or THICKET_MATRIX_TOKEN (see docs/matrix.md)."})
+	case !c.MatrixOn():
+		out = append(out, Problem{false, "THICKET_MATRIX_HOMESERVER doesn't start with https://, so Matrix is off",
+			"Set it to the homeserver's client-server address, such as https://matrix.example.org."})
+	}
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		out = append(out, Problem{true, "data directory " + c.DataDir + " is not writable: " + err.Error(),
 			"Mount a writable volume at THICKET_DATA_DIR (default /data in Docker)."})
@@ -221,8 +238,8 @@ func (c *Config) Check() []Problem {
 		out = append(out, Problem{false, "THICKET_SECRET_KEY is not set",
 			"A key will be generated at " + filepath.Join(c.DataDir, "secret.key") + ". Back it up, or keep it outside the volume with THICKET_SECRET_KEY_FILE (a Docker secret) or THICKET_SECRET_KEY."})
 	}
-	if (c.DiscordToken != "" || c.TelegramToken != "") && c.DiscordOwnerID == "" && c.TelegramOwnerID == "" {
-		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID or THICKET_OWNER_TELEGRAM_ID)",
+	if (c.DiscordToken != "" || c.TelegramToken != "" || c.MatrixToken != "") && !c.OwnerConfigured() {
+		out = append(out, Problem{false, "no owner id is set (THICKET_OWNER_DISCORD_ID, THICKET_OWNER_TELEGRAM_ID or THICKET_OWNER_MATRIX_ID)",
 			"The first person to DM the bot becomes the owner."})
 	}
 	return out
@@ -234,6 +251,7 @@ func (c *Config) EnvSecrets() []EnvSecret {
 	return []EnvSecret{
 		{"discord_token", "DISCORD_TOKEN", c.DiscordToken},
 		{"telegram_token", "TELEGRAM_TOKEN", c.TelegramToken},
+		{"matrix_token", "THICKET_MATRIX_TOKEN", c.MatrixToken},
 		{"openrouter_api_key", "OPENROUTER_API_KEY", c.OpenRouterKey},
 		{"model_api_key", "THICKET_MODEL_API_KEY", c.ModelAPIKey},
 		{"oidc_issuer", "THICKET_OIDC_ISSUER", c.OIDCIssuer},
@@ -252,8 +270,21 @@ func (c *Config) OwnerID(channel string) string {
 		return c.DiscordOwnerID
 	case "telegram":
 		return c.TelegramOwnerID
+	case "matrix":
+		return c.MatrixOwnerID
 	}
 	return ""
+}
+
+// OwnerConfigured reports whether an owner id is set for any chat app.
+func (c *Config) OwnerConfigured() bool {
+	return c.DiscordOwnerID != "" || c.TelegramOwnerID != "" || c.MatrixOwnerID != ""
+}
+
+// MatrixOn reports whether a Matrix homeserver is configured (it still
+// needs an access token to connect).
+func (c *Config) MatrixOn() bool {
+	return strings.HasPrefix(c.MatrixHomeserver, "https://") || strings.HasPrefix(c.MatrixHomeserver, "http://")
 }
 
 func env(k, def string) string {
@@ -319,5 +350,7 @@ func (c *Config) CommonsListen() {
 		c.DiscordListenChannels = append(c.DiscordListenChannels, id)
 	case "telegram":
 		c.TelegramListenChats = append(c.TelegramListenChats, id)
+	case "matrix":
+		c.MatrixListenRooms = append(c.MatrixListenRooms, id)
 	}
 }

@@ -68,7 +68,8 @@ Raspberry Pi 4 or 5 (the images are built for amd64 and arm64).
      Send Messages, Read Message History and **Manage Webhooks** (so each
      sprig posts with its own name and avatar). On Telegram: message
      [@BotFather](https://t.me/BotFather), send `/newbot`, copy the
-     token ([Telegram](docs/telegram.md)).
+     token ([Telegram](docs/telegram.md)). Matrix works too, off by
+     default ([Matrix](docs/matrix.md)).
    - **Timezone, spend caps, and who the owner is.**
 
 3. **Start it.**
@@ -208,7 +209,8 @@ cookies (`Secure` over HTTPS).
 - In server channels, sprigs answer when you @-mention the bot or start
   with a sprig's name. List channel ids in `THICKET_DISCORD_CHANNELS` to have
   them answer everything there. Telegram groups work the same way, with
-  [one setting to change](docs/telegram.md#groups) for addressing by name.
+  [one setting to change](docs/telegram.md#groups) for addressing by name,
+  and so do [Matrix rooms](docs/matrix.md#rooms).
 - Ask Juni to bring someone on: "I need help keeping on top of my
   calendar". She interviews you (job, personality, voice, tools,
   schedule), the new sprig introduces itself as a preview, you tweak it,
@@ -332,6 +334,10 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_DISCORD_CHANNELS` | | Discord channel ids where sprigs answer every message |
 | `THICKET_COMMONS_CHANNEL` | | a channel where sprigs hand work to each other by @mention ([details](docs/triggers.md#the-commons)); a Discord id, or `telegram:ID` |
 | `THICKET_TELEGRAM_CHATS` | | Telegram group ids where sprigs answer every message |
+| `THICKET_MATRIX_HOMESERVER` | | your Matrix homeserver, e.g. `https://matrix.example.org`; Matrix is off without it ([details](docs/matrix.md)) |
+| `THICKET_MATRIX_TOKEN` | | the Matrix bot account's access token; stored like `DISCORD_TOKEN` |
+| `THICKET_OWNER_MATRIX_ID` | first DM | your Matrix id, `@you:example.org` |
+| `THICKET_MATRIX_ROOMS` | | Matrix room ids where sprigs answer every message |
 | `OPENROUTER_API_KEY` | | optional; Juni can collect it in a DM |
 | `THICKET_MODEL_URL` *chat* | OpenRouter | a local OpenAI-compatible server instead, e.g. `http://host.docker.internal:11434/v1` ([details](docs/local-models.md)) |
 | `THICKET_MODEL_API_KEY` | | key for that server, if it wants one |
