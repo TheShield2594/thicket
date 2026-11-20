@@ -11,6 +11,7 @@ import (
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
@@ -51,6 +52,19 @@ func TestGalleryCLI(t *testing.T) {
 	}
 	if err := galleryCmd(src, []string{"keygen"}, &out); err == nil {
 		t.Fatal("a second keygen replaced the key")
+	}
+	// A key that is stored but can't be decrypted isn't replaced either.
+	{
+		d := newCfg()
+		ddb, _ := openStore(d)
+		ddb.PutSecretBlob(ctx, sprigpkg.GallerySecret, make([]byte, 12), []byte("garbage-not-decryptable"))
+		ddb.Close()
+		if err := galleryCmd(d, []string{"keygen"}, &out); err == nil || !strings.Contains(err.Error(), "can't be read") {
+			t.Fatalf("keygen over an unreadable key: %v", err)
+		}
+		if err := galleryCmd(d, []string{"keygen", "--replace"}, &out); err != nil {
+			t.Fatalf("--replace: %v", err)
+		}
 	}
 	out.Reset()
 	if err := galleryCmd(src, []string{"key"}, &out); err != nil {
