@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,19 +11,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/theshield2594/thicket/internal/doctor"
+	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/store"
 )
 
 // stubPlugin is a plugin container: an MCP server behind the token in
 // tokenFile, saying it is version 1.2.3.
+// stubCalls counts MCP requests to stub plugins.
+var stubCalls atomic.Int64
+
 func stubPlugin(t *testing.T, tokenFile string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp" {
+			stubCalls.Add(1)
+		}
 		if r.URL.Path == "/health" {
 			fmt.Fprint(w, "ok")
 			return
@@ -240,11 +249,14 @@ func TestPluginTurnedOffWriteFails(t *testing.T) {
 	if !strings.Contains(errs, "couldn't be turned off") || !strings.Contains(errs, "disk full") {
 		t.Fatalf("not reported: %q", errs)
 	}
-	a.MCP.ConnectAll(ctx) // the database still says it's on
-	if st := a.MCP.Status()["stub"]; !strings.HasPrefix(st, "connected") {
-		t.Fatalf("test setup: the stale integration should connect before it's dropped: %q", st)
+	before := stubCalls.Load()
+	connErrs := a.MCP.ConnectAll(ctx) // the database still says it's on
+	if stubCalls.Load() != before {
+		t.Fatal("a turned-off plugin was connected to, even briefly")
 	}
-	a.disconnectKeptOff()
+	if !errors.Is(connErrs["stub"], mcp.ErrBlocked) {
+		t.Fatalf("want blocked: %v", connErrs)
+	}
 	if st := a.MCP.Status()["stub"]; strings.HasPrefix(st, "connected") {
 		t.Fatalf("a turned-off plugin connected: %q", st)
 	}

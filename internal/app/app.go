@@ -599,9 +599,7 @@ func (a *App) Run(parent context.Context) error {
 	}
 	goRun("mcp", func() {
 		defer close(mcpDone)
-		errs := a.MCP.ConnectAll(ctx)
-		a.disconnectKeptOff() // turned off, though the database still says on
-		for name, err := range errs {
+		for name, err := range a.MCP.ConnectAll(ctx) {
 			if a.isDefaultPlugin(name) || a.isKeptOff(name) {
 				continue // watchDefaultPlugins connects it, or quietly turns it off
 			}

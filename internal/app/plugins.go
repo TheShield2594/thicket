@@ -57,7 +57,7 @@ func (a *App) ensurePlugins(ctx context.Context) bool {
 	for _, s := range a.plugins().All() {
 		if ep := s.Resolve(a.Cfg.LookupPluginEnv, a.Cfg.DataDir); ep.URL == "" {
 			if err := a.disableManaged(ctx, ep, ""); err != nil {
-				// Still kept from connecting this run (Run disconnects it).
+				// Still kept from connecting this run.
 				a.keepOff(ep.Name)
 				a.startErr(fmt.Sprintf("The %s plugin is turned off, but its integration couldn't be turned off: %s", ep.Name, shortErr(err)))
 				ok = false
@@ -198,19 +198,7 @@ func (a *App) keepOff(name string) {
 		a.offPlugins = map[string]bool{}
 	}
 	a.offPlugins[name] = true
-}
-
-// disconnectKeptOff drops the connections of plugins kept off.
-func (a *App) disconnectKeptOff() {
-	a.mu.Lock()
-	names := make([]string, 0, len(a.offPlugins))
-	for n := range a.offPlugins {
-		names = append(names, n)
-	}
-	a.mu.Unlock()
-	for _, n := range names {
-		a.MCP.Disconnect(n)
-	}
+	a.MCP.Block(name) // never connected this run, not even briefly
 }
 
 // isKeptOff reports whether a plugin is kept from connecting this run.
@@ -311,7 +299,6 @@ func (a *App) retryPluginNow(ctx context.Context, name string) error {
 func (a *App) absentPlugin(ctx context.Context, ep plugin.Endpoint) {
 	if err := a.disableManaged(ctx, ep, ep.MCPURL()); err != nil {
 		a.keepOff(ep.Name)
-		a.MCP.Disconnect(ep.Name)
 		a.Log.Warn("absent plugin's integration not turned off", "plugin", ep.Name, "err", shortErr(err))
 	}
 }
