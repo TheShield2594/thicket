@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -233,9 +234,11 @@ func (e *Engine) approveSkill(ctx context.Context, user *store.User, args json.R
 	if err := e.Chars.Load(); err != nil {
 		e.Log.Warn("reload sprigs after approving a skill", "err", err)
 	}
+	file := filepath.Join(character.SkillDir(e.Chars.Dir(), a.Sprig), a.ID+".md")
 	for _, p := range e.SyncSprigSkills(ctx) {
-		if filepath.Base(p.Path) == a.ID+".md" && filepath.Base(filepath.Dir(filepath.Dir(p.Path))) == a.Sprig {
-			if rerr := sprigpkg.RestorePendingSkill(e.Chars.Dir(), a.Sprig, a.ID); rerr != nil {
+		// This skill's file, this sprig's folder, or the whole sync.
+		if p.Path == file || p.Path == filepath.Dir(file) || p.Path == e.Chars.Dir() {
+			if rerr := sprigpkg.RestorePendingSkill(e.Chars.Dir(), a.Sprig, a.ID, []byte(a.Body)); rerr != nil {
 				return "", fmt.Errorf("%s's skill %s couldn't be made its own (%s), and putting it back to waiting failed too: %w", c.DisplayName(), a.ID, p.Problem, rerr)
 			}
 			return "", fmt.Errorf("%s's skill %s couldn't be made its own: %s. It's still waiting for approval", c.DisplayName(), a.ID, p.Problem)

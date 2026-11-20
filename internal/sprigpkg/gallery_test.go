@@ -562,3 +562,114 @@ func FuzzReadGallery(f *testing.F) {
 		_ = IsGallery(raw)
 	})
 }
+
+// A rename that fails after earlier files were published puts them back;
+// if putting back fails too, the error names the files and doesn't claim
+// the sprig was left as it was.
+func TestPublishAllRollsBackAfterARename(t *testing.T) {
+	setup := func() (string, []stagedFile) {
+		dir := t.TempDir()
+		a, b := filepath.Join(dir, "a.yaml"), filepath.Join(dir, "b.yaml")
+		must(t, os.WriteFile(a, []byte("old a"), 0o644))
+		must(t, os.WriteFile(b, []byte("old b"), 0o644))
+		return dir, []stagedFile{{dest: a, data: []byte("new a")}, {dest: filepath.Join(dir, "c.md"), data: []byte("c")}, {dest: b, data: []byte("new b")}}
+	}
+	defer func(old func(string, string) error) { renameFile = old }(renameFile)
+
+	// The third rename fails; the first two were published and are undone.
+	calls := 0
+	renameFile = func(from, to string) error {
+		if calls++; calls == 3 {
+			return errors.New("disk full")
+		}
+		return os.Rename(from, to)
+	}
+	dir, plan := setup()
+	err := publishAll(plan)
+	var rb *rollbackError
+	if err == nil || errors.As(err, &rb) {
+		t.Fatalf("want a plain error after a clean rollback: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "a.yaml")); string(b) != "old a" {
+		t.Fatalf("published file not put back: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c.md")); err == nil {
+		t.Fatal("a new file was left behind")
+	}
+
+	// Every rename after the second fails: the rollback can't finish.
+	calls = 0
+	renameFile = func(from, to string) error {
+		if calls++; calls >= 3 {
+			return errors.New("disk full")
+		}
+		return os.Rename(from, to)
+	}
+	_, plan = setup()
+	err = publishAll(plan)
+	if !errors.As(err, &rb) || !strings.Contains(err.Error(), "check") {
+		t.Fatalf("a failed rollback isn't reported: %v", err)
+	}
+}
+
+// A stream that fills the size limit exactly still has its gzip trailer
+// checked.
+func TestGalleryTrailerCheckedAtTheLimit(t *testing.T) {
+	priv := testKey(t)
+	raw := signed(t, priv, "fern", goodFiles(t))
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	must(t, err)
+	plain, err := io.ReadAll(gz)
+	must(t, err)
+	limit := galleryMaxTotal + 1<<20
+	padded := append(plain, make([]byte, limit-len(plain))...)
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	w.Write(padded)
+	w.Close()
+	if _, err := ReadGallery(bytes.NewReader(b.Bytes()), nil); err != nil {
+		t.Fatalf("zero padding up to the limit refused: %v", err)
+	}
+	bad := append([]byte(nil), b.Bytes()...)
+	bad[len(bad)-6] ^= 0xff // the CRC
+	if _, err := ReadGallery(bytes.NewReader(bad), nil); err == nil {
+		t.Fatal("a corrupt trailer at the size limit was accepted")
+	}
+}
+
+// A skill goes back to waiting only as it was approved, and never over a
+// newer pending version.
+func TestRestorePendingSkill(t *testing.T) {
+	dir := t.TempDir()
+	k := store.Skill{ID: "seed-swap", Name: "Seed swap", Description: "Use when swapping seeds.", Body: "1. swap"}
+	f, err := FormatSkillFile(k)
+	must(t, err)
+	p := pendingPath(dir, "fern", "seed-swap")
+	must(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	active := strings.TrimSuffix(p, PendingSuffix)
+	must(t, os.WriteFile(active, f, 0o644))
+	if err := RestorePendingSkill(dir, "fern", "seed-swap", []byte("something else")); !errors.Is(err, ErrRestoreChanged) {
+		t.Fatalf("a different version was restored: %v", err)
+	}
+	must(t, os.WriteFile(p, []byte("newer"), 0o644))
+	if err := RestorePendingSkill(dir, "fern", "seed-swap", f); !errors.Is(err, ErrRestoreChanged) {
+		t.Fatalf("a newer pending version was overwritten: %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "newer" {
+		t.Fatal("pending file changed")
+	}
+	must(t, os.Remove(p))
+	if err := RestorePendingSkill(dir, "fern", "seed-swap", f); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal("not back to waiting")
+	}
+	// It takes the sprig's lock.
+	unlock, err := lockSprig(dir, "fern")
+	must(t, err)
+	defer unlock()
+	if err := RestorePendingSkill(dir, "fern", "seed-swap", f); err == nil || errors.Is(err, ErrRestoreChanged) {
+		t.Fatalf("restored without the lock: %v", err)
+	}
+}

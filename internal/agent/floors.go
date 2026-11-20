@@ -175,3 +175,13 @@ func (e *Engine) noteFloor(ctx context.Context, t *turn, tool *Tool, configured 
 
 // floorLine is the line under an approval prompt for a floored call.
 func floorLine(f Floor) string { return "Always asks: " + f.Reason + "." }
+
+// effectiveLevel is the level that applies to a call now: the configured
+// level, made stricter by any floor on it.
+func (e *Engine) effectiveLevel(ctx context.Context, t *turn, tool *Tool) string {
+	lv := e.toolLevel(ctx, t.char, tool)
+	if f, ok := e.floorFor(ctx, t, tool); ok {
+		lv = stricter(lv, f.Level)
+	}
+	return lv
+}

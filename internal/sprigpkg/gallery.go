@@ -453,8 +453,14 @@ func ReadGallery(r io.Reader, revoked []string) (*Gallery, error) {
 			if len(bytes.Trim(rest, "\x00")) > 0 {
 				return nil, errors.New("the package has data after its last file")
 			}
-			if n, _ := gz.Read(make([]byte, 1)); n > 0 {
+			// The stream's limit may have stopped ReadAll before gzip
+			// checked its trailer: this read must end cleanly at io.EOF.
+			n, err := gz.Read(make([]byte, 1))
+			if n > 0 {
 				return nil, fmt.Errorf("the package is too large (at most %d MB)", galleryMaxTotal>>20)
+			}
+			if !errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf("not a sprig package: %v", err)
 			}
 			break
 		}
@@ -1270,6 +1276,10 @@ func (g *Gallery) update(ctx context.Context, db *store.Store, charsDir string, 
 	}
 	plan = append(plan, stagedFile{dest: path, data: md}) // last: the sprig changes once the rest is in
 	if err := publishAll(plan); err != nil {
+		var rb *rollbackError
+		if errors.As(err, &rb) {
+			return nil, err // it says which files to check
+		}
 		return nil, fmt.Errorf("%w (the sprig was left as it was)", err)
 	}
 	bg := context.WithoutCancel(ctx)
@@ -1282,6 +1292,21 @@ func (g *Gallery) update(ctx context.Context, db *store.Store, charsDir string, 
 	}
 	return res, nil
 }
+
+// renameFile moves a file into place (tests make it fail).
+var renameFile = os.Rename
+
+// rollbackError is a publish that failed and couldn't be fully undone.
+type rollbackError struct {
+	err  error
+	left []string
+}
+
+func (e *rollbackError) Error() string {
+	return fmt.Sprintf("%v; putting back the files already changed failed too: check %s", e.err, strings.Join(e.left, ", "))
+}
+
+func (e *rollbackError) Unwrap() error { return e.err }
 
 // stagedFile is one file an update writes.
 type stagedFile struct {
@@ -1335,7 +1360,7 @@ func publishAll(plan []stagedFile) error {
 		}
 	}
 	for i := range plan {
-		if err := os.Rename(plan[i].tmp, plan[i].dest); err != nil {
+		if err := renameFile(plan[i].tmp, plan[i].dest); err != nil {
 			cleanup()
 			var left []string
 			for j := i - 1; j >= 0; j-- {
@@ -1350,7 +1375,7 @@ func publishAll(plan []stagedFile) error {
 				}
 			}
 			if len(left) > 0 {
-				return fmt.Errorf("%w; putting back the files already changed failed too: check %s", err, strings.Join(left, ", "))
+				return &rollbackError{err: err, left: left}
 			}
 			return err
 		}
@@ -1384,7 +1409,7 @@ func writeAtomic(full string, b []byte) error {
 		err = os.Chmod(tmp.Name(), 0o644)
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), full)
+		err = renameFile(tmp.Name(), full)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
@@ -1473,15 +1498,47 @@ func ApprovePendingSkill(charsDir, sprig, id string, want []byte) (*store.Skill,
 		}
 	}
 	p := pendingPath(charsDir, sprig, id)
-	if err := os.Rename(p, strings.TrimSuffix(p, PendingSuffix)); err != nil {
+	if err := renameFile(p, strings.TrimSuffix(p, PendingSuffix)); err != nil {
 		return nil, err
 	}
 	return k, nil
 }
 
+// ErrRestoreChanged means a skill wasn't put back to waiting because its
+// files changed since it was approved.
+var ErrRestoreChanged = errors.New("the skill's files changed since it was approved, so it was left as it is")
+
 // RestorePendingSkill puts an approved skill back to waiting (its
-// approval couldn't be completed).
-func RestorePendingSkill(charsDir, sprig, id string) error {
+// approval couldn't be completed). approved is the file as it was
+// approved: only that version goes back, and never over a newer pending
+// one (a gallery update since). It holds the sprig's lock, like approval
+// and gallery updates.
+func RestorePendingSkill(charsDir, sprig, id string, approved []byte) error {
+	unlock, err := lockSprig(charsDir, sprig)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	p := pendingPath(charsDir, sprig, id)
-	return os.Rename(strings.TrimSuffix(p, PendingSuffix), p)
+	active := strings.TrimSuffix(p, PendingSuffix)
+	if _, err := os.Lstat(p); err == nil {
+		return ErrRestoreChanged // a newer version is waiting already
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	cur, err := os.ReadFile(active)
+	if err != nil {
+		return err
+	}
+	if approved != nil {
+		// Compared as approve compares it: the skill as shown.
+		k, _, err := ParseSkillFile(cur)
+		if err != nil {
+			return ErrRestoreChanged
+		}
+		if f, err := FormatSkillFile(k); err != nil || !bytes.Equal(f, approved) {
+			return ErrRestoreChanged
+		}
+	}
+	return renameFile(active, p)
 }

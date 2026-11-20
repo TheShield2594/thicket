@@ -249,3 +249,28 @@ func TestPluginTurnedOffWriteFails(t *testing.T) {
 		t.Fatalf("a turned-off plugin connected: %q", st)
 	}
 }
+
+// A token file others can read, that Thicket can't make private, isn't
+// used: setting the plugin up fails and says why.
+func TestPluginTokenFileNotTightened(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	a.Plugins = plugin.MustNew(plugin.Spec{Name: "stub"})
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(tokenFile, []byte(strings.Repeat("t", 40)+"\n"), 0o644)
+	a.Cfg.SetPluginEnv("THICKET_STUB_URL", "http://127.0.0.1:1")
+	a.Cfg.SetPluginEnv("THICKET_STUB_TOKEN_FILE", tokenFile)
+	defer func(old func(string, os.FileMode) error) { chmodFile = old }(chmodFile)
+	chmodFile = func(string, os.FileMode) error { return fmt.Errorf("operation not permitted") }
+	if a.ensurePlugins(ctx) {
+		t.Fatal("set up with a world-readable token")
+	}
+	a.mu.Lock()
+	errs := strings.Join(a.startErrs, "|")
+	a.mu.Unlock()
+	if !strings.Contains(errs, "readable by others") {
+		t.Fatalf("not reported: %q", errs)
+	}
+	if servers, _ := a.DB.MCPServers(ctx); len(servers) != 0 {
+		t.Fatalf("integration stored anyway: %+v", servers)
+	}
+}

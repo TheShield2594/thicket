@@ -96,12 +96,13 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 	e.skillSyncMu.Lock()
 	defer e.skillSyncMu.Unlock()
 	var probs []SkillSyncProblem
+	dir := e.Chars.Dir()
 	owners, err := e.DB.SkillOwners(ctx)
 	if err != nil {
 		e.Log.Error("sync sprig skills", "err", err)
-		return nil
+		// Nothing was mirrored: reported for the whole folder.
+		return []SkillSyncProblem{{dir, "couldn't read the skills in the store: " + err.Error()}}
 	}
-	dir := e.Chars.Dir()
 	seen := map[string]bool{} // skill ids that have a file
 	keep := map[string]bool{} // sprigs whose folder couldn't be read: keep their skills
 	for _, c := range e.Chars.All() {
@@ -136,7 +137,8 @@ func (e *Engine) SyncSprigSkills(ctx context.Context) []SkillSyncProblem {
 			case err == nil:
 				base = cur.Version
 			case !errors.Is(err, store.ErrNotFound):
-				e.Log.Error("sync sprig skills", "skill", k.ID, "err", err)
+				probs = append(probs, SkillSyncProblem{path, "couldn't read it from the store: " + err.Error()})
+				delete(seen, k.ID)
 				continue
 			}
 			k.Author, k.Note = "folder", "from "+c.ID+"/skills/"+filepath.Base(path)

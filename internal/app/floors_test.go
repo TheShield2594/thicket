@@ -43,3 +43,38 @@ func TestPluginFloorEndToEnd(t *testing.T) {
 		t.Fatal("approved floored call didn't run")
 	}
 }
+
+// A floor of read set after a call was asked for, or drafted, keeps it
+// from running: the approval does nothing, the draft stays open.
+func TestLaterReadFloorStopsApprovalsAndDrafts(t *testing.T) {
+	a, fc, _, ctx, _, writes := ready(t)
+	a.Engine.HandleIncoming(ctx, dm("hal, turn on the light")) // asks (default)
+	fc.take()
+	haMeta.Store(`{"thicket/floor":{"min_level":"read","reason":"the account is locked"}}`)
+	a.Engine.HandleIncoming(ctx, dm("hal, check the light"))
+	fc.take()
+	a.Engine.HandleIncoming(ctx, dm("approve"))
+	fc.take()
+	if writes.Load() != 0 {
+		t.Fatal("an approved call ran under a read floor")
+	}
+
+	a2, fc2, _, ctx2, _, writes2 := ready(t)
+	a2.DB.SetToolLevel(ctx2, "hal", "mcp_ha__turn_on", store.LevelDraft)
+	a2.Engine.HandleIncoming(ctx2, dm("hal, turn on the light"))
+	fc2.take()
+	owner, _ := a2.DB.UserByExternal(ctx2, "discord", "owner")
+	items, _ := a2.DB.OpenInbox(ctx2, owner.ID)
+	if len(items) != 1 || items[0].Kind != store.InboxDraft {
+		t.Fatalf("no draft: %+v", items)
+	}
+	haMeta.Store(`{"thicket/floor":{"min_level":"read","reason":"the account is locked"}}`)
+	a2.Engine.HandleIncoming(ctx2, dm("hal, check the light"))
+	fc2.take()
+	if err := a2.Engine.RunDraft(ctx2, owner, items[0].ID); err == nil {
+		t.Fatal("a draft ran under a read floor")
+	}
+	if open, _ := a2.DB.OpenInbox(ctx2, owner.ID); len(open) != 1 || writes2.Load() != 0 {
+		t.Fatalf("draft claimed or run: %+v, writes %d", open, writes2.Load())
+	}
+}

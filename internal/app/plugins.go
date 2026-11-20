@@ -83,7 +83,13 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 	tok := ""
 	if b, err := os.ReadFile(ep.TokenFile); err == nil {
 		tok = strings.TrimSpace(string(b))
-		_ = os.Chmod(ep.TokenFile, tokenMode) // tighten one written before 0640
+		// Tighten one written before 0640; one Thicket can't tighten
+		// (someone else's file) isn't used while others can read it.
+		if st, err := os.Stat(ep.TokenFile); err == nil && st.Mode().Perm()&^tokenMode != 0 {
+			if err := chmodFile(ep.TokenFile, tokenMode); err != nil {
+				return fmt.Errorf("the token file %s is readable by others and couldn't be made private: %w", ep.TokenFile, err)
+			}
+		}
 	}
 	if len(tok) < 32 {
 		b := make([]byte, 32)
@@ -100,7 +106,9 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 		if err := os.WriteFile(ep.TokenFile, []byte(tok+"\n"), tokenMode); err != nil {
 			return fmt.Errorf("writing the token: %w", err)
 		}
-		_ = os.Chmod(ep.TokenFile, tokenMode) // WriteFile keeps an existing file's mode
+		if err := chmodFile(ep.TokenFile, tokenMode); err != nil { // WriteFile keeps an existing file's mode
+			return fmt.Errorf("making the token file private: %w", err)
+		}
 	}
 	if cur, _ := a.Secrets.Get(ctx, ep.Secret()); cur != tok {
 		if err := a.Secrets.Put(ctx, ep.Secret(), tok); err != nil {
@@ -123,6 +131,9 @@ func (a *App) setUpPlugin(ctx context.Context, ep plugin.Endpoint) error {
 
 // tokenMode is a plugin token file's mode: Thicket and its group only.
 const tokenMode = 0o640
+
+// chmodFile changes a file's mode (tests make it fail).
+var chmodFile = os.Chmod
 
 // pluginEndpoint finds a configured plugin by integration name.
 func (a *App) pluginEndpoint(name string) (plugin.Endpoint, bool) {
