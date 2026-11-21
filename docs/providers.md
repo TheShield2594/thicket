@@ -92,7 +92,9 @@ OpenRouter reports what each call cost. Other providers don't, so:
 
 - PDFs are read the way they are for a local server: Thicket extracts the
   text itself, so scanned PDFs can't be read.
-- Voice messages aren't transcribed (that uses OpenRouter's audio input).
+- Voice messages are transcribed by the [voice plugin](voice.md) or
+  `transcribe_url` if you run one; otherwise they aren't (that uses
+  OpenRouter's audio input).
 - Web search needs your own SearXNG (`search_url`); OpenRouter's search
   isn't available.
 - The fallback model is on the same provider.

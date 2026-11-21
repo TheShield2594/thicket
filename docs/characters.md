@@ -123,7 +123,8 @@ formatting aren't read out, and very long replies are cut at about 4,000
 characters with "the rest is in the message".
 
 Speech is made by an OpenAI-compatible speech endpoint
-(`POST /v1/audio/speech`): by default the model server (`model_url`,
+(`POST /v1/audio/speech`): the [voice plugin](voice.md) (Piper) when it's
+running and `local_voice` is on, otherwise the model server (`model_url`,
 OpenRouter), or a local speech server such as Kokoro-FastAPI beside
 Ollama, set with `speech_url`. `speech_model` and `speech_voice` choose
 the model and the default voice. Spoken replies count against the spend

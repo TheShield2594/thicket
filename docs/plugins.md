@@ -4,7 +4,7 @@ Thicket's core bundles no browser, no mailbox and no speech engine.
 Abilities like those are **plugins**: each is an MCP server in a container
 of its own, started by a docker compose profile, that Thicket connects as
 a built-in integration. The [sandbox computer](sandbox.md) is the first
-one. A plugin you don't start costs nothing and changes nothing.
+one; [email](mail.md) and [voice](voice.md) are others. A plugin you don't start costs nothing and changes nothing.
 
 ## How a plugin is turned on
 

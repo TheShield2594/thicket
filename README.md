@@ -225,9 +225,10 @@ cookies (`Secure` over HTTPS).
 - Every sprig has a drawn, animated avatar that shows what it's doing
   (idle, thinking, working, sleeping, stuck) and how its last reply went
   (pleased, unsure).
-- Send voice messages (in Discord, Telegram or the web app): they're transcribed (by the `transcribe_model`
-  setting, a model that hears audio) and the sprig answers what you said.
-  Needs OpenRouter.
+- Send voice messages (in Discord, Telegram or the web app): they're transcribed and the sprig answers
+  what you said. On your own machine with the optional [voice plugin](docs/voice.md) (whisper.cpp and
+  Piper, `docker compose --profile voice up -d`, which also speaks replies), on any OpenAI-compatible
+  speech-to-text server (`transcribe_url`), or on OpenRouter (the `transcribe_model` setting).
 - Send pictures, PDFs and text files (from the web app too). Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each; 2 MB if its pages can't be counted) and text files such as notes, CSVs or
@@ -366,7 +367,9 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_TRUSTED_PROXIES` | | reverse proxies (addresses or CIDR ranges, comma-separated) whose `X-Forwarded-For` names the client, for sign-in limits; empty: any proxy on a loopback or private address |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
-| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
+| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages on OpenRouter; it must accept audio |
+| `transcribe_url` *chat only* | | a local OpenAI-compatible speech-to-text server for voice messages ([Voice](docs/voice.md)) |
+| `local_voice` *chat only* | `true` (new installs) | use the voice plugin for voice messages and spoken replies while it runs ([Voice](docs/voice.md)) |
 | `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |

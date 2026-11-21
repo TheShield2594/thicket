@@ -6,6 +6,29 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v36)
 
+- Local speech (#84): the optional `thicket-voice` plugin
+  (`docker compose --profile voice up -d`) hears voice messages with
+  whisper.cpp and reads replies aloud with Piper, on your own machine,
+  behind OpenAI-compatible `/v1/audio/transcriptions` and
+  `/v1/audio/speech`. With it, a voice message on Telegram, Discord or
+  in the web app is transcribed and answered out loud with no OpenRouter
+  key, also on a local model server (which used to say the message
+  wasn't transcribed). Models (about 130 MB) download on first start into
+  the `voice-models` volume, each checked against a pinned SHA-256; the
+  image is built for amd64 and arm64. It publishes no port and needs the
+  token Thicket shares, like the sandbox. A new `transcribe_url` setting
+  sends voice messages to any OpenAI-compatible speech-to-text server,
+  the way `speech_url` works for speech; local transcription is recorded
+  at $0. New installs use the plugin for both whenever it runs (the new
+  `local_voice` setting, on by default). **Existing installs keep their
+  current settings**: on the first start of this version, an install
+  that already has people gets `local_voice` stored off. To switch, start
+  the plugin and tell Juni "set local_voice to true" (or
+  `thicket settings set local_voice true`); `transcribe_url` and
+  `speech_url` still win, and OpenRouter stays available.
+  `thicket doctor` checks both endpoints with a round trip (a phrase
+  spoken, then heard back). See [Voice](docs/voice.md).
+
 - Sprigs' own email addresses (schema v36, #88, #89, #90): the optional
   `thicket-mail` plugin (`docker compose --profile mail up -d`) gives a
   sprig its own address over JMAP, or IMAP and SMTP (TLS only; plaintext
