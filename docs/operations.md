@@ -37,6 +37,11 @@ broken:
   `getMe`). Tokens never appear in the output.
 - **mcp.\***: each enabled integration is connected and asked for its
   tools. A down integration is a warning, not a failure.
+- **gallery index**: with `THICKET_GALLERY_URL` set, the
+  [gallery](gallery.md#browsing-a-shared-gallery)'s `index.json` is
+  fetched (public addresses only, as Thicket does) and checked against its
+  schema, with the age of the cached copy. A warning, not a failure; it
+  warns too when the cache is more than two days old.
 - **server / live \***: the running server's `/health`, for what only it
   knows: whether the chat apps are connected right now and the scheduler
   is ticking. If Thicket isn't running, this is a warning.

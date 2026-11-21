@@ -1,0 +1,51 @@
+# Publishes the gallery: verifies it once more, builds the static site
+# (index.html, index.json and the packages) and deploys it to GitHub
+# Pages. People then set THICKET_GALLERY_URL to the site's index.json.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  THICKET_VERSION: latest
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install thicket
+        run: go install github.com/theshield2594/thicket/cmd/thicket@${THICKET_VERSION}
+      - name: Verify the gallery
+        run: thicket gallery verify .
+      - name: Build the site
+        run: thicket gallery build-site . -o _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

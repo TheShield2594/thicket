@@ -67,6 +67,10 @@ Usage:
                                       a gallery package is checked against its signature first
   thicket gallery keygen | key | revoke KEYID | revoked
                                       your author key for gallery packages, and revoked authors
+  thicket gallery list | show NAME | install NAME | refresh
+                                      browse and install from a shared gallery (THICKET_GALLERY_URL)
+  thicket gallery verify | build-index | build-site DIR
+                                      check and publish a gallery repository (docs/gallery.md)
   thicket sprig starter [ID...] [--kid USER] [--tier T] [--check-ins] [--yes]
                                       list the starter sprigs (homework helper, reading buddy, meal
                                       planner, bill tracker, chore chart), or add them (shown first)

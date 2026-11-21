@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/config"
@@ -16,17 +18,42 @@ import (
 	"github.com/theshield2594/thicket/internal/store"
 )
 
-const galleryUsage = `usage: thicket gallery keygen | key | revoke KEYID | revoked
+const galleryUsage = `usage: thicket gallery COMMAND
 
+Your author key:
   keygen         make your author key for signing gallery packages (an Ed25519
                  key pair; the private key is kept in the encrypted secret store)
   key            show your author key id and fingerprint, to publish
   revoke KEYID   refuse packages signed by an author key from now on
-  revoked        list the revoked author keys`
+  revoked        list the revoked author keys (yours and the gallery's)
+
+A shared gallery (THICKET_GALLERY_URL):
+  list           the gallery's sprigs
+  show NAME      one sprig: its author, key fingerprint, scopes and versions
+  install NAME [--version N] [--id ID] [--name NAME] [--user ID] [--yes]
+                 download it, check it against the index, and import it after
+                 showing you everything it will get
+  refresh        fetch the gallery's index now (it's fetched daily)
+
+Running a gallery (a repository of packages):
+  verify DIR       check every package and index.json, as the gallery's CI does
+  build-index DIR  write DIR/index.json from the packages
+  build-site DIR [-o OUT]
+                   write the static site (default DIR/site) to publish`
 
 func galleryCmd(cfg *config.Config, args []string, out io.Writer) error {
+	return galleryCmdIO(cfg, args, os.Stdin, out)
+}
+
+func galleryCmdIO(cfg *config.Config, args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(galleryUsage)
+	}
+	switch args[0] {
+	case "verify", "build-index", "build-site":
+		return galleryRepoCmd(args, out)
+	case "list", "show", "install", "refresh":
+		return galleryIndexCmd(cfg, args, in, out)
 	}
 	db, err := openStore(cfg)
 	if err != nil {
@@ -102,11 +129,20 @@ func galleryCmd(cfg *config.Config, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if len(list) == 0 {
+		var fromIndex []string
+		for _, k := range galleryClient(cfg).Revoked() {
+			if !slices.Contains(list, k) {
+				fromIndex = append(fromIndex, k)
+			}
+		}
+		if len(list)+len(fromIndex) == 0 {
 			fmt.Fprintln(out, "No author keys are revoked.")
 		}
 		for _, k := range list {
 			fmt.Fprintln(out, k)
+		}
+		for _, k := range fromIndex {
+			fmt.Fprintln(out, k, "(revoked by the gallery)")
 		}
 		return nil
 	}

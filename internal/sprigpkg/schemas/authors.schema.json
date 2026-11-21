@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/authors.schema.json",
+  "title": "Gallery repository authors.json (kept by moderators)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["authors"],
+  "properties": {
+    "authors": {
+      "type": "object",
+      "maxProperties": 2000,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "public_key"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 60},
+          "public_key": {"type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$"},
+          "url": {"type": "string", "maxLength": 200, "pattern": "^https://[^\\s\"<>]+$"}
+        }
+      }
+    }
+  }
+}
