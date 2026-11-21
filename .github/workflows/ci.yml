@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -42,7 +42,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: build image
         run: docker build --build-arg VERSION=${{ github.sha }} -t thicket:ci .
       - name: image smoke test
@@ -64,7 +64,7 @@ jobs:
   plugins:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -107,7 +107,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The sandbox image's apt step and the voice plugin's whisper.cpp build
       # run emulated for arm64; the Go builds cross-compile.
       - uses: docker/setup-qemu-action@v3
