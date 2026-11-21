@@ -137,8 +137,17 @@ func (e *Engine) bootstrap(ctx context.Context, in channel.Incoming, user *store
 		return e.connectLocal(ctx, in, user, host, cands, true)
 	}
 	// A provider and key set in the environment: pick its models now.
-	if p, ok := e.provider(ctx); ok {
-		if key, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey); key != "" {
+	// The provider and its key are read together, so a switch in between
+	// can't pair one provider with another's key.
+	providerMu.Lock()
+	p, ok := e.provider(ctx)
+	key := ""
+	if ok {
+		key, _ = e.Secrets.Get(ctx, secrets.ModelAPIKey)
+	}
+	providerMu.Unlock()
+	if ok {
+		if key != "" {
 			return e.connectProvider(ctx, in, user, host, p, key, false)
 		}
 		return e.bootstrapGreeting(ctx, in, user, host)
