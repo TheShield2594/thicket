@@ -45,8 +45,8 @@ type ProviderInfo struct {
 	Address      string `json:"address,omitempty"` // the owner's server, when in use
 }
 
-// providerMu makes a switch one step: the key check, the stored keys and
-// the settings change together.
+// providerMu makes a switch one step: the stored keys and the settings
+// change together, whether it comes from Settings or from chat.
 var providerMu sync.Mutex
 
 // providerKeyName is the secret a catalog provider's key is kept under
@@ -66,6 +66,35 @@ func (e *Engine) keepProviderKey(ctx context.Context) error {
 		return nil
 	}
 	return e.Secrets.Put(ctx, providerKeyName(p.ID), key)
+}
+
+// envKeyBlocks refuses a switch that would hand a hosted provider's key
+// from the environment (THICKET_MODEL_API_KEY) to another server. That
+// key can't be removed from here: it is read again at every start, and
+// sent to wherever models then run. target is "" for the owner's own
+// server, else the provider being switched to.
+func (e *Engine) envKeyBlocks(target string) error {
+	if e.Cfg.ModelAPIKey == "" {
+		return nil
+	}
+	owner, ok := llm.ProviderFor(e.Cfg.ModelURL)
+	if !ok || owner.ID == target {
+		return nil
+	}
+	return fmt.Errorf("THICKET_MODEL_API_KEY is set in the environment for %s, and would be sent to the server you're switching to. Remove it (and THICKET_PROVIDER) from the environment and restart Thicket first; then add the key here", owner.Name)
+}
+
+// clearModelKey empties the model key slot, so nothing is sent to a
+// server the key wasn't made for. The key of a catalog provider stays
+// under the provider's own name (keepProviderKey).
+func (e *Engine) clearModelKey(ctx context.Context) error {
+	if err := e.Secrets.Delete(ctx, secrets.ModelAPIKey); err != nil {
+		return err
+	}
+	if e.Secrets.Has(ctx, secrets.ModelAPIKey) {
+		return errors.New("the model key comes from the environment (THICKET_MODEL_API_KEY); remove it there and restart Thicket first")
+	}
+	return nil
 }
 
 // providerKey is the stored key for a catalog provider, or "".
@@ -189,6 +218,12 @@ func (e *Engine) useOpenRouter(ctx context.Context, by *store.User, key string) 
 	if err := e.keepProviderKey(ctx); err != nil {
 		return err
 	}
+	// OpenRouter has its own key. Left in the slot, the last provider's
+	// key would go to whichever server is chosen after this one. A key
+	// from the environment can't be cleared, and isn't sent to OpenRouter.
+	if err := e.Secrets.Delete(ctx, secrets.ModelAPIKey); err != nil {
+		return err
+	}
 	// Another server's model ids mean nothing to OpenRouter. Go back to
 	// the defaults, unless those were set for another server too.
 	url, model, fallback, cheap := "", "", "", ""
@@ -214,6 +249,9 @@ func (e *Engine) useProvider(ctx context.Context, by *store.User, p llm.Provider
 			return nil // already there
 		}
 	}
+	if err := e.envKeyBlocks(p.ID); err != nil {
+		return err
+	}
 	ids, err := e.modelLister()(ctx, p.BaseURL, key)
 	if err != nil {
 		return fmt.Errorf("%s didn't accept that key (%s)", p.Name, shortErr(err))
@@ -230,6 +268,8 @@ func (e *Engine) useProvider(ctx context.Context, by *store.User, p llm.Provider
 	if err := e.Secrets.Put(ctx, providerKeyName(p.ID), key); err != nil {
 		return err
 	}
+	// What the slot holds now, to put back if the switch doesn't happen.
+	prev, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey)
 	if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
 		return err
 	}
@@ -239,6 +279,20 @@ func (e *Engine) useProvider(ctx context.Context, by *store.User, p llm.Provider
 		return nil
 	}
 	if err := e.setAll(ctx, "model_url", p.BaseURL, "model", model, "cheap_model", cheap, "fallback_model", model); err != nil {
+		if now, ok := e.provider(ctx); !ok || now.ID != p.ID {
+			// Models still run where they did: so must the key, or the new
+			// one would be sent there, and later kept under that name.
+			bg := context.WithoutCancel(ctx)
+			var rerr error
+			if prev != "" {
+				rerr = e.Secrets.Put(bg, secrets.ModelAPIKey, prev)
+			} else {
+				rerr = e.Secrets.Delete(bg, secrets.ModelAPIKey)
+			}
+			if rerr != nil {
+				e.Log.Error("restoring the model key after a failed switch", "err", rerr)
+			}
+		}
 		return err
 	}
 	e.logActivity(ctx, "info", "system", "", by.ID, "connected to model provider "+p.Name, model)
@@ -257,6 +311,9 @@ func (e *Engine) useLocal(ctx context.Context, by *store.User, address string) e
 	if len(cands) == 0 {
 		return errors.New("that doesn't look like a server's address; try something like http://192.168.1.20:11434")
 	}
+	if err := e.envKeyBlocks(""); err != nil {
+		return err
+	}
 	var tried []string
 	for _, base := range cands {
 		// No key goes along: the stored one belongs to a hosted provider.
@@ -272,11 +329,10 @@ func (e *Engine) useLocal(ctx context.Context, by *store.User, address string) e
 		if err := e.keepProviderKey(ctx); err != nil {
 			return err
 		}
-		if _, ok := e.provider(ctx); ok {
-			// A hosted provider's key must not be sent to this server.
-			if err := e.Secrets.Delete(ctx, secrets.ModelAPIKey); err != nil {
-				return err
-			}
+		// Whatever the slot holds was made for another server (a hosted
+		// provider's, even with OpenRouter in between): it isn't sent here.
+		if err := e.clearModelKey(ctx); err != nil {
+			return err
 		}
 		model := models[0]
 		if err := e.setAll(ctx, "model_url", base, "model", model, "cheap_model", model, "fallback_model", model); err != nil {
@@ -339,12 +395,16 @@ func (e *Engine) AdminDisconnectProvider(ctx context.Context, by *store.User, id
 // AdminModels lists the chat models on the server in use, for picking
 // one on the Settings screen.
 func (e *Engine) AdminModels(ctx context.Context) ([]string, error) {
+	// The address and its key are read together, so a switch in between
+	// can't pair one server with another's key.
+	providerMu.Lock()
 	base := e.Settings.String(ctx, "model_url")
 	name := secrets.ModelAPIKey
 	if llm.IsOpenRouter(base) {
 		name = secrets.OpenRouterKey
 	}
 	key, _ := e.Secrets.Get(ctx, name)
+	providerMu.Unlock()
 	ids, err := e.modelLister()(ctx, base, key)
 	if err != nil {
 		return nil, errors.New(e.Secrets.Redact(shortErr(err)))

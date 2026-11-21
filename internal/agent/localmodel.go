@@ -174,20 +174,29 @@ func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user 
 		return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("%s accepted the key, but lists no chat models I can use. Is the account or plan active?", p.Name))
 	}
 	wasReady := e.ModelReady(ctx)
-	if sent {
-		// The key of the provider being left stays, for switching back.
-		if err := e.keepProviderKey(ctx); err != nil {
-			return err
+	// One step with a switch made on the Settings screen.
+	var setErr error
+	if err := func() error {
+		providerMu.Lock()
+		defer providerMu.Unlock()
+		if sent {
+			// The key of the provider being left stays, for switching back.
+			if err := e.keepProviderKey(ctx); err != nil {
+				return err
+			}
+			if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
+				return err
+			}
 		}
-		if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
-			return err
+		if serr := e.setAll(ctx, "model_url", p.BaseURL, "model", model, "cheap_model", cheap, "fallback_model", model); serr != nil {
+			setErr = serr
 		}
+		return nil
+	}(); err != nil {
+		return err
 	}
-	set := map[string]string{"model_url": p.BaseURL, "model": model, "cheap_model": cheap, "fallback_model": model}
-	for _, k := range []string{"model_url", "model", "cheap_model", "fallback_model"} {
-		if err := e.Settings.Set(ctx, k, set[k]); err != nil {
-			return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(err)+").")
-		}
+	if setErr != nil {
+		return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(setErr)+").")
 	}
 	e.logActivity(ctx, "info", "system", "", user.ID, "connected to model provider "+p.Name, model)
 	msg := fmt.Sprintf("Connected to %s. I'll think with **%s**", p.Name, model)
@@ -237,10 +246,16 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 		if saveURL {
 			set["model_url"] = base
 		}
+		providerMu.Lock()
+		var setErr error
 		for k, v := range set {
-			if err := e.Settings.Set(ctx, k, v); err != nil {
-				return e.send(ctx, in.ChatRef(), host, "I reached "+base+" but couldn't save the setting ("+shortErr(err)+").")
+			if setErr = e.Settings.Set(ctx, k, v); setErr != nil {
+				break
 			}
+		}
+		providerMu.Unlock()
+		if setErr != nil {
+			return e.send(ctx, in.ChatRef(), host, "I reached "+base+" but couldn't save the setting ("+shortErr(setErr)+").")
 		}
 		e.logActivity(ctx, "info", "system", "", 0, "connected to local model server "+base, model)
 		msg := fmt.Sprintf("Connected to %s. I'll think with **%s**.", base, model)

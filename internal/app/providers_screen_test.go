@@ -138,3 +138,60 @@ func TestProvidersScreen(t *testing.T) {
 		t.Fatal("ready with no key")
 	}
 }
+
+// A hosted provider's key never reaches the owner's own server, also
+// with OpenRouter in between, and also when the key is in the environment.
+func TestProviderKeyStaysWithItsProvider(t *testing.T) {
+	a, _, _, ctx := setup(t)
+	e := a.Engine
+	owner, err := a.DB.CreateUser(ctx, "web", "1", "Sam", store.RoleOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const groqKey = "gsk_goodgoodgoodgoodgoodgood1"
+	var localGot []string
+	e.ListModels = func(_ context.Context, base, key string) ([]string, error) {
+		if strings.Contains(base, "groq.com") {
+			return []string{"openai/gpt-oss-120b"}, nil
+		}
+		localGot = append(localGot, key)
+		return []string{"qwen2.5"}, nil
+	}
+	for _, step := range [][3]string{{"groq", groqKey, ""}, {"openrouter", "sk-or-v1-abcdefabcdefabcdefabcdef", ""}, {"local", "", "10.0.0.5:11434"}} {
+		if _, err := e.AdminConnectProvider(ctx, owner, step[0], step[1], step[2]); err != nil {
+			t.Fatalf("%s: %v", step[0], err)
+		}
+	}
+	if a.Secrets.Has(ctx, secrets.ModelAPIKey) {
+		t.Fatal("groq's key is still the model key on a local server")
+	}
+	if _, err := e.AdminModels(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range localGot {
+		if k != "" {
+			t.Fatalf("the local server was sent a key: %q", k)
+		}
+	}
+	// Groq's key is kept for switching back.
+	if _, err := e.AdminConnectProvider(ctx, owner, "groq", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if k, _ := a.Secrets.Get(ctx, secrets.ModelAPIKey); k != groqKey {
+		t.Fatal("groq's key wasn't kept")
+	}
+
+	// A key in the environment can't be removed from here, so a switch
+	// that would send it elsewhere is refused.
+	e.Cfg.ModelAPIKey, e.Cfg.ModelURL = groqKey, "https://api.groq.com/openai/v1"
+	a.Secrets.SetEnvFallback(secrets.ModelAPIKey, groqKey)
+	localGot = nil
+	for _, to := range [][3]string{{"local", "", "10.0.0.5:11434"}, {"deepseek", "sk-deepseekdeepseekdeepseek01", ""}} {
+		if _, err := e.AdminConnectProvider(ctx, owner, to[0], to[1], to[2]); err == nil || !strings.Contains(err.Error(), "THICKET_MODEL_API_KEY") {
+			t.Fatalf("switch to %s with groq's key in the environment: %v", to[0], err)
+		}
+	}
+	if len(localGot) != 0 || !strings.Contains(a.Settings.String(ctx, "model_url"), "groq.com") {
+		t.Fatalf("the refused switch still happened: %q", localGot)
+	}
+}

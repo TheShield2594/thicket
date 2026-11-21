@@ -814,6 +814,7 @@ async function signOut() {
 // was revoked. Requests still in flight compare S.session before writing
 // anything, so a late response can't bring the account's data back.
 function endSession() {
+  document.querySelector('.sheet.settings')?.remove(); // it shows the account that just ended
   es?.close();
   clearTimeout(downTimer);
   save('thicket.layout', null);
@@ -1278,6 +1279,7 @@ const SETTING_LABELS = {
 const upFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function settingRow(s) {
+  const cached = s; // the dialog's copy, shown again when the section is reopened
   const id = 'set-' + s.name.replace(/\W/g, '-');
   let input;
   if (s.kind === 'bool') {
@@ -1301,6 +1303,7 @@ function settingRow(s) {
     err.textContent = ''; save.disabled = reset.disabled = true;
     try {
       s = await api('/api/settings', { method: 'POST', body: { name: s.name, value } });
+      Object.assign(cached, s);
       input.value = s.value; reset.hidden = !s.changed; dirty();
       toast(`${SETTING_LABELS[s.name] || s.name} saved.`);
       if (s.name.startsWith('budget.')) refreshMe().then(renderSidebar).catch(() => {});
@@ -1414,8 +1417,13 @@ const named = (names) => (all) => names.map((n) => all.find((s) => s.name === n)
 function aiSection(st) {
   // The provider's model ids, offered as suggestions in the model fields.
   const ids = h('datalist', { id: 'model-ids' });
+  let asked = 0;
   const loadIds = async () => {
-    try { ids.replaceChildren(...(await api('/api/models')).models.map((m) => h('option', { value: m }))); } catch { ids.replaceChildren(); }
+    // Only the latest answer counts: an earlier provider's list may arrive late.
+    const mine = ++asked;
+    let models = [];
+    try { models = (await api('/api/models')).models; } catch { /* ids can still be typed */ }
+    if (mine === asked) ids.replaceChildren(...models.map((m) => h('option', { value: m })));
   };
   loadIds();
   const rows = settingRows(st.all, named(SETTING_SECTIONS.ai));
@@ -1499,7 +1507,18 @@ function openSettings(want) {
       h('div.set-pane', {},
         h('header.set-head', {}, h('div', {}, title, sub), h('button.icon-btn', { 'aria-label': 'Close settings', onclick: close }, icon('x'))),
         body)));
-  sheet.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } });
+  sheet.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.stopPropagation(); close(); return; }
+    if (ev.key !== 'Tab') return;
+    // Tab stays inside the dialog: past either end it wraps to the other.
+    const stops = [...sheet.querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && !el.hidden && el.getClientRects().length);
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    if (!sheet.contains(document.activeElement)) { ev.preventDefault(); first.focus(); }
+    else if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  });
   document.body.append(sheet);
   draw(true);
 }
