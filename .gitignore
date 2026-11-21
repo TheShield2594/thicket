@@ -7,3 +7,4 @@ thicket-export-*.tar.gz
 .env
 /plugins/hello/hello
 /plugins/mail/mail
+/plugins/voice/voice
