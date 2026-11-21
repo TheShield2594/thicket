@@ -138,6 +138,20 @@ and opens the same preview ([Dashboard](dashboard.md#gallery)).
 `thicket doctor` checks that the index is reachable and valid, and how old
 the cached copy is.
 
+### Juni suggests one
+
+With a gallery set up, when you describe a need ("I want someone to track
+my plants"), Juni looks in the cached index first (no network call). If a
+sprig fits, she suggests it, up to three, and offers the usual interview
+as the other choice. If you pick one, she shows you its preview. She
+can't install anything herself: only your approval of the preview does.
+
+Names and descriptions in the index are written by strangers. Juni gets
+them as untrusted content, and the turn is marked as having read it: an
+action the description asks for that you didn't (forward mail, grant a
+scope) is held for you in "needs you", not done. Kids aren't offered the
+gallery.
+
 ## Submitting a sprig
 
 1. Make your author key and publish its fingerprint (above).

@@ -688,7 +688,7 @@ func (e *Engine) builtinTools() []*Tool {
 			AdminOnly:   true,
 			Run:         e.toolMemoryReviews,
 		},
-	}, append(append(e.calendarTools(), e.digestTools()...), e.kidLimitTools()...)...)
+	}, append(append(append(e.calendarTools(), e.digestTools()...), e.kidLimitTools()...), e.galleryTools()...)...)
 }
 
 // --- memory tools ---

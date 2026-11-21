@@ -93,6 +93,15 @@ stated.
   `gallery/template/` with CI that refuses failing changes and review
   steps for moderators. See [docs/gallery.md](docs/gallery.md).
 
+- Juni suggests a sprig from the gallery (#83). With a gallery set up,
+  Juni (only) gets `gallery_search`, which looks through the cached index
+  with no network call, and `gallery_preview`. When you describe a need,
+  she suggests up to three gallery sprigs before the usual interview and
+  shows the import preview for the one you pick; only your approval of it
+  installs anything. Search results are untrusted content: wrapped, and
+  they taint the turn, so an action a description asks for is held for
+  you, not done.
+
 - Signed gallery packages (schema v35, #81). `thicket gallery keygen`
   makes your Ed25519 author key (kept in the encrypted secret store);
   `thicket export-sprig ID --for-gallery` writes a signed package holding
