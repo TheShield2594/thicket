@@ -69,6 +69,14 @@ opens each sprig's mailbox you may see: inbox and drafts, newest first.
   removes addresses or `@domain`s here; every change is in the trail and
   can be undone. Others see the list.
 
+## Browser
+
+With the [browser plugin](browser.md) running, **Browser** (top of the
+page) lists the sprigs you may see that have the browser, each with the
+sites its browser may load. Its owner allows and removes sites there;
+every change is in the trail and can be undone. Others see the list. A
+private sprig's list is only for its person; kids see none.
+
 ## Signing in
 
 The dashboard uses the web app's sign-in: a username and password, single

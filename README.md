@@ -269,6 +269,10 @@ cookies (`Secure` over HTTPS).
   (an optional plugin, JMAP or IMAP/SMTP). It only sends on its own to
   addresses you allowed; everything else waits in "needs you", and you
   can read its mailbox on the dashboard. See [Email](docs/mail.md).
+- Give a sprig its own web browser (an optional plugin, Chromium) to use
+  sites you trust and stay signed in to them. It only reaches the sites
+  you allowed, never your network, and its logins are kept encrypted.
+  See [The browser](docs/browser.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -386,7 +390,9 @@ This writes one archive with the database (a consistent copy, safe to take
 while Thicket runs) and every sprig's files: character file, avatar
 settings and voice tests. Add `--include-key` to bring the encryption key
 too; without it, stored API keys must be re-entered after a restore, and
-with it the file is as sensitive as a password.
+with it the file is as sensitive as a password. Sprigs' browser logins
+are left out unless you add `--browser-profiles` (they stay encrypted;
+see [The browser](docs/browser.md#backups)).
 
 Restore into an empty data directory with `thicket restore FILE`. The
 archive is checked first (its manifest, that its database isn't from a
@@ -432,6 +438,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Plugins: optional abilities in their own containers](docs/plugins.md)
 - [Email: a sprig's own address](docs/mail.md)
+- [The browser: a sprig's own web browser](docs/browser.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)
