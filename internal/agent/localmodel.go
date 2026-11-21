@@ -176,9 +176,19 @@ func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user 
 	wasReady := e.ModelReady(ctx)
 	// One step with a switch made on the Settings screen.
 	var setErr error
+	moved := false
 	if err := func() error {
 		providerMu.Lock()
 		defer providerMu.Unlock()
+		if !sent {
+			// The key was read before the models were listed. If Settings
+			// switched providers meanwhile, it is no longer this one's.
+			now, ok := e.provider(ctx)
+			if cur, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey); !ok || now.ID != p.ID || cur != key {
+				moved = true
+				return nil
+			}
+		}
 		if sent {
 			// The key of the provider being left stays, for switching back.
 			if err := e.keepProviderKey(ctx); err != nil {
@@ -194,6 +204,9 @@ func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user 
 		return nil
 	}(); err != nil {
 		return err
+	}
+	if moved {
+		return nil // someone chose another provider in Settings; theirs stands
 	}
 	if setErr != nil {
 		return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(setErr)+").")
@@ -237,7 +250,8 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 		if err := e.envKeyBlocks(""); err != nil {
 			return e.send(ctx, in.ChatRef(), host, "I haven't tried that server: "+err.Error()+".")
 		}
-		_, hostedKey = e.provider(ctx)
+		// Also on OpenRouter: a key left in the slot was a provider's.
+		hostedKey = llm.IsHosted(e.Settings.String(ctx, "model_url"))
 	}
 	var tried []string
 	for _, base := range cands {
@@ -266,7 +280,7 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 		var setErr error
 		if hostedKey {
 			if setErr = e.keepProviderKey(ctx); setErr == nil {
-				setErr = e.clearModelKey(ctx)
+				setErr = e.Secrets.Delete(ctx, secrets.ModelAPIKey)
 			}
 		}
 		for k, v := range set {

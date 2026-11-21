@@ -218,3 +218,32 @@ func TestChatLocalServerWithProviderKeyInEnv(t *testing.T) {
 		t.Fatalf("reply: %+v", out)
 	}
 }
+
+// A provider's key left in the model key slot while models are on
+// OpenRouter isn't sent to a local address tried from chat.
+func TestChatLocalServerWithLeftoverProviderKey(t *testing.T) {
+	a, fc, _, ctx := setup(t)
+	e := a.Engine
+	const groqKey = "gsk_goodgoodgoodgoodgoodgood1"
+	if err := a.Secrets.Put(ctx, secrets.ModelAPIKey, groqKey); err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	e.ListModels = func(_ context.Context, base, key string) ([]string, error) {
+		asked = append(asked, key)
+		return []string{"qwen2.5"}, nil
+	}
+	e.HandleIncoming(ctx, dm("http://10.0.0.5:11434"))
+	fc.take()
+	if len(asked) == 0 {
+		t.Fatal("the server wasn't tried")
+	}
+	for _, k := range asked {
+		if k != "" {
+			t.Fatalf("the local server was sent a key: %q", k)
+		}
+	}
+	if a.Secrets.Has(ctx, secrets.ModelAPIKey) || a.Settings.String(ctx, "model_url") != "http://10.0.0.5:11434/v1" {
+		t.Fatalf("after connecting: key kept, or address %q", a.Settings.String(ctx, "model_url"))
+	}
+}
