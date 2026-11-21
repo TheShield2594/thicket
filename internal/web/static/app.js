@@ -1519,6 +1519,12 @@ function openSettings(want) {
     else if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
+  // Focus that lands outside the dialog some other way comes back.
+  const keepIn = (ev) => {
+    if (!sheet.isConnected) return document.removeEventListener('focusin', keepIn);
+    if (!sheet.contains(ev.target)) nav.querySelector('[aria-current]')?.focus();
+  };
+  document.addEventListener('focusin', keepIn);
   document.body.append(sheet);
   draw(true);
 }
@@ -2196,7 +2202,8 @@ function renderDetails() {
 // ---------- keyboard ----------
 
 document.addEventListener('keydown', (e) => {
-  if (!S.me) return;
+  // The shortcuts act on what's behind an open dialog, so they wait.
+  if (!S.me || document.querySelector('.sheet')) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     if (MOBILE.matches && S.panes.length) goHome();
