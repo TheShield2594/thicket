@@ -6,6 +6,14 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v36)
 
+- Settings is a dialog with sections down the side: AI, Spending,
+  Behaviour, Web and documents, Voice and Connectors for the owner and
+  admins, then Your account (name, timezone, digest, password, sessions)
+  and Appearance (theme, notifications) for everyone. The rarely changed
+  settings (backups, rate limits, the raw model server address) are
+  under Advanced, shown with the Advanced mode switch. The separate
+  account sheet is gone; the gear in the sidebar opens the dialog for
+  every role.
 - Providers in Settings: the web app's Settings screen lists every place
   models can run (OpenRouter, the hosted providers, your own server) with
   its state: not set up, ready, or in use. Set one up by pasting its key
