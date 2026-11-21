@@ -631,7 +631,35 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .set-text small.err { color: var(--err); }
 .set-input { display: flex; gap: 8px; align-items: center; flex: 0 1 340px; min-width: 0; }
 .set-input .field { height: 40px; font-size: 15px; }
+.set-all { display: grid; gap: 28px; }
+.set-all > div { display: grid; gap: 28px; }
+.prov-card { border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); padding: 4px 14px; }
+.prov-row { display: flex; gap: 12px; align-items: center; padding: 11px 0; }
+.prov-card > * + * { border-top: 1px solid var(--line); }
+.prov-ico { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); font-weight: 700; font-size: 14px; }
+.prov-ico svg { width: 17px; height: 17px; }
+.prov-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.prov-text b { font-weight: 600; }
+.prov-text small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-on i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+.prov-row .chip { flex: none; min-width: 76px; justify-content: center; color: var(--text); font-weight: 600; }
+.prov-panel { display: grid; gap: 10px; justify-items: start; padding: 0 0 14px 46px; }
+.prov-panel .d-empty { padding: 0; }
+.prov-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; width: 100%; }
+.prov-form .field-label { flex: 1 1 240px; max-width: 420px; }
+.prov-form .field { height: 40px; font-size: 15px; }
+.prov-form .chip { height: 40px; padding: 0 16px; }
+.prov-form .linkish { line-height: 40px; font-size: 13px; }
+.chip.danger { color: var(--err); }
+.prov-more { display: flex; align-items: center; gap: 8px; width: 100%; padding: 13px 0 13px 46px; text-align: left; font-weight: 600; }
+.prov-more span { flex: 1; }
+.prov-more small { color: var(--muted); font-weight: 400; }
+.prov-more svg { width: 15px; height: 15px; color: var(--muted); transform: rotate(180deg); transition: transform 0.15s var(--ease); }
+.prov-more[aria-expanded="true"] svg { transform: rotate(270deg); }
+.linkish.quiet { color: var(--muted); text-decoration: none; font-size: 13px; }
+.linkish.quiet:hover { color: var(--text); }
 @media (max-width: 720px) {
+  .prov-panel { padding-left: 0; }
   .set-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .set-input { flex: none; }
 }

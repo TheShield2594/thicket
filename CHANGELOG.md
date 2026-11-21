@@ -6,6 +6,15 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v36)
 
+- Providers in Settings: the web app's Settings screen lists every place
+  models can run (OpenRouter, the hosted providers, your own server) with
+  its state: not set up, ready, or in use. Set one up by pasting its key
+  (checked with the provider before it's stored) or your server's
+  address; Thicket picks the models as it does in chat. Keys for
+  providers you switch away from are kept encrypted, so switching back
+  is one click, also after a switch made in chat. A hosted provider's
+  key is no longer sent to your own server after switching to it there.
+  The model settings suggest the ids the provider in use lists.
 - Local speech (#84): the optional `thicket-voice` plugin
   (`docker compose --profile voice up -d`) hears voice messages with
   whisper.cpp and reads replies aloud with Piper, on your own machine,

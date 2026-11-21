@@ -175,6 +175,10 @@ func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user 
 	}
 	wasReady := e.ModelReady(ctx)
 	if sent {
+		// The key of the provider being left stays, for switching back.
+		if err := e.keepProviderKey(ctx); err != nil {
+			return err
+		}
 		if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
 			return err
 		}

@@ -20,6 +20,10 @@ type Admin interface {
 	AdminIntegrations(ctx context.Context) (any, error)
 	AdminAddIntegration(ctx context.Context, by *store.User, name, url, token string) (any, error)
 	AdminRemoveIntegration(ctx context.Context, by *store.User, name string) error
+	AdminProviders(ctx context.Context) any
+	AdminConnectProvider(ctx context.Context, by *store.User, id, key, address string) (any, error)
+	AdminDisconnectProvider(ctx context.Context, by *store.User, id string) (any, error)
+	AdminModels(ctx context.Context) ([]string, error)
 }
 
 type userHandler = func(http.ResponseWriter, *http.Request, *store.User)
@@ -54,6 +58,49 @@ func (a *Adapter) setSetting(w http.ResponseWriter, r *http.Request, u *store.Us
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+// Providers: where models run (OpenRouter, a hosted provider, the owner's
+// own server), and the keys kept for them.
+
+func (a *Adapter) getProviders(w http.ResponseWriter, r *http.Request, _ *store.User) {
+	writeJSON(w, http.StatusOK, map[string]any{"providers": a.Admin.AdminProviders(r.Context())})
+}
+
+func (a *Adapter) connectProvider(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var b struct {
+		ID      string `json:"id"`
+		Key     string `json:"key"`
+		Address string `json:"address"`
+	}
+	if !decodeBody(w, r, &b) {
+		return
+	}
+	list, err := a.Admin.AdminConnectProvider(r.Context(), u, b.ID, b.Key, b.Address)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": list})
+}
+
+func (a *Adapter) disconnectProvider(w http.ResponseWriter, r *http.Request, u *store.User) {
+	list, err := a.Admin.AdminDisconnectProvider(r.Context(), u, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": list})
+}
+
+// getModels lists the models on the server in use. A server that doesn't
+// answer gives an empty list: model ids can still be typed.
+func (a *Adapter) getModels(w http.ResponseWriter, r *http.Request, _ *store.User) {
+	models, err := a.Admin.AdminModels(r.Context())
+	if err != nil || models == nil {
+		models = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 func (a *Adapter) getIntegrations(w http.ResponseWriter, r *http.Request, _ *store.User) {

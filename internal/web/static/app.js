@@ -1251,7 +1251,7 @@ function calendarSources() {
 // --- settings (owners and admins) ---
 
 const SETTING_GROUPS = [
-  ['Models', 'Which models your sprigs think with. Ids are OpenRouter model ids, e.g. anthropic/claude-sonnet-4.5.', ['model', 'fallback_model', 'cheap_model', 'transcribe_model', 'model_url']],
+  ['Models', 'Which of the provider’s models your sprigs think with. Pick from its list or type an id.', ['model', 'fallback_model', 'cheap_model', 'transcribe_model']],
   ['Spending', 'Caps on what models may cost. 0 means no cap.', ['budget.daily_usd', 'budget.monthly_usd']],
   ['Behaviour', '', ['auto_route', 'consistency_check', 'checkin_days', 'history_tokens']],
   ['Web and documents', '', ['web_search', 'search_url', 'pdf_engine', 'document_chars']],
@@ -1274,7 +1274,8 @@ function settingRow(s) {
   } else {
     const num = s.kind === 'int' || s.kind === 'float';
     input = h('input.field', { id, type: num ? 'number' : s.kind === 'url' ? 'url' : 'text', min: num ? 0 : null, step: s.kind === 'float' ? 'any' : null,
-      inputmode: s.kind === 'int' ? 'numeric' : s.kind === 'float' ? 'decimal' : null, placeholder: s.default || 'Not set', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+      inputmode: s.kind === 'int' ? 'numeric' : s.kind === 'float' ? 'decimal' : null, placeholder: s.default || 'Not set', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false',
+      list: MODEL_PICKS.includes(s.name) ? 'model-ids' : null });
   }
   input.value = s.value;
   const save = h('button.chip', { type: 'submit', hidden: true }, 'Save');
@@ -1299,9 +1300,94 @@ function settingRow(s) {
     h('div.set-input', {}, input, save, reset));
 }
 
+// --- providers: where models run ---
+
+// Shown before "More providers", along with any that have a key.
+const PROVIDERS_FIRST = ['openrouter', 'anthropic', 'openai', 'gemini', 'xai', 'mistral', 'local'];
+// Settings whose value is a model id on the provider in use.
+const MODEL_PICKS = ['model', 'fallback_model', 'cheap_model'];
+
+function providerRow(p, st, change) {
+  const inUse = p.status === 'in_use', ready = p.status === 'ready', local = p.kind === 'local';
+  const sub = inUse ? h('small.prov-on', {}, h('i'), 'In use' + (p.model ? ' · ' + p.model : ''))
+    : ready ? h('small.prov-on', {}, h('i'), 'Ready')
+    : h('small', {}, local ? 'Not set up · Ollama, LM Studio, llama.cpp' : p.subscription ? 'Not set up · Use your plan’s key' : 'Not set up · Paste a key');
+  const open = st.open === p.id;
+  const row = h('div.prov-row', {},
+    h('span.prov-ico', { 'aria-hidden': 'true' }, local ? icon('home') : p.name.charAt(0).toUpperCase()),
+    h('div.prov-text', {}, h('b', {}, p.name), sub),
+    h('button.chip', { 'aria-expanded': open ? 'true' : 'false', onclick: () => { st.open = open ? '' : p.id; st.draw(); } }, open ? 'Close' : inUse || ready ? 'Manage' : 'Set up'));
+  if (!open) return row;
+
+  const err = h('p.err', { role: 'alert' });
+  // run sends one change and redraws the list from the answer.
+  const run = async (btn, busy, call, done) => {
+    err.textContent = ''; const label = btn.textContent; btn.disabled = true; btn.textContent = busy;
+    try { const r = await call(); st.open = ''; toast(done); change(r.providers); }
+    catch (e) { err.textContent = upFirst(e.message); btn.disabled = false; btn.textContent = label; }
+  };
+  const connect = (body) => api('/api/providers', { method: 'POST', body: { id: p.id, ...body } });
+  const kids = [p.note && h('p.d-empty', {}, p.note)];
+  if (ready) {
+    kids.push(h('button.chip.primary', { type: 'button', onclick: (e) => run(e.currentTarget, 'Switching…', () => connect({}), `Models now run on ${p.name}.`) }, 'Use ' + p.name));
+  }
+  if (local) {
+    const [addrL, addr] = field('Server address', { type: 'text', value: p.address || '', placeholder: 'http://192.168.1.20:11434', required: true, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+    const btn = h('button.chip.primary', { type: 'submit' }, inUse ? 'Change server' : 'Connect');
+    kids.push(h('form.prov-form', { onsubmit: (e) => { e.preventDefault(); run(btn, 'Connecting…', () => connect({ address: addr.value.trim() }), 'Models now run on your own server.'); } }, addrL, btn));
+  } else {
+    const [keyL, key] = field(inUse || ready ? 'Replace the key' : 'API key', { type: 'password', required: true, autocomplete: 'new-password', spellcheck: 'false' });
+    const btn = h('button.chip' + (ready || inUse ? '' : '.primary'), { type: 'submit' }, inUse || ready ? 'Save key' : 'Connect');
+    kids.push(h('form.prov-form', { onsubmit: (e) => { e.preventDefault(); run(btn, 'Checking…', () => connect({ key: key.value.trim() }), inUse ? 'Key replaced.' : `Models now run on ${p.name}.`); } },
+      keyL, btn, p.keys_url && h('a.linkish', { href: p.keys_url, target: '_blank', rel: 'noopener noreferrer' }, 'Get a key')));
+    kids.push(h('p.d-empty', {}, 'The key is checked with ' + p.name + ', stored encrypted, and never shown to a model.'));
+    if (inUse || ready) {
+      kids.push(h('button.chip.danger', { type: 'button', onclick: (e) => {
+        if (!confirm(inUse ? `Remove the ${p.name} key? Sprigs can’t reply until you set up another provider.` : `Remove the ${p.name} key?`)) return;
+        run(e.currentTarget, 'Removing…', () => api('/api/providers/' + encodeURIComponent(p.id), { method: 'DELETE' }), 'Key removed.');
+      } }, 'Remove key'));
+    }
+  }
+  return h('div.prov-open', {}, row, h('div.prov-panel', {}, kids, err));
+}
+
+function providerList(onChange) {
+  const st = { open: '', more: false, items: null, draw: () => {} };
+  const card = h('div.prov-card', {}, h('p.d-empty', {}, 'Loading…'));
+  const change = (items) => {
+    st.items = items; st.draw();
+    onChange();
+    refreshMe().then(renderSidebar).catch(() => {});
+  };
+  st.draw = () => {
+    const rank = (p) => (p.status === 'in_use' ? 0 : p.status === 'ready' ? 1 : 2);
+    const shown = (p) => p.status !== 'none' || PROVIDERS_FIRST.includes(p.id);
+    const first = st.items.filter(shown).sort((a, b) => rank(a) - rank(b));
+    const rest = st.items.filter((p) => !shown(p));
+    card.replaceChildren(...first.map((p) => providerRow(p, st, change)),
+      rest.length && h('button.prov-more', { 'aria-expanded': st.more ? 'true' : 'false', onclick: () => { st.more = !st.more; st.draw(); } },
+        h('span', {}, 'More providers'), h('small', {}, String(rest.length)), icon('back')),
+      ...(st.more ? rest.map((p) => providerRow(p, st, change)) : []));
+  };
+  const load = async () => {
+    try { st.items = (await api('/api/providers')).providers; st.draw(); }
+    catch (e) { card.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the providers: ' + e.message)); }
+  };
+  load();
+  return h('section.set-group', {},
+    h('div.section-title', {}, h('h2', {}, 'Providers'), h('button.linkish.quiet', { type: 'button', onclick: load }, 'Check again')),
+    h('p.d-empty', {}, 'Where your sprigs’ models run. One is in use at a time; keys you add for the others are kept, so you can switch back.'),
+    card);
+}
+
 function settingsList() {
   const body = h('div', {}, h('p.d-empty', {}, 'Loading…'));
-  (async () => {
+  // The provider's model ids, offered as suggestions in the model fields.
+  const ids = h('datalist', { id: 'model-ids' });
+  const loadIds = async () => {
+    try { ids.replaceChildren(...(await api('/api/models')).models.map((m) => h('option', { value: m }))); } catch { ids.replaceChildren(); }
+  };
+  const load = async () => {
     try {
       const all = (await api('/api/settings')).settings;
       const by = new Map(all.map((s) => [s.name, s]));
@@ -1312,8 +1398,10 @@ function settingsList() {
         h('div.section-title', {}, h('h2', {}, title)), sub && h('p.d-empty', {}, sub),
         names.filter((n) => by.has(n)).map((n) => settingRow(by.get(n))))));
     } catch (e) { body.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the settings: ' + e.message)); }
-  })();
-  return body;
+  };
+  load(); loadIds();
+  // A provider switch changes the models and their list.
+  return h('div.set-all', {}, providerList(() => { load(); loadIds(); }), body, ids);
 }
 
 function connectorList() {
