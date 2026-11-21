@@ -43,9 +43,10 @@ Usage:
                                       (run it again to change something; --from-env doesn't ask)
   thicket check                       first-run check: say exactly what's missing
   thicket healthcheck                 exit 0 if the running server is healthy (for Docker)
-  thicket backup [-o FILE] [--include-key]
+  thicket backup [-o FILE] [--include-key] [--browser-profiles]
                                       back up everything: the database (safe while Thicket runs)
-                                      and every sprig's files ("export" is the old name)
+                                      and every sprig's files ("export" is the old name);
+                                      --browser-profiles adds the browser plugin's sealed profiles
   thicket restore FILE [--force]      restore a backup into the data directory (stop Thicket first)
   thicket settings [list]             every setting and its current value
   thicket settings set NAME [VALUE]   change one (no VALUE: back to the default), e.g.
@@ -341,14 +342,21 @@ func export(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default thicket-backup-DATE.tar.gz)")
 	withKey := fs.Bool("include-key", false, "include secret.key so stored API keys survive the move (keep the file safe!)")
+	withProfiles := fs.Bool("browser-profiles", false, "include sprigs' browser profiles (logins), still encrypted, from the browser plugin")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 0 {
-		return errors.New("usage: thicket backup [-o FILE] [--include-key]")
+		return errors.New("usage: thicket backup [-o FILE] [--include-key] [--browser-profiles]")
 	}
 	cfg := loadConfig()
+	var profiles []backup.BrowserProfile
+	if *withProfiles {
+		if profiles, err = browserProfiles(context.Background(), cfg); err != nil {
+			return err
+		}
+	}
 	db, err := openStore(cfg)
 	if err != nil {
 		return err
@@ -362,7 +370,7 @@ func export(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := backup.Export(context.Background(), db, cfg.DataDir, cfg.CharactersDir, *withKey, f); err != nil {
+	if err := backup.ExportWith(context.Background(), db, cfg.DataDir, cfg.CharactersDir, *withKey, profiles, f); err != nil {
 		f.Close()
 		os.Remove(path)
 		return err
@@ -371,6 +379,9 @@ func export(args []string) error {
 		return err
 	}
 	fmt.Println("backed up to", path)
+	if *withProfiles {
+		fmt.Printf("included %d browser profile(s), still encrypted: they open only with this install's secret store, so restore them with the same key (THICKET_SECRET_KEY, secret.key or --include-key)\n", len(profiles))
+	}
 	if *withKey {
 		fmt.Println("WARNING: this file contains secret.key, which unlocks every stored API key and token. Keep it as safe as a password.")
 	}

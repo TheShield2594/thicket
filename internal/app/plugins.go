@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/backup"
+	"github.com/theshield2594/thicket/internal/browser"
 	"github.com/theshield2594/thicket/internal/dashboard"
 	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/plugin"
@@ -368,3 +370,66 @@ func (a *App) setUpMail() bool {
 	}
 	return true
 }
+
+// setUpBrowser gives the dashboard its Browser page when the browser
+// plugin is configured (docs/browser.md), and keeps its admin API for
+// putting back profiles from a restored backup. It reports whether it
+// did.
+func (a *App) setUpBrowser() bool {
+	ep, ok := a.pluginEndpoint(browser.Plugin)
+	if !ok {
+		return false
+	}
+	a.browser = &browser.Client{URL: ep.URL, HTTP: &http.Client{Timeout: 2 * time.Minute},
+		Token: func(ctx context.Context) (string, error) { return a.Secrets.Get(ctx, ep.Secret()) }}
+	if a.Dashboard != nil {
+		a.Dashboard.Browser = a.Engine
+	}
+	return true
+}
+
+// pushRestoredProfiles hands the browser plugin the sealed profiles a
+// `thicket restore` put in <data dir>/browser-profiles (backups made with
+// --browser-profiles), each replacing that sprig's, then deletes them.
+// One the plugin can't take yet (not running, that browser open) is
+// tried again every minute.
+func (a *App) pushRestoredProfiles(ctx context.Context) {
+	dir := backup.BrowserProfilesDir(a.Cfg.DataDir)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) == 0 {
+			return
+		}
+		left := 0
+		for _, e := range entries {
+			sprig, ok := strings.CutSuffix(e.Name(), ".tbp")
+			if !ok || !e.Type().IsRegular() {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			b, err := os.ReadFile(path)
+			if err != nil || !browser.LooksSealed(b) {
+				a.Log.Warn("restored browser profile unreadable; left in place", "file", path)
+				continue
+			}
+			if err := a.browser.PutProfile(ctx, sprig, b); err != nil {
+				left++
+				continue
+			}
+			_ = os.Remove(path)
+			a.Log.Info("restored browser profile handed to the plugin", "sprig", sprig)
+		}
+		if left == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(profilePushRetry):
+		}
+	}
+}
+
+// profilePushRetry is how long to wait before handing the browser plugin
+// restored profiles again (tests shorten it).
+var profilePushRetry = time.Minute

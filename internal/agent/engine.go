@@ -86,6 +86,9 @@ type Engine struct {
 	pollBusy      sync.Map       // trigger job id -> *atomic.Bool: a poll in flight (true: another was asked for meanwhile)
 	mailWork      sync.WaitGroup // RunMail's goroutines
 	mailAllowMu   sync.Mutex     // allowlist changes and their undo, one at a time
+	// browserMu: browser allowlist changes and their undo, and making a
+	// sprig's profile key, one at a time (browser.go).
+	browserMu sync.Mutex
 
 	// ConnectChat connects a chat app ("discord", "telegram") with a bot
 	// token while Thicket runs, replacing a connection it already has. It

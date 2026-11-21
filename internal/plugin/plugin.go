@@ -101,8 +101,13 @@ var Sandbox = Spec{Name: "sandbox", Exec: true}
 // docs/mail.md): JMAP, or IMAP and SMTP. Kid sprigs can't have it.
 var Mail = Spec{Name: "mail", Profile: "mail", DefaultURL: "http://mail:7072", Check: mailCheck}
 
+// Browser gives sprigs their own web browser (thicket-browser,
+// docs/browser.md): one Chromium per sprig behind an egress allowlist.
+// Kid sprigs can't have it.
+var Browser = Spec{Name: "browser", Profile: "browser", DefaultURL: "http://browser:7073", Check: browserCheck}
+
 // Builtin is every plugin Thicket knows.
-func Builtin() *Registry { return MustNew(Sandbox, Mail) }
+func Builtin() *Registry { return MustNew(Sandbox, Mail, Browser) }
 
 // All lists the plugins, in order.
 func (r *Registry) All() []Spec {
