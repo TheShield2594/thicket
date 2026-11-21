@@ -19,12 +19,14 @@ import (
 
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/plugin"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 // Check is one finding. Optional ones are reported but don't make the
@@ -51,6 +53,9 @@ type Doctor struct {
 	// DataOnly checks only the data (config, database, memory, secrets),
 	// with no network calls.
 	DataOnly bool
+	// GalleryFetcher reads the gallery index; nil means one that only
+	// reaches public addresses, as Thicket does. Tests replace it.
+	GalleryFetcher *websearch.Fetcher
 }
 
 func (d *Doctor) client() *http.Client {
@@ -137,8 +142,45 @@ func (d *Doctor) Run(ctx context.Context) []Check {
 		out = append(out, d.mcpServers(ctx, db, sec)...)
 	}
 	out = append(out, d.plugins(ctx, sec)...)
+	if d.Cfg.GalleryURL != "" {
+		add(d.gallery(ctx))
+	}
 	out = append(out, d.server(ctx)...)
 	return out
+}
+
+// gallery checks the shared gallery: its index is reachable (under the
+// same address rules Thicket uses), passes its schema, and the cached copy
+// is being refreshed.
+func (d *Doctor) gallery(ctx context.Context) Check {
+	c := Check{Name: "gallery index", Optional: true}
+	f := d.GalleryFetcher
+	if f == nil {
+		f = &websearch.Fetcher{}
+		if d.Cfg.WebProxy {
+			f.Proxy = http.ProxyFromEnvironment
+		}
+	}
+	g := gallery.New(d.Cfg.GalleryURL, d.Cfg.DataDir, f)
+	_, at, _ := g.Cached()
+	cache := "not cached yet (Thicket fetches it when it runs)"
+	if !at.IsZero() {
+		cache = fmt.Sprintf("cached %s ago", time.Since(at).Round(time.Minute))
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	idx, _, err := g.Load(ctx)
+	if err != nil {
+		c.Detail = fmt.Sprintf("%v; %s", err, cache)
+		return c
+	}
+	c.Detail = fmt.Sprintf("%s: reachable, schema valid, %d sprigs, %d revoked keys; %s", d.Cfg.GalleryURL, len(idx.Packages), len(idx.Revoked), cache)
+	if !at.IsZero() && time.Since(at) > 2*gallery.MaxAge {
+		c.Detail += " (the daily refresh isn't working)"
+		return c
+	}
+	c.OK = true
+	return c
 }
 
 func orDefault(s, def string) string {

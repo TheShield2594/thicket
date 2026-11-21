@@ -76,6 +76,23 @@ stated.
   records the level, the floor and the reason. See
   [Calls that always ask](docs/mcp.md#calls-that-always-ask-level-floors).
 
+- A shared sprig gallery (#82). Set `THICKET_GALLERY_URL` to a
+  gallery's `index.json` (off when empty): Thicket fetches it through the
+  same public-address rules as web pages, at most 4 MB, checks it against
+  its schema, caches it and fetches it again daily. `thicket gallery
+  list`, `show NAME` and `install NAME` browse and install; a download is
+  refused unless its size and SHA-256 match the index, its key isn't
+  revoked and it's signed by the author key the index lists, then goes
+  through the normal import preview. The index's revocation list is
+  honoured on top of `gallery.revoked_keys`, for files too. The
+  dashboard's new **Gallery** page lists the sprigs and opens the same
+  preview, and `thicket doctor` checks the index and the cache's age. For
+  running a gallery: `thicket gallery verify`, `build-index` and
+  `build-site`, a JSON Schema for `index.json` (and the repository's
+  `authors.json` and `revoked.json`), and a ready-to-copy repository in
+  `gallery/template/` with CI that refuses failing changes and review
+  steps for moderators. See [docs/gallery.md](docs/gallery.md).
+
 - Signed gallery packages (schema v35, #81). `thicket gallery keygen`
   makes your Ed25519 author key (kept in the encrypted secret store);
   `thicket export-sprig ID --for-gallery` writes a signed package holding

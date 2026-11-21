@@ -16,6 +16,7 @@ import (
 	"github.com/theshield2594/thicket/internal/app"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/secrets"
 	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
@@ -472,7 +473,7 @@ func importGalleryCmd(cfg *config.Config, file string, raw []byte, id, name stri
 	}
 	defer db.Close()
 	ctx := context.Background()
-	revoked, err := sprigpkg.RevokedKeys(ctx, db)
+	revoked, err := gallery.RevokedKeys(ctx, db, galleryClient(cfg))
 	if err != nil {
 		return err
 	}

@@ -352,6 +352,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_MODEL_API_KEY` | | key for that provider, or for your server if it wants one |
 | `THICKET_SANDBOX_URL` | `http://sandbox:7070` in compose | the sandbox container ([details](docs/sandbox.md)); empty turns it off |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
+| `THICKET_GALLERY_URL` | | a shared sprig gallery's `index.json`; off when empty ([details](docs/gallery.md#browsing-a-shared-gallery)) |
 | `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |

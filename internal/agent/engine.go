@@ -22,6 +22,7 @@ import (
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/mcp"
@@ -80,7 +81,10 @@ type Engine struct {
 	Fire func(store.Job) error
 	// Mail is the mail plugin's admin API (mail.go); nil when the plugin
 	// isn't configured.
-	Mail          *mail.Client
+	Mail *mail.Client
+	// Gallery is the shared sprig gallery (gallerytools.go); nil when
+	// THICKET_GALLERY_URL is empty.
+	Gallery       *gallery.Client
 	mailNudgeOnce sync.Once
 	mailNudgeCh   chan struct{}
 	pollBusy      sync.Map       // trigger job id -> *atomic.Bool: a poll in flight (true: another was asked for meanwhile)

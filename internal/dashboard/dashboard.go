@@ -76,6 +76,8 @@ type Dashboard struct {
 	Device func(ua string) string
 	// Memories is the memory screen's engine side.
 	Memories MemoryKeeper
+	// Gallery is the Gallery page's engine side (gallery.go).
+	Gallery GalleryEngine
 }
 
 func (d *Dashboard) now() time.Time {
@@ -94,6 +96,9 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /dashboard/mail/message", d.mailMessage)
 	mux.HandleFunc("GET /dashboard/mail/attachment", d.mailAttachment)
 	mux.HandleFunc("POST /dashboard/mail/act", d.mailAct)
+	mux.HandleFunc("GET /dashboard/gallery", d.galleryPage)
+	mux.HandleFunc("GET /dashboard/gallery/preview", d.galleryPreview)
+	mux.HandleFunc("POST /dashboard/gallery/install", d.galleryInstall)
 	mux.HandleFunc("GET /dashboard/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/dashboard", http.StatusSeeOther) })
 	return secureHeaders(mux)
 }
@@ -326,6 +331,7 @@ type pageData struct {
 	User           *store.User
 	Name           string
 	HasMail        bool // a mailbox they may open (the Mail link)
+	HasGallery     bool // a shared sprig gallery is set up (the Gallery link)
 	Admin          bool
 	Version        string
 	Now            string
@@ -643,6 +649,7 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	if d.Mail != nil {
 		p.HasMail = len(d.mailboxesFor(ctx, u)) > 0
 	}
+	p.HasGallery = d.galleryOn(u)
 	items, err := d.DB.OpenInbox(ctx, u.ID)
 	if err != nil {
 		return nil, err

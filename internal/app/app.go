@@ -28,6 +28,7 @@ import (
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/dashboard"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -38,6 +39,7 @@ import (
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 	"github.com/theshield2594/thicket/internal/web"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 type Options struct {
@@ -235,6 +237,15 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	}
 
 	a.Engine = &agent.Engine{Cfg: cfg, DB: db, Chars: a.Chars, Settings: a.Settings, Secrets: sec, Log: log, KeyCheck: keyCheck}
+	if cfg.GalleryURL != "" {
+		// The gallery's index and packages are fetched under the same
+		// public-address rules as web pages.
+		f := &websearch.Fetcher{}
+		if cfg.WebProxy {
+			f.Proxy = http.ProxyFromEnvironment
+		}
+		a.Engine.Gallery = gallery.New(cfg.GalleryURL, cfg.DataDir, f)
+	}
 	// Each sprig's own skills (characters/<id>/skills/) are mirrored into
 	// the store now and after every reload; the folder is the source of truth.
 	for _, p := range a.Engine.SyncSprigSkills(ctx) {
@@ -366,7 +377,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			}
 			return a.Engine.Resume(ctx, u, sprig, "from the dashboard")
 		},
-		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine, Gallery: a.Engine,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {
@@ -616,6 +627,11 @@ func (a *App) Run(parent context.Context) error {
 	goRun("plugins", func() { a.watchDefaultPlugins(ctx) })
 	if a.Engine.Mail != nil {
 		goRun("mail", func() { a.Engine.RunMail(ctx) })
+	}
+	if g := a.Engine.Gallery; g != nil {
+		goRun("gallery", func() {
+			g.Run(ctx, func(err error) { a.Log.Warn("couldn't refresh the gallery index", "err", err) })
+		})
 	}
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })

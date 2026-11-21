@@ -59,6 +59,9 @@ type Config struct {
 	// set too.
 	Provider  string
 	SearchURL string // a SearXNG instance for web search (optional)
+	// GalleryURL is a shared sprig gallery's index.json (docs/gallery.md);
+	// empty turns the gallery off.
+	GalleryURL string
 	// PluginEnv holds the plugins' THICKET_<NAME>_URL and
 	// THICKET_<NAME>_TOKEN_FILE variables as they were at start (a set but
 	// empty one is kept: it turns a plugin off). See internal/plugin.
@@ -108,6 +111,7 @@ func Load() (*Config, error) {
 		ModelAPIKey:           env("THICKET_MODEL_API_KEY", ""),
 		Provider:              strings.ToLower(strings.TrimSpace(env("THICKET_PROVIDER", ""))),
 		SearchURL:             strings.TrimRight(env("THICKET_SEARCH_URL", ""), "/"),
+		GalleryURL:            strings.TrimSpace(env("THICKET_GALLERY_URL", "")),
 		PluginEnv:             pluginEnv(os.Environ()),
 		Model:                 env("THICKET_MODEL", DefaultModel),
 		FallbackModel:         env("THICKET_FALLBACK_MODEL", DefaultFallbackModel),
