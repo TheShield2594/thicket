@@ -86,6 +86,13 @@ services:
       # Sprigs' own email addresses (the mail service below, off unless you start it
       # with `docker compose --profile mail up -d`). See docs/mail.md.
       THICKET_MAIL_TOKEN_FILE: /mail-auth/token
+      # Local speech: voice messages heard and replies spoken on this machine (the
+      # voice service below, off unless you start it with
+      # `docker compose --profile voice up -d`). See docs/voice.md.
+      THICKET_VOICE_TOKEN_FILE: /voice-auth/token
+      # Sprigs' own web browsers (the browser service below, off unless you start it
+      # with `docker compose --profile browser up -d`). See docs/browser.md.
+      THICKET_BROWSER_TOKEN_FILE: /browser-auth/token
     # Lets the container reach a model server on this machine as host.docker.internal.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -93,6 +100,11 @@ services:
       - thicket-data:/data
       - sandbox-auth:/sandbox-auth
       - mail-auth:/mail-auth
+      - voice-auth:/voice-auth
+      - browser-auth:/browser-auth
+    # The browser plugin has a network of its own (below); Thicket joins it to
+    # reach the plugin. Nothing else is on it.
+    networks: [default, browser]
     # The web app, /dashboard, /health, /avatars, /hooks and /api/v1. Open
     # http://localhost:8080 on this machine, or put it behind your reverse proxy (with
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
@@ -150,6 +162,65 @@ services:
     cap_drop:
       - ALL
 
+  # Optional: local speech. whisper.cpp hears voice messages and Piper reads replies
+  # aloud, so neither needs OpenRouter. Off unless started with
+  # `docker compose --profile voice up -d`; the first start downloads about 130 MB
+  # of models into voice-models (checked against pinned SHA-256 sums). Not published
+  # on any port: only Thicket reaches it, with a shared token. See docs/voice.md.
+  voice:
+    image: ghcr.io/theshield2594/thicket-voice:${THICKET_VERSION:-latest}
+    build:
+      context: plugins/voice
+    container_name: thicket-voice
+    profiles: [voice]
+    restart: unless-stopped
+    volumes:
+      - voice-auth:/plugin-auth:ro
+      - voice-models:/models
+    mem_limit: 1536m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Optional: a web browser for each sprig (Chromium, driven by Playwright), each
+  # with its own logins kept encrypted and an egress proxy that only lets it reach
+  # the sites its owner allowed: never Thicket, this machine or your LAN. Off unless
+  # started with `docker compose --profile browser up -d`; no sprig can use it until
+  # its owner grants mcp:browser/*. See docs/browser.md.
+  browser:
+    image: ghcr.io/theshield2594/thicket-browser:${THICKET_VERSION:-latest}
+    build:
+      context: plugins/browser
+    container_name: thicket-browser
+    profiles: [browser]
+    restart: unless-stopped
+    # Only its own network: it can't reach the sandbox or the mail plugin by
+    # name, and its proxy refuses every private address (Thicket's included).
+    networks: [browser]
+    environment:
+      BROWSER_MAX: ${THICKET_BROWSER_MAX:-2}
+    volumes:
+      - browser-auth:/plugin-auth:ro
+      - browser-profiles:/var/lib/thicket-browser
+    # Open profiles live in memory only; the volume keeps them sealed.
+    tmpfs:
+      - /run/thicket-browser:size=512m,mode=0700,uid=1000,gid=1000
+      - /tmp:size=512m
+    # About 300-500 MB per open browser (see plugins/browser/README.md).
+    mem_limit: 1536m
+    pids_limit: 1024
+    # Time to close the browsers and seal their profiles.
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  default:
+  browser:
+
 volumes:
   thicket-data:
   sandbox-workspace:
@@ -157,6 +228,10 @@ volumes:
   sandbox-auth:
   mail-auth:
   mail-state:
+  voice-auth:
+  voice-models:
+  browser-auth:
+  browser-profiles:
 
 # secrets:
 #   thicket_secret_key:

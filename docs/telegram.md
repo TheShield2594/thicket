@@ -53,7 +53,7 @@ a message's formatting, it's sent as plain text.
 
 Photos, PDFs and text files work as on Discord. Telegram limits bots to
 downloading files up to 20 MB. Voice messages and audio are transcribed
-(`transcribe_model`); video arrives by name only. The photos of an album
+(by the [voice plugin](voice.md), `transcribe_url` or `transcribe_model`); video arrives by name only. The photos of an album
 are gathered into one message.
 
 A voice message gets a voice note back, after the text reply, in the

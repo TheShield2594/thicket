@@ -1,0 +1,34 @@
+# Re-verifies every package on every pull request and push: signatures,
+# hashes, the file allowlist, every schema, authors.json, revoked.json, and
+# that index.json is exactly what the packages make. Make this check
+# required in the branch protection rules for main, so a change that
+# fails it can't be merged.
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Pin a release tag (v1.2.3) to control when the rules change.
+  THICKET_VERSION: latest
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install thicket
+        run: go install github.com/theshield2594/thicket/cmd/thicket@${THICKET_VERSION}
+      - name: Verify the gallery
+        run: thicket gallery verify .

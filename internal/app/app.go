@@ -22,12 +22,14 @@ import (
 	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
+	"github.com/theshield2594/thicket/internal/browser"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
 	"github.com/theshield2594/thicket/internal/dashboard"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mcp"
 	"github.com/theshield2594/thicket/internal/memory"
@@ -38,6 +40,7 @@ import (
 	"github.com/theshield2594/thicket/internal/settings"
 	"github.com/theshield2594/thicket/internal/store"
 	"github.com/theshield2594/thicket/internal/web"
+	"github.com/theshield2594/thicket/internal/websearch"
 )
 
 type Options struct {
@@ -94,8 +97,11 @@ type App struct {
 	// offPlugins are plugins turned off whose integration couldn't be
 	// turned off in the database: not connected this run.
 	offPlugins map[string]bool
-	stopping   bool
-	wg         sync.WaitGroup
+	// browser is the browser plugin's admin API (plugins.go); nil when
+	// the plugin isn't configured.
+	browser  *browser.Client
+	stopping bool
+	wg       sync.WaitGroup
 }
 
 // goRun runs a background task that Run waits for. A crash is reported,
@@ -199,6 +205,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		}
 	}
 	a.Settings = settings.New(db, cfg)
+	a.decideLocalVoice(ctx) // before anyone is onboarded on a new install
 
 	a.Chars = character.NewRegistry(cfg.CharactersDir, db, log)
 	a.Settings.CharacterExists = func(id string) bool { _, ok := a.Chars.Get(id); return ok }
@@ -235,6 +242,15 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 	}
 
 	a.Engine = &agent.Engine{Cfg: cfg, DB: db, Chars: a.Chars, Settings: a.Settings, Secrets: sec, Log: log, KeyCheck: keyCheck}
+	if cfg.GalleryURL != "" {
+		// The gallery's index and packages are fetched under the same
+		// public-address rules as web pages.
+		f := &websearch.Fetcher{}
+		if cfg.WebProxy {
+			f.Proxy = http.ProxyFromEnvironment
+		}
+		a.Engine.Gallery = gallery.New(cfg.GalleryURL, cfg.DataDir, f)
+	}
 	// Each sprig's own skills (characters/<id>/skills/) are mirrored into
 	// the store now and after every reload; the folder is the source of truth.
 	for _, p := range a.Engine.SyncSprigSkills(ctx) {
@@ -274,18 +290,18 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		OnAlert: func(ctx context.Context, al budget.Alert) {
 			a.Engine.Notify(ctx, al.Key, 31*24*time.Hour, al.Level, al.Message)
 		}}
-	// Spoken replies go to speech_url, or the model server when it's
-	// empty, with that server's key; the guard meters them.
-	a.Guard.Voice = &llm.SpeechClient{HTTP: &http.Client{}, Key: or.Key, URL: func(ctx context.Context) string {
-		if u := a.Settings.String(ctx, "speech_url"); u != "" {
-			return u
-		}
-		return a.Settings.String(ctx, "model_url")
-	}}
+	// Spoken replies go to speech_url, the voice plugin or the model
+	// server, and voice messages to transcribe_url, the voice plugin or
+	// OpenRouter (voice.go), each with that server's key; the guard
+	// meters them.
+	a.Guard.Voice = &llm.SpeechClient{HTTP: &http.Client{}, Key: a.voiceKey(or.Key), URL: a.speechURL}
+	a.Guard.Ears = &llm.TranscriptionClient{HTTP: &http.Client{}, Key: a.voiceKey(or.Key)}
 	a.Engine.LLM = a.Guard
 	a.Engine.Budget = a.Guard
 	a.Guard.Paused = a.Engine.Paused // the kill switch, under every model call
 	a.Engine.Speech = a.Guard
+	a.Engine.Transcriber = a.Guard
+	a.Engine.TranscribeURL = a.transcribeURL
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
 	// Local (stdio) integrations run one process per sprig, in its own
@@ -366,7 +382,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			}
 			return a.Engine.Resume(ctx, u, sprig, "from the dashboard")
 		},
-		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine,
+		SessionTTL: web.SessionTTL, BaseURL: cfg.WebBaseURL(), Device: web.Device, Memories: a.Engine, Gallery: a.Engine,
 		Health: func(ctx context.Context) map[string]dashboard.Check {
 			out := map[string]dashboard.Check{}
 			for k, c := range a.health(ctx) {
@@ -375,6 +391,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			return out
 		}}
 	a.setUpMail() // before the dashboard serves anything
+	a.setUpBrowser()
 
 	if !opts.NoHTTP {
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
@@ -616,6 +633,14 @@ func (a *App) Run(parent context.Context) error {
 	goRun("plugins", func() { a.watchDefaultPlugins(ctx) })
 	if a.Engine.Mail != nil {
 		goRun("mail", func() { a.Engine.RunMail(ctx) })
+	}
+	if g := a.Engine.Gallery; g != nil {
+		goRun("gallery", func() {
+			g.Run(ctx, func(err error) { a.Log.Warn("couldn't refresh the gallery index", "err", err) })
+		})
+	}
+	if a.browser != nil {
+		goRun("browser", func() { a.pushRestoredProfiles(ctx) })
 	}
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })

@@ -25,7 +25,10 @@ type Alert struct {
 type Guard struct {
 	Next llm.Client
 	// Voice makes spoken replies; Speak meters it like Next.
-	Voice    llm.Speaker
+	Voice llm.Speaker
+	// Ears transcribes voice messages on a speech-to-text server;
+	// Transcribe meters it like Next.
+	Ears     llm.Transcriber
 	DB       *store.Store
 	Settings *settings.Settings
 	Log      *slog.Logger
@@ -297,6 +300,28 @@ func (g *Guard) Speak(ctx context.Context, req llm.SpeechRequest) (*llm.Speech, 
 	g.record(ctx, cs, store.Usage{UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
 		Origin: llm.OriginOf(m), Model: sp.Model, CostUSD: cost})
 	return sp, nil
+}
+
+// Transcribe hears a voice message on a speech-to-text server, under the
+// same caps and kill switch as model calls. It is recorded at no cost: a
+// local server (the voice plugin) is free, and the transcription
+// endpoint reports no price.
+func (g *Guard) Transcribe(ctx context.Context, req llm.TranscriptionRequest) (*llm.Transcript, error) {
+	if g.Ears == nil {
+		return nil, fmt.Errorf("transcription isn't set up")
+	}
+	m := llm.MetaFrom(ctx)
+	cs, err := g.admit(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := g.Ears.Transcribe(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	g.record(ctx, cs, store.Usage{UserID: m.UserID, Character: m.Character, JobID: m.JobID, Purpose: m.Purpose,
+		Origin: llm.OriginOf(m), Model: tr.Model})
+	return tr, nil
 }
 
 func (g *Guard) Chat(ctx context.Context, req llm.Request) (*llm.Response, error) {

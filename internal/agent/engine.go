@@ -22,6 +22,7 @@ import (
 	"github.com/theshield2594/thicket/internal/channel"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/config"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/llm"
 	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/mcp"
@@ -61,7 +62,12 @@ type Engine struct {
 	// Speech reads replies aloud (through the budget guard); nil means
 	// sprigs never speak.
 	Speech llm.Speaker
-	Log    *slog.Logger
+	// Transcriber hears voice messages on a speech-to-text server (through
+	// the budget guard), at the address TranscribeURL gives; "" there
+	// means the transcribe_model on OpenRouter instead.
+	Transcriber   llm.Transcriber
+	TranscribeURL func(ctx context.Context) string
+	Log           *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only
@@ -80,12 +86,18 @@ type Engine struct {
 	Fire func(store.Job) error
 	// Mail is the mail plugin's admin API (mail.go); nil when the plugin
 	// isn't configured.
-	Mail          *mail.Client
+	Mail *mail.Client
+	// Gallery is the shared sprig gallery (gallerytools.go); nil when
+	// THICKET_GALLERY_URL is empty.
+	Gallery       *gallery.Client
 	mailNudgeOnce sync.Once
 	mailNudgeCh   chan struct{}
 	pollBusy      sync.Map       // trigger job id -> *atomic.Bool: a poll in flight (true: another was asked for meanwhile)
 	mailWork      sync.WaitGroup // RunMail's goroutines
 	mailAllowMu   sync.Mutex     // allowlist changes and their undo, one at a time
+	// browserMu: browser allowlist changes and their undo, and making a
+	// sprig's profile key, one at a time (browser.go).
+	browserMu sync.Mutex
 
 	// ConnectChat connects a chat app ("discord", "telegram") with a bot
 	// token while Thicket runs, replacing a connection it already has. It

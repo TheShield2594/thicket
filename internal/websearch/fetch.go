@@ -263,6 +263,52 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (*Page, error) {
 	return p, nil
 }
 
+// ErrTooLarge means a download was larger than its limit.
+var ErrTooLarge = errors.New("the file is larger than allowed")
+
+// Get downloads a file as it is, under the same address rules as Fetch:
+// at most max bytes (more is ErrTooLarge), a 2xx answer only.
+func (f *Fetcher) Get(ctx context.Context, raw string, max int64) ([]byte, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, errors.New("give a full http(s) address")
+	}
+	if u.User != nil {
+		return nil, errors.New("addresses with a username or password aren't fetched")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Thicket/1")
+	resp, err := f.httpClient().Do(req)
+	if err != nil {
+		if errors.Is(err, ErrBlocked) {
+			return nil, ErrBlocked
+		}
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("couldn't download it: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("the site answered HTTP %d", resp.StatusCode)
+	}
+	if resp.ContentLength > max {
+		return nil, ErrTooLarge
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, fmt.Errorf("couldn't download it: %v", err)
+	}
+	if int64(len(body)) > max {
+		return nil, ErrTooLarge
+	}
+	return body, nil
+}
+
 func looksHTML(b []byte) bool {
 	head := strings.ToLower(string(b[:min(len(b), 512)]))
 	return strings.Contains(head, "<html") || strings.Contains(head, "<!doctype html")

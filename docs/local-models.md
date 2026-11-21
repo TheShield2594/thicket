@@ -74,6 +74,31 @@ replies can take a while: Thicket waits up to 5 minutes per model call.
 - There's no fallback model: if the server is down, sprigs tell you it
   failed.
 - Spend is recorded as $0.
+- Voice messages need a speech-to-text server: a local model server
+  can't hear audio. Start the [voice plugin](voice.md) and they are
+  heard on your machine (see below); without it, sprigs say the message
+  wasn't transcribed.
+
+## Voice: hearing and speaking locally
+
+The [voice plugin](voice.md) runs whisper.cpp (voice messages to text)
+and Piper (replies read aloud) in a container of their own:
+
+```
+docker compose --profile voice up -d
+```
+
+On a new install that's all: with the plugin running, voice messages and
+spoken replies use it, with no OpenRouter key and nothing to pay. The
+first start downloads about 130 MB of models. `thicket doctor` checks it
+with a short round trip (a phrase spoken, then heard back).
+
+An install upgraded from before the plugin existed keeps what it did;
+tell Juni "set local_voice to true" to switch it over. You can also
+point `transcribe_url` at any OpenAI-compatible speech-to-text server
+(whisper.cpp's server, Speaches, LocalAI) and `speech_url` at a speech
+server such as Kokoro-FastAPI; those win over the plugin. See
+[Voice](voice.md) for voices, languages and bigger models.
 
 ## Switching
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/theshield2594/thicket/internal/browser"
 	"github.com/theshield2594/thicket/internal/character"
 	"github.com/theshield2594/thicket/internal/mail"
 	"github.com/theshield2594/thicket/internal/mcp"
@@ -90,6 +91,13 @@ func (e *Engine) pluginCtx(ctx context.Context, sprig, server string) (context.C
 			return ctx, fmt.Errorf("couldn't read %s's mail allowlist: %w", sprig, err)
 		}
 		meta["thicket/mail"] = map[string]any{"allow": allow}
+	}
+	if server == browser.Plugin {
+		bm, err := e.browserMeta(ctx, sprig)
+		if err != nil {
+			return ctx, err
+		}
+		meta["thicket/browser"] = bm
 	}
 	return mcp.WithMeta(ctx, meta), nil
 }

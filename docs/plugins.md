@@ -4,7 +4,7 @@ Thicket's core bundles no browser, no mailbox and no speech engine.
 Abilities like those are **plugins**: each is an MCP server in a container
 of its own, started by a docker compose profile, that Thicket connects as
 a built-in integration. The [sandbox computer](sandbox.md) is the first
-one. A plugin you don't start costs nothing and changes nothing.
+one; [email](mail.md) and [voice](voice.md) are others. A plugin you don't start costs nothing and changes nothing.
 
 ## How a plugin is turned on
 
@@ -114,7 +114,9 @@ mark tools in `tools/list` with hints of its own, in the tool's `_meta`:
 Hints from any other integration are ignored, and it isn't told who is
 calling. The mail plugin also returns `"thicket/drafted"` in a result's
 `_meta` when it saved a draft for a person, which Thicket puts in "needs
-you" (see [Email](mail.md)).
+you" (see [Email](mail.md)). The browser plugin gets each call's
+allowlist and profile key in `_meta` `thicket/browser` (see
+[The browser](browser.md)).
 
 ### Registering it in Thicket
 

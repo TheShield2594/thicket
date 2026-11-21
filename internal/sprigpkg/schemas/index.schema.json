@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thicket.dev/schemas/gallery/index.schema.json",
+  "title": "Gallery index.json (made by thicket gallery build-index)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "format", "updated_at", "authors", "packages", "revoked"],
+  "properties": {
+    "kind": {"type": "string", "enum": ["thicket-gallery-index"]},
+    "format": {"type": "integer", "minimum": 1},
+    "updated_at": {"type": "string", "maxLength": 40},
+    "authors": {
+      "type": "object",
+      "maxProperties": 2000,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id", "public_key", "fingerprint", "name"],
+        "properties": {
+          "key_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+          "public_key": {"type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$"},
+          "fingerprint": {"type": "string", "pattern": "^([0-9a-f]{4} ){15}[0-9a-f]{4}$"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 60},
+          "url": {"type": "string", "maxLength": 200, "pattern": "^https://[^\\s\"<>]+$"}
+        }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "display_name", "description", "author", "scopes", "avatar", "versions"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 40},
+          "description": {"type": "string", "maxLength": 200},
+          "author": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+          "scopes": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {"type": "string", "pattern": "^(schedule|web|calendar|characters|admin|mcp:[a-z0-9][a-z0-9_-]{0,40}/\\*)$"}
+          },
+          "avatar": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body", "color", "hat", "hat_color", "accessory", "expression"],
+            "properties": {
+              "body": {"type": "string", "maxLength": 40},
+              "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+              "hat": {"type": "string", "maxLength": 40},
+              "hat_color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+              "accessory": {"type": "string", "maxLength": 40},
+              "expression": {"type": "string", "maxLength": 40}
+            }
+          },
+          "versions": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "file", "sha256", "size", "created_at"],
+              "properties": {
+                "version": {"type": "integer", "minimum": 1, "maximum": 999999},
+                "file": {"type": "string", "pattern": "^packages/[a-z][a-z0-9-]{0,31}/[1-9][0-9]{0,5}\\.sprig$"},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "size": {"type": "integer", "minimum": 1, "maximum": 4194304},
+                "created_at": {"type": "string", "maxLength": 40},
+                "thicket_version": {"type": "string", "maxLength": 40}
+              }
+            }
+          }
+        }
+      }
+    },
+    "revoked": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id"],
+        "properties": {
+          "key_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+          "reason": {"type": "string", "maxLength": 200},
+          "revoked_at": {"type": "string", "maxLength": 40}
+        }
+      }
+    }
+  }
+}

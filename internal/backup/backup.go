@@ -27,6 +27,9 @@ type Manifest struct {
 	SchemaVersion int       `json:"schema_version"`
 	CreatedAt     time.Time `json:"created_at"`
 	IncludesKey   bool      `json:"includes_key"`
+	// BrowserProfiles is how many sealed browser profiles it carries
+	// (thicket backup --browser-profiles).
+	BrowserProfiles int `json:"browser_profiles,omitempty"`
 }
 
 // Format is the archive format this build writes; Restore reads this and
@@ -39,6 +42,33 @@ const Format = 2
 // secrets in the database can't be read, which is usually what you want
 // for an off-site copy.
 func Export(ctx context.Context, db *store.Store, dataDir, charsDir string, includeKey bool, out io.Writer) error {
+	return ExportWith(ctx, db, dataDir, charsDir, includeKey, nil, out)
+}
+
+// BrowserProfile is a sprig's sealed browser profile, as the browser
+// plugin keeps it (encrypted with a key in Thicket's secret store).
+type BrowserProfile struct {
+	Sprig  string
+	Sealed []byte
+}
+
+// browserProfilePath matches a sealed browser profile in an archive.
+var browserProfilePath = regexp.MustCompile(`^browser-profiles/[a-z0-9][a-z0-9_-]{0,63}\.tbp$`)
+
+// BrowserProfilesDir is where a restore puts sealed browser profiles
+// until Thicket hands them back to the browser plugin.
+func BrowserProfilesDir(dataDir string) string { return filepath.Join(dataDir, "browser-profiles") }
+
+// ExportWith is Export, plus sealed browser profiles (docs/browser.md),
+// stored as browser-profiles/<sprig>.tbp. They stay sealed: without the
+// secret store's key (secret.key, or THICKET_SECRET_KEY) nobody can open
+// them.
+func ExportWith(ctx context.Context, db *store.Store, dataDir, charsDir string, includeKey bool, profiles []BrowserProfile, out io.Writer) error {
+	for _, p := range profiles {
+		if !browserProfilePath.MatchString("browser-profiles/" + p.Sprig + ".tbp") {
+			return fmt.Errorf("browser profile for %q: not a sprig name", p.Sprig)
+		}
+	}
 	tmp, err := os.MkdirTemp("", "thicket-export-")
 	if err != nil {
 		return err
@@ -54,7 +84,7 @@ func Export(ctx context.Context, db *store.Store, dataDir, charsDir string, incl
 	}
 	gz := gzip.NewWriter(out)
 	tw := tar.NewWriter(gz)
-	man, _ := json.MarshalIndent(Manifest{Format: Format, SchemaVersion: ver, CreatedAt: time.Now().UTC(), IncludesKey: includeKey}, "", "  ")
+	man, _ := json.MarshalIndent(Manifest{Format: Format, SchemaVersion: ver, CreatedAt: time.Now().UTC(), IncludesKey: includeKey, BrowserProfiles: len(profiles)}, "", "  ")
 	if err := addBytes(tw, "manifest.json", man, 0o644); err != nil {
 		return err
 	}
@@ -92,6 +122,11 @@ func Export(ctx context.Context, db *store.Store, dataDir, charsDir string, incl
 			continue
 		}
 		if err := addFile(tw, filepath.Join(charsDir, e.Name()), "characters/"+e.Name(), 0o644); err != nil {
+			return err
+		}
+	}
+	for _, p := range profiles {
+		if err := addBytes(tw, "browser-profiles/"+p.Sprig+".tbp", p.Sealed, 0o600); err != nil {
 			return err
 		}
 	}
@@ -191,6 +226,9 @@ func Restore(archive io.Reader, dataDir, charsDir string, force bool) error {
 			dest = dbPath
 		case name == "secret.key":
 			dest = filepath.Join(dataDir, "secret.key")
+		case browserProfilePath.MatchString(filepath.ToSlash(name)) && h.Typeflag == tar.TypeReg:
+			// Handed back to the browser plugin when Thicket next starts.
+			dest = filepath.Join(BrowserProfilesDir(dataDir), filepath.Base(name))
 		case name == "manifest.json" && h.Typeflag == tar.TypeReg && h.Size <= 1<<20:
 			b, err := io.ReadAll(io.LimitReader(tr, h.Size))
 			if err != nil {

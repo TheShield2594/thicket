@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/theshield2594/thicket/internal/character"
+	"github.com/theshield2594/thicket/internal/gallery"
 	"github.com/theshield2594/thicket/internal/sprigpkg"
 	"github.com/theshield2594/thicket/internal/store"
 )
@@ -26,7 +27,7 @@ import (
 // readGallery reads, checks and prepares a gallery package for user.
 func (e *Engine) readGallery(ctx context.Context, user *store.User, raw []byte, id, name string) (*sprigpkg.Gallery, sprigpkg.Trust, error) {
 	var trust sprigpkg.Trust
-	revoked, err := sprigpkg.RevokedKeys(ctx, e.DB)
+	revoked, err := gallery.RevokedKeys(ctx, e.DB, e.Gallery)
 	if err != nil {
 		return nil, trust, err
 	}

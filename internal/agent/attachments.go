@@ -321,8 +321,9 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 			pdfs = append(pdfs, llm.File{Name: name, URL: "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(body)})
 			pageCounts = append(pageCounts, pages)
 		case kindAudio:
-			if !e.onOpenRouter(ctx) {
-				fmt.Fprintf(&b, "\n[voice message %s was not transcribed: that needs OpenRouter, and Thicket is using another model server. Ask the user to type it.]", name)
+			sttURL := e.transcribeURL(ctx)
+			if sttURL == "" && !e.onOpenRouter(ctx) {
+				fmt.Fprintf(&b, "\n[voice message %s was not transcribed: that needs a speech-to-text server (the voice plugin, or the transcribe_url setting) or OpenRouter, and none is set up. Ask the user to type it.]", name)
 				continue
 			}
 			if audio >= maxAudioPerMessage {
@@ -337,7 +338,11 @@ func (e *Engine) loadAttachments(ctx context.Context, atts []channel.Attachment)
 				if format == "" {
 					format = audioFormat(a.Name, a.ContentType)
 				}
-				text, err = e.transcribe(ctx, body, format)
+				if sttURL != "" {
+					text, err = e.transcribeAt(ctx, sttURL, body, format)
+				} else {
+					text, err = e.transcribe(ctx, body, format)
+				}
 			}
 			if err != nil {
 				e.Log.Warn("couldn't transcribe a voice message", "err", err)
@@ -374,6 +379,35 @@ func (e *Engine) transcribe(ctx context.Context, body []byte, format string) (st
 		return "", fmt.Errorf("the transcription came back empty")
 	}
 	return text, nil
+}
+
+// transcribeURL is the speech-to-text server voice messages go to, or ""
+// for the transcribe_model on OpenRouter.
+func (e *Engine) transcribeURL(ctx context.Context) string {
+	if e.TranscribeURL == nil || e.Transcriber == nil {
+		return ""
+	}
+	return e.TranscribeURL(ctx)
+}
+
+// transcribeAt turns a recording into text on a speech-to-text server
+// (the voice plugin's whisper.cpp, or transcribe_url). Nothing is paid
+// for it.
+func (e *Engine) transcribeAt(ctx context.Context, base string, body []byte, format string) (string, error) {
+	model := "whisper-1"
+	if e.Settings.IsSet(ctx, "transcribe_model") {
+		model = e.Settings.String(ctx, "transcribe_model")
+	}
+	if format == "" {
+		format = "ogg"
+	}
+	tr, err := e.Transcriber.Transcribe(llm.WithPurpose(ctx, "transcribe"), llm.TranscriptionRequest{
+		URL: base, Model: model, Audio: body, Filename: "voice." + format,
+	})
+	if err != nil {
+		return "", err
+	}
+	return tr.Text, nil
 }
 
 const transcribePrompt = "You transcribe audio. Reply with only the words spoken, in the language they were spoken in, with normal punctuation. " +

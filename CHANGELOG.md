@@ -6,6 +6,52 @@ stated.
 
 ## Unreleased: kill switch, sandboxing, sprig owners, "remember this" and presence (schema v36)
 
+- Local speech (#84): the optional `thicket-voice` plugin
+  (`docker compose --profile voice up -d`) hears voice messages with
+  whisper.cpp and reads replies aloud with Piper, on your own machine,
+  behind OpenAI-compatible `/v1/audio/transcriptions` and
+  `/v1/audio/speech`. With it, a voice message on Telegram, Discord or
+  in the web app is transcribed and answered out loud with no OpenRouter
+  key, also on a local model server (which used to say the message
+  wasn't transcribed). Models (about 130 MB) download on first start into
+  the `voice-models` volume, each checked against a pinned SHA-256; the
+  image is built for amd64 and arm64. It publishes no port and needs the
+  token Thicket shares, like the sandbox. A new `transcribe_url` setting
+  sends voice messages to any OpenAI-compatible speech-to-text server,
+  the way `speech_url` works for speech; local transcription is recorded
+  at $0. New installs use the plugin for both whenever it runs (the new
+  `local_voice` setting, on by default). **Existing installs keep their
+  current settings**: on the first start of this version, an install
+  that already has people gets `local_voice` stored off. To switch, start
+  the plugin and tell Juni "set local_voice to true" (or
+  `thicket settings set local_voice true`); `transcribe_url` and
+  `speech_url` still win, and OpenRouter stays available.
+  `thicket doctor` checks both endpoints with a round trip (a phrase
+  spoken, then heard back). See [Voice](docs/voice.md).
+
+- A sprig's own web browser (#91): the optional `thicket-browser`
+  plugin (`docker compose --profile browser up -d`, amd64 and arm64)
+  runs one Chromium per sprig that is using it (at most 2 at once; an
+  unused one closes after 10 minutes), driven by Playwright, with the
+  tools `open`, `read_page`, `click`, `type`, `select`, `screenshot`,
+  `back` and `done`; pages are untrusted content. Each sprig's browser
+  only reaches the sites on its allowlist (site names, subdomains
+  included; only its owner changes it, in chat with `browser_allowlist`,
+  on the dashboard's new **Browser** page or through
+  `/api/v2/sprigs/{id}/browser/allowlist`, every change in the trail and
+  undoable), enforced for every request (redirects, page parts,
+  downloads) by an egress proxy inside the container that also refuses
+  private, loopback, link-local and metadata addresses after DNS and
+  connects to the address it checked; a blocked page tells the sprig
+  which site and that you can allow it. Logins persist in a per-sprig
+  profile sealed with AES-256-GCM under a key from Thicket's secret
+  store, open only on a tmpfs. Downloads go to a capped per-sprig folder
+  and are the only files a sprig can upload. Kid sprigs can't have it.
+  `thicket doctor` checks that Chromium starts and the proxy blocks what
+  it must; `thicket backup --browser-profiles` adds the sealed profiles
+  (left out by default). The allowlist is kept in the settings table, so
+  there is no schema change. See [The browser](docs/browser.md).
+
 - Sprigs' own email addresses (schema v36, #88, #89, #90): the optional
   `thicket-mail` plugin (`docker compose --profile mail up -d`) gives a
   sprig its own address over JMAP, or IMAP and SMTP (TLS only; plaintext
@@ -75,6 +121,32 @@ stated.
   why ("Always asks: payment page."), as does "needs you"; the trail
   records the level, the floor and the reason. See
   [Calls that always ask](docs/mcp.md#calls-that-always-ask-level-floors).
+
+- A shared sprig gallery (#82). Set `THICKET_GALLERY_URL` to a
+  gallery's `index.json` (off when empty): Thicket fetches it through the
+  same public-address rules as web pages, at most 4 MB, checks it against
+  its schema, caches it and fetches it again daily. `thicket gallery
+  list`, `show NAME` and `install NAME` browse and install; a download is
+  refused unless its size and SHA-256 match the index, its key isn't
+  revoked and it's signed by the author key the index lists, then goes
+  through the normal import preview. The index's revocation list is
+  honoured on top of `gallery.revoked_keys`, for files too. The
+  dashboard's new **Gallery** page lists the sprigs and opens the same
+  preview, and `thicket doctor` checks the index and the cache's age. For
+  running a gallery: `thicket gallery verify`, `build-index` and
+  `build-site`, a JSON Schema for `index.json` (and the repository's
+  `authors.json` and `revoked.json`), and a ready-to-copy repository in
+  `gallery/template/` with CI that refuses failing changes and review
+  steps for moderators. See [docs/gallery.md](docs/gallery.md).
+
+- Juni suggests a sprig from the gallery (#83). With a gallery set up,
+  Juni (only) gets `gallery_search`, which looks through the cached index
+  with no network call, and `gallery_preview`. When you describe a need,
+  she suggests up to three gallery sprigs before the usual interview and
+  shows the import preview for the one you pick; only your approval of it
+  installs anything. Search results are untrusted content: wrapped, and
+  they taint the turn, so an action a description asks for is held for
+  you, not done.
 
 - Signed gallery packages (schema v35, #81). `thicket gallery keygen`
   makes your Ed25519 author key (kept in the encrypted secret store);

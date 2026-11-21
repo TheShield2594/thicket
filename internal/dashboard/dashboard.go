@@ -54,6 +54,9 @@ type Dashboard struct {
 	// Mail is the sprigs' mailboxes (mail.go); nil when the mail plugin
 	// isn't configured.
 	Mail *Mailbox
+	// Browser is the Browser page's engine side (browser.go); nil when
+	// the browser plugin isn't configured.
+	Browser BrowserEngine
 	// Undo reverses a trail entry (permission changes, sprig calendar entries).
 	Undo func(ctx context.Context, u *store.User, id int64) (string, error)
 	// Pause pauses (on) or resumes everything (sprig "") or one sprig; it
@@ -76,6 +79,8 @@ type Dashboard struct {
 	Device func(ua string) string
 	// Memories is the memory screen's engine side.
 	Memories MemoryKeeper
+	// Gallery is the Gallery page's engine side (gallery.go).
+	Gallery GalleryEngine
 }
 
 func (d *Dashboard) now() time.Time {
@@ -94,6 +99,11 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /dashboard/mail/message", d.mailMessage)
 	mux.HandleFunc("GET /dashboard/mail/attachment", d.mailAttachment)
 	mux.HandleFunc("POST /dashboard/mail/act", d.mailAct)
+	mux.HandleFunc("GET /dashboard/gallery", d.galleryPage)
+	mux.HandleFunc("GET /dashboard/gallery/preview", d.galleryPreview)
+	mux.HandleFunc("POST /dashboard/gallery/install", d.galleryInstall)
+	mux.HandleFunc("GET /dashboard/browser", d.browserPageGet)
+	mux.HandleFunc("POST /dashboard/browser/act", d.browserAct)
 	mux.HandleFunc("GET /dashboard/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/dashboard", http.StatusSeeOther) })
 	return secureHeaders(mux)
 }
@@ -326,6 +336,8 @@ type pageData struct {
 	User           *store.User
 	Name           string
 	HasMail        bool // a mailbox they may open (the Mail link)
+	HasGallery     bool // a shared sprig gallery is set up (the Gallery link)
+	HasBrowser     bool // a sprig with the browser they may see (the Browser link)
 	Admin          bool
 	Version        string
 	Now            string
@@ -642,6 +654,10 @@ func (d *Dashboard) gather(ctx context.Context, u *store.User) (*pageData, error
 	}
 	if d.Mail != nil {
 		p.HasMail = len(d.mailboxesFor(ctx, u)) > 0
+	}
+	p.HasGallery = d.galleryOn(u)
+	if d.Browser != nil {
+		p.HasBrowser = len(d.browserSprigs(ctx, u)) > 0
 	}
 	items, err := d.DB.OpenInbox(ctx, u.ID)
 	if err != nil {

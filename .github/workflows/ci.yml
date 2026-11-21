@@ -84,7 +84,12 @@ jobs:
               (cd "$dir" && go vet ./... && go test -race -count=1 ./...)
             fi
             if [ -f "$dir/package.json" ]; then
-              (cd "$dir" && npm ci && npm test)
+              # A plugin that drives a browser gets Playwright's Chromium first.
+              if grep -q '"playwright"' "$dir/package.json"; then
+                (cd "$dir" && npm ci && npx playwright install --with-deps chromium && npm test)
+              else
+                (cd "$dir" && npm ci && npm test)
+              fi
             fi
             docker buildx build --platform linux/amd64,linux/arm64 -t "thicket-$name:ci" "$dir"
             echo "::endgroup::"
@@ -103,8 +108,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      # Only the sandbox image's apt step runs emulated; the Go builds
-      # cross-compile.
+      # The sandbox image's apt step and the voice plugin's whisper.cpp build
+      # run emulated for arm64; the Go builds cross-compile.
       - uses: docker/setup-qemu-action@v3
         with: { platforms: arm64 }
       - uses: docker/setup-buildx-action@v3
@@ -121,3 +126,7 @@ jobs:
             -t "$IMAGE-sandbox:edge" -t "$IMAGE-sandbox:${{ github.sha }}" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             -t "$IMAGE-mail:edge" -t "$IMAGE-mail:${{ github.sha }}" plugins/mail
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -t "$IMAGE-voice:edge" -t "$IMAGE-voice:${{ github.sha }}" plugins/voice
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -t "$IMAGE-browser:edge" -t "$IMAGE-browser:${{ github.sha }}" plugins/browser

@@ -225,9 +225,10 @@ cookies (`Secure` over HTTPS).
 - Every sprig has a drawn, animated avatar that shows what it's doing
   (idle, thinking, working, sleeping, stuck) and how its last reply went
   (pleased, unsure).
-- Send voice messages (in Discord, Telegram or the web app): they're transcribed (by the `transcribe_model`
-  setting, a model that hears audio) and the sprig answers what you said.
-  Needs OpenRouter.
+- Send voice messages (in Discord, Telegram or the web app): they're transcribed and the sprig answers
+  what you said. On your own machine with the optional [voice plugin](docs/voice.md) (whisper.cpp and
+  Piper, `docker compose --profile voice up -d`, which also speaks replies), on any OpenAI-compatible
+  speech-to-text server (`transcribe_url`), or on OpenRouter (the `transcribe_model` setting).
 - Send pictures, PDFs and text files (from the web app too). Sprigs look at images (the chat
   model needs vision, as the defaults have), read PDFs (up to 2 per
   message, 10 MB and 50 pages each; 2 MB if its pages can't be counted) and text files such as notes, CSVs or
@@ -269,6 +270,10 @@ cookies (`Secure` over HTTPS).
   (an optional plugin, JMAP or IMAP/SMTP). It only sends on its own to
   addresses you allowed; everything else waits in "needs you", and you
   can read its mailbox on the dashboard. See [Email](docs/mail.md).
+- Give a sprig its own web browser (an optional plugin, Chromium) to use
+  sites you trust and stay signed in to them. It only reaches the sites
+  you allowed, never your network, and its logins are kept encrypted.
+  See [The browser](docs/browser.md).
 - Look things up: sprigs with web access search the web and read pages,
   through OpenRouter or your own SearXNG. See [Web search](docs/web.md).
 - Teach them once: after working through a task, a sprig offers to save it
@@ -352,6 +357,7 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_MODEL_API_KEY` | | key for that provider, or for your server if it wants one |
 | `THICKET_SANDBOX_URL` | `http://sandbox:7070` in compose | the sandbox container ([details](docs/sandbox.md)); empty turns it off |
 | `THICKET_SEARCH_URL` *chat* | | a SearXNG instance for web search ([details](docs/web.md)) |
+| `THICKET_GALLERY_URL` | | a shared sprig gallery's `index.json`; off when empty ([details](docs/gallery.md#browsing-a-shared-gallery)) |
 | `THICKET_WEB_PROXY` | `0` | `1` reads web pages through `HTTPS_PROXY` ([trade-off](docs/web.md#behind-a-proxy)) |
 | `THICKET_MODEL` *chat* | `anthropic/claude-sonnet-5.5` | main chat model |
 | `THICKET_FALLBACK_MODEL` *chat* | `google/gemini-3.8-flash` | used when the main model fails |
@@ -366,7 +372,9 @@ by asking Juni (as the owner), and the chat value wins.
 | `THICKET_SECRET_KEY_FILE` | | a file holding that key instead, e.g. a Docker secret at `/run/secrets/thicket_secret_key` |
 | `THICKET_TRUSTED_PROXIES` | | reverse proxies (addresses or CIDR ranges, comma-separated) whose `X-Forwarded-For` names the client, for sign-in limits; empty: any proxy on a loopback or private address |
 | `THICKET_PUBLIC_URL` | | public https URL, used in web app sign-in links, webhook URLs, integration sign-in (OAuth) callbacks and for avatar images |
-| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages; it must accept audio |
+| `transcribe_model` *chat only* | `google/gemini-3.8-flash` | model that transcribes voice messages on OpenRouter; it must accept audio |
+| `transcribe_url` *chat only* | | a local OpenAI-compatible speech-to-text server for voice messages ([Voice](docs/voice.md)) |
+| `local_voice` *chat only* | `true` (new installs) | use the voice plugin for voice messages and spoken replies while it runs ([Voice](docs/voice.md)) |
 | `auto_route` *chat only* | `false` | when a message names no sprig, the cheap model picks who answers by role |
 | `THICKET_IDLE_AFTER` | `20m` | quiet time before a conversation is reviewed for memories |
 | `history_tokens` *chat only* | automatic | how much of the conversation each reply includes; older parts of long conversations are summarised |
@@ -386,7 +394,9 @@ This writes one archive with the database (a consistent copy, safe to take
 while Thicket runs) and every sprig's files: character file, avatar
 settings and voice tests. Add `--include-key` to bring the encryption key
 too; without it, stored API keys must be re-entered after a restore, and
-with it the file is as sensitive as a password.
+with it the file is as sensitive as a password. Sprigs' browser logins
+are left out unless you add `--browser-profiles` (they stay encrypted;
+see [The browser](docs/browser.md#backups)).
 
 Restore into an empty data directory with `thicket restore FILE`. The
 archive is checked first (its manifest, that its database isn't from a
@@ -432,6 +442,7 @@ see [Bringing a character from another app](docs/characters.md#bringing-a-charac
 - [The sandbox: sprigs' own computer](docs/sandbox.md)
 - [Plugins: optional abilities in their own containers](docs/plugins.md)
 - [Email: a sprig's own address](docs/mail.md)
+- [The browser: a sprig's own web browser](docs/browser.md)
 - [Webhooks](docs/webhooks.md)
 - [Event triggers and the commons](docs/triggers.md)
 - [Telegram](docs/telegram.md)

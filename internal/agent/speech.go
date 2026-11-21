@@ -102,7 +102,7 @@ func (e *Engine) speak(ctx context.Context, t *turn, reply string, with []string
 		e.logActivity(ctx, "warn", "speech", t.char.ID, t.user.ID, "couldn't send a spoken reply", shortErr(err))
 		if !llm.IsBudget(err) && !errors.Is(err, context.Canceled) {
 			e.Notify(ctx, "speech", 24*time.Hour, "warn", "I couldn't speak a reply out loud ("+shortErr(err)+"). The text went out fine. "+
-				"Check the speech settings: speech_url (a speech server, or empty for the model server), speech_model and speech_voice.")
+				"Check the speech settings: speech_url (a speech server, or empty for the voice plugin when it runs and local_voice is on, else the model server), speech_model and speech_voice; `thicket doctor` checks the voice plugin.")
 		}
 	}
 	return ids
