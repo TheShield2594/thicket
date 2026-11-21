@@ -301,6 +301,13 @@ test('at most max browsers, and an idle one closes and is saved', { timeout: 600
   assert.ok(fs.existsSync(path.join(h.dir, 'profiles', 'pip.tbp')));
   r = await h.call('juni', 'open', { url: base + '/' });
   assert.ok(!r.isError, r.text);
+
+  // Chromium going away on its own ends the session and seals the profile.
+  await h.sessions.open.get('juni').context.close();
+  for (let i = 0; i < 50 && h.sessions.isOpen('juni'); i++) await new Promise((res) => setTimeout(res, 100));
+  assert.equal(h.sessions.isOpen('juni'), false);
+  assert.ok(fs.existsSync(path.join(h.dir, 'profiles', 'juni.tbp')));
+  assert.deepEqual(await fsp.readdir(path.join(h.dir, 'run')), []);
 });
 
 test('the doctor check and the profile admin API', { timeout: 60000 }, async (t) => {

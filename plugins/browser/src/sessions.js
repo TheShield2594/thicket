@@ -175,6 +175,14 @@ class Sessions {
         viewport: { width: 1280, height: 800 },
         locale: 'en-US',
       });
+      // Chromium gone on its own (a crash, out of memory): the session
+      // ends, and what the profile folder holds is still sealed.
+      s.context.on('close', () => {
+        if (!s.stopping && this.open.get(sprig) === s) {
+          this.log('browser exited unexpectedly', sprig);
+          this.close(sprig, 'crashed').catch((e) => this.log('saving after a crash failed', sprig, e.message));
+        }
+      });
       s.context.setDefaultTimeout(15000);
       s.context.setDefaultNavigationTimeout(30000);
       s.context.on('page', (p) => {
@@ -295,20 +303,23 @@ class Sessions {
     });
   }
 
+  // stop closes a browser and (if save) seals its profile. It stays
+  // counted as open, against the cap, until its profile is saved.
   async stop(s, save) {
+    s.stopping = true;
     clearTimeout(s.timer);
-    this.open.delete(s.sprig);
-    await Promise.race([Promise.allSettled([...s.pending]), sleep(5000)]);
     try {
-      await s.context.close(); // Chromium writes its cookies out here
-    } catch (e) {
-      this.log('browser close', s.sprig, e.message);
-    }
-    await s.proxy.close().catch(() => {});
-    try {
+      await Promise.race([Promise.allSettled([...s.pending]), sleep(5000)]);
+      try {
+        await s.context.close(); // Chromium writes its cookies out here
+      } catch (e) {
+        this.log('browser close', s.sprig, e.message);
+      }
+      await s.proxy.close().catch(() => {});
       if (save) await vault.save(s.dir, this.profileFile(s.sprig), s.key, s.sprig, this.maxProfile);
     } finally {
       await fsp.rm(s.dir, { recursive: true, force: true });
+      this.open.delete(s.sprig);
     }
   }
 
