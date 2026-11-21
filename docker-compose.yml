@@ -86,6 +86,10 @@ services:
       # Sprigs' own email addresses (the mail service below, off unless you start it
       # with `docker compose --profile mail up -d`). See docs/mail.md.
       THICKET_MAIL_TOKEN_FILE: /mail-auth/token
+      # Local speech: voice messages heard and replies spoken on this machine (the
+      # voice service below, off unless you start it with
+      # `docker compose --profile voice up -d`). See docs/voice.md.
+      THICKET_VOICE_TOKEN_FILE: /voice-auth/token
     # Lets the container reach a model server on this machine as host.docker.internal.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -93,6 +97,7 @@ services:
       - thicket-data:/data
       - sandbox-auth:/sandbox-auth
       - mail-auth:/mail-auth
+      - voice-auth:/voice-auth
     # The web app, /dashboard, /health, /avatars, /hooks and /api/v1. Open
     # http://localhost:8080 on this machine, or put it behind your reverse proxy (with
     # HTTPS) to use it from elsewhere. Telegram needs no open port.
@@ -150,6 +155,27 @@ services:
     cap_drop:
       - ALL
 
+  # Optional: local speech. whisper.cpp hears voice messages and Piper reads replies
+  # aloud, so neither needs OpenRouter. Off unless started with
+  # `docker compose --profile voice up -d`; the first start downloads about 130 MB
+  # of models into voice-models (checked against pinned SHA-256 sums). Not published
+  # on any port: only Thicket reaches it, with a shared token. See docs/voice.md.
+  voice:
+    image: ghcr.io/theshield2594/thicket-voice:${THICKET_VERSION:-latest}
+    build:
+      context: plugins/voice
+    container_name: thicket-voice
+    profiles: [voice]
+    restart: unless-stopped
+    volumes:
+      - voice-auth:/plugin-auth:ro
+      - voice-models:/models
+    mem_limit: 1536m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   thicket-data:
   sandbox-workspace:
@@ -157,6 +183,8 @@ volumes:
   sandbox-auth:
   mail-auth:
   mail-state:
+  voice-auth:
+  voice-models:
 
 # secrets:
 #   thicket_secret_key:

@@ -199,6 +199,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		}
 	}
 	a.Settings = settings.New(db, cfg)
+	a.decideLocalVoice(ctx) // before anyone is onboarded on a new install
 
 	a.Chars = character.NewRegistry(cfg.CharactersDir, db, log)
 	a.Settings.CharacterExists = func(id string) bool { _, ok := a.Chars.Get(id); return ok }
@@ -274,18 +275,18 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 		OnAlert: func(ctx context.Context, al budget.Alert) {
 			a.Engine.Notify(ctx, al.Key, 31*24*time.Hour, al.Level, al.Message)
 		}}
-	// Spoken replies go to speech_url, or the model server when it's
-	// empty, with that server's key; the guard meters them.
-	a.Guard.Voice = &llm.SpeechClient{HTTP: &http.Client{}, Key: or.Key, URL: func(ctx context.Context) string {
-		if u := a.Settings.String(ctx, "speech_url"); u != "" {
-			return u
-		}
-		return a.Settings.String(ctx, "model_url")
-	}}
+	// Spoken replies go to speech_url, the voice plugin or the model
+	// server, and voice messages to transcribe_url, the voice plugin or
+	// OpenRouter (voice.go), each with that server's key; the guard
+	// meters them.
+	a.Guard.Voice = &llm.SpeechClient{HTTP: &http.Client{}, Key: a.voiceKey(or.Key), URL: a.speechURL}
+	a.Guard.Ears = &llm.TranscriptionClient{HTTP: &http.Client{}, Key: a.voiceKey(or.Key)}
 	a.Engine.LLM = a.Guard
 	a.Engine.Budget = a.Guard
 	a.Guard.Paused = a.Engine.Paused // the kill switch, under every model call
 	a.Engine.Speech = a.Guard
+	a.Engine.Transcriber = a.Guard
+	a.Engine.TranscribeURL = a.transcribeURL
 
 	a.MCP = mcp.NewRegistry(db, sec, log)
 	// Local (stdio) integrations run one process per sprig, in its own

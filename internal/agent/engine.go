@@ -61,7 +61,12 @@ type Engine struct {
 	// Speech reads replies aloud (through the budget guard); nil means
 	// sprigs never speak.
 	Speech llm.Speaker
-	Log    *slog.Logger
+	// Transcriber hears voice messages on a speech-to-text server (through
+	// the budget guard), at the address TranscribeURL gives; "" there
+	// means the transcribe_model on OpenRouter instead.
+	Transcriber   llm.Transcriber
+	TranscribeURL func(ctx context.Context) string
+	Log           *slog.Logger
 	// KeyCheck validates a model API key with the provider.
 	KeyCheck func(ctx context.Context, key string) error
 	// Fetcher reads web pages for the web tools; nil means one that only

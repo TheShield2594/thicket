@@ -175,6 +175,27 @@ Pip is small and tidy.
 
 func setupTelegram(t *testing.T) (*App, *botAPI, *speechServer, *fakeModel, context.Context) {
 	t.Helper()
+	a, bot, fm, ctx, start := setupTelegramBare(t)
+	speech := &speechServer{}
+	speechSrv := httptest.NewServer(speech.handler(t))
+	t.Cleanup(speechSrv.Close)
+	if err := a.Secrets.Put(ctx, secrets.OpenRouterKey, "sk-or-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Settings.Set(ctx, "speech_url", speechSrv.URL+"/v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Settings.Set(ctx, "speech_model", "kokoro"); err != nil {
+		t.Fatal(err)
+	}
+	start()
+	return a, bot, speech, fm, ctx
+}
+
+// setupTelegramBare is Thicket with Telegram (a fake Bot API) and Pip, no
+// model key and no speech settings; start connects Telegram.
+func setupTelegramBare(t *testing.T) (*App, *botAPI, *fakeModel, context.Context, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	os.Setenv("THICKET_DATA_DIR", dir)
 	t.Cleanup(func() { os.Unsetenv("THICKET_DATA_DIR") })
@@ -191,9 +212,6 @@ func setupTelegram(t *testing.T) (*App, *botAPI, *speechServer, *fakeModel, cont
 	t.Cleanup(botSrv.Close)
 	tg := telegram.New(tgToken, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	tg.BaseURL = botSrv.URL
-	speech := &speechServer{}
-	speechSrv := httptest.NewServer(speech.handler(t))
-	t.Cleanup(speechSrv.Close)
 
 	fm := &fakeModel{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -213,18 +231,10 @@ func setupTelegram(t *testing.T) (*App, *botAPI, *speechServer, *fakeModel, cont
 	if err := a.Chars.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Secrets.Put(ctx, secrets.OpenRouterKey, "sk-or-test"); err != nil {
-		t.Fatal(err)
+	return a, bot, fm, ctx, func() {
+		go tg.Run(ctx, a.Engine.HandleIncoming)
+		waitFor(t, "telegram", tg.Connected)
 	}
-	if err := a.Settings.Set(ctx, "speech_url", speechSrv.URL+"/v1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Settings.Set(ctx, "speech_model", "kokoro"); err != nil {
-		t.Fatal(err)
-	}
-	go tg.Run(ctx, a.Engine.HandleIncoming)
-	waitFor(t, "telegram", tg.Connected)
-	return a, bot, speech, fm, ctx
 }
 
 // tgText is a typed Telegram DM, handled synchronously.

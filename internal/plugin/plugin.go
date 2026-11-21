@@ -101,8 +101,14 @@ var Sandbox = Spec{Name: "sandbox", Exec: true}
 // docs/mail.md): JMAP, or IMAP and SMTP. Kid sprigs can't have it.
 var Mail = Spec{Name: "mail", Profile: "mail", DefaultURL: "http://mail:7072", Check: mailCheck}
 
+// Voice hears voice messages and reads replies aloud on this machine
+// (thicket-voice, docs/voice.md): whisper.cpp and Piper behind
+// OpenAI-compatible endpoints that Thicket itself uses. Its only tool
+// lists its voices.
+var Voice = Spec{Name: "voice", Profile: "voice", DefaultURL: "http://voice:7071", Check: voiceCheck}
+
 // Builtin is every plugin Thicket knows.
-func Builtin() *Registry { return MustNew(Sandbox, Mail) }
+func Builtin() *Registry { return MustNew(Sandbox, Mail, Voice) }
 
 // All lists the plugins, in order.
 func (r *Registry) All() []Spec {

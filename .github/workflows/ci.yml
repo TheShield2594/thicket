@@ -103,8 +103,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      # Only the sandbox image's apt step runs emulated; the Go builds
-      # cross-compile.
+      # The sandbox image's apt step and the voice plugin's whisper.cpp build
+      # run emulated for arm64; the Go builds cross-compile.
       - uses: docker/setup-qemu-action@v3
         with: { platforms: arm64 }
       - uses: docker/setup-buildx-action@v3
@@ -121,3 +121,5 @@ jobs:
             -t "$IMAGE-sandbox:edge" -t "$IMAGE-sandbox:${{ github.sha }}" .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             -t "$IMAGE-mail:edge" -t "$IMAGE-mail:${{ github.sha }}" plugins/mail
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -t "$IMAGE-voice:edge" -t "$IMAGE-voice:${{ github.sha }}" plugins/voice

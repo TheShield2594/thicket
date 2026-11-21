@@ -43,14 +43,15 @@ jobs:
             *-*) ;;                               # a pre-release: its own tag only
             *) TAGS="$TAGS ${VERSION%.*} latest" ;;
           esac
-          main=""; sandbox=""; mail=""
-          for t in $TAGS; do main="$main -t $IMAGE:$t"; sandbox="$sandbox -t $IMAGE-sandbox:$t"; mail="$mail -t $IMAGE-mail:$t"; done
+          main=""; sandbox=""; mail=""; voice=""
+          for t in $TAGS; do main="$main -t $IMAGE:$t"; sandbox="$sandbox -t $IMAGE-sandbox:$t"; mail="$mail -t $IMAGE-mail:$t"; voice="$voice -t $IMAGE-voice:$t"; done
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             --build-arg VERSION="$GITHUB_REF_NAME" $main .
           docker buildx build --platform linux/amd64,linux/arm64 --push \
             -f sandbox/Dockerfile $sandbox .
           # Plugins (docs/plugins.md): each from its own folder.
           docker buildx build --platform linux/amd64,linux/arm64 --push $mail plugins/mail
+          docker buildx build --platform linux/amd64,linux/arm64 --push $voice plugins/voice
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: the published image reports its version on both architectures
