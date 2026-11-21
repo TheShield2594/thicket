@@ -79,6 +79,14 @@ gallery import is checked, and shows everything it will get. Nothing is
 written until you press **Install**, which installs exactly what you saw.
 Names and descriptions come from strangers; the page shows them as text.
 
+## Browser
+
+With the [browser plugin](browser.md) running, **Browser** (top of the
+page) lists the sprigs you may see that have the browser, each with the
+sites its browser may load. Its owner allows and removes sites there;
+every change is in the trail and can be undone. Others see the list. A
+private sprig's list is only for its person; kids see none.
+
 ## Signing in
 
 The dashboard uses the web app's sign-in: a username and password, single

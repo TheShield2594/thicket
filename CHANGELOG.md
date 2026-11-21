@@ -29,6 +29,29 @@ stated.
   `thicket doctor` checks both endpoints with a round trip (a phrase
   spoken, then heard back). See [Voice](docs/voice.md).
 
+- A sprig's own web browser (#91): the optional `thicket-browser`
+  plugin (`docker compose --profile browser up -d`, amd64 and arm64)
+  runs one Chromium per sprig that is using it (at most 2 at once; an
+  unused one closes after 10 minutes), driven by Playwright, with the
+  tools `open`, `read_page`, `click`, `type`, `select`, `screenshot`,
+  `back` and `done`; pages are untrusted content. Each sprig's browser
+  only reaches the sites on its allowlist (site names, subdomains
+  included; only its owner changes it, in chat with `browser_allowlist`,
+  on the dashboard's new **Browser** page or through
+  `/api/v2/sprigs/{id}/browser/allowlist`, every change in the trail and
+  undoable), enforced for every request (redirects, page parts,
+  downloads) by an egress proxy inside the container that also refuses
+  private, loopback, link-local and metadata addresses after DNS and
+  connects to the address it checked; a blocked page tells the sprig
+  which site and that you can allow it. Logins persist in a per-sprig
+  profile sealed with AES-256-GCM under a key from Thicket's secret
+  store, open only on a tmpfs. Downloads go to a capped per-sprig folder
+  and are the only files a sprig can upload. Kid sprigs can't have it.
+  `thicket doctor` checks that Chromium starts and the proxy blocks what
+  it must; `thicket backup --browser-profiles` adds the sealed profiles
+  (left out by default). The allowlist is kept in the settings table, so
+  there is no schema change. See [The browser](docs/browser.md).
+
 - Sprigs' own email addresses (schema v36, #88, #89, #90): the optional
   `thicket-mail` plugin (`docker compose --profile mail up -d`) gives a
   sprig its own address over JMAP, or IMAP and SMTP (TLS only; plaintext

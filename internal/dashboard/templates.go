@@ -60,6 +60,7 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{
 <header><h1>🌱 Thicket</h1>
 <span class="muted small">{{.Name}}{{if .Admin}} (admin){{end}} · {{.Now}} · <a href="/">Open the chat app</a></span></header>
 <nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a><a href="#signin">Sign-in</a>{{if .HasMail}}<a href="/dashboard/mail">Mail</a>{{end}}{{if .HasGallery}}<a href="/dashboard/gallery">Gallery</a>{{end}}{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
+<nav><a href="#sprigs">Sprigs</a><a href="#inbox">Needs you{{with len .Inbox}} ({{.}}){{end}}</a><a href="#trail">Trail</a><a href="#memories">Memories</a><a href="#jobs">Jobs</a><a href="#skills">Skills</a><a href="#signin">Sign-in</a>{{if .HasMail}}<a href="/dashboard/mail">Mail</a>{{end}}{{if .HasBrowser}}<a href="/dashboard/browser">Browser</a>{{end}}{{if .Admin}}<a href="#costs">Costs</a><a href="#health">Health</a>{{end}}</nav>
 {{if .Flash}}<section class="flash" role="status">{{.Flash}}</section>{{end}}
 {{if .Problem}}<section class="problem" role="alert">{{.Problem}}</section>{{end}}
 <p class="muted small">Mostly read-only: answer what needs you here, and ask a sprig for anything else. Thinking with {{.Model}}.</p>

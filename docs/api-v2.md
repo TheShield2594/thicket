@@ -63,6 +63,8 @@ The web app uses the same endpoints under `/api/`.
 | `PUT /api/v2/levels` | admins: `{"sprig": "hal", "tool": "mcp_ha__turn_on", "level": "ask"}` (`""` resets) |
 | `GET /api/v2/sprigs/{id}/mail/allowlist` | a sprig's mail allowlist, for whoever may read its mail: `{"allowlist": ["shop@vendor.example", "@vendor.example"]}` |
 | `PATCH /api/v2/sprigs/{id}/mail/allowlist` | its owner only: `{"add": [...], "remove": [...]}`; in the trail. See [Email](mail.md) |
+| `GET /api/v2/sprigs/{id}/browser/allowlist` | the sites a sprig's browser may load, for adults who can see the sprig (a private sprig's: its person): `{"allowlist": ["shop.example"]}` |
+| `PATCH /api/v2/sprigs/{id}/browser/allowlist` | its owner only: `{"add": [...], "remove": [...]}` (site names; a pasted address is cut to its host); in the trail. See [The browser](browser.md) |
 
 ## Calendar
 

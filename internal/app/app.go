@@ -22,6 +22,7 @@ import (
 	"github.com/theshield2594/thicket/internal/auth"
 	"github.com/theshield2594/thicket/internal/avatar"
 	"github.com/theshield2594/thicket/internal/backup"
+	"github.com/theshield2594/thicket/internal/browser"
 	"github.com/theshield2594/thicket/internal/budget"
 	"github.com/theshield2594/thicket/internal/calendar"
 	"github.com/theshield2594/thicket/internal/channel"
@@ -96,8 +97,11 @@ type App struct {
 	// offPlugins are plugins turned off whose integration couldn't be
 	// turned off in the database: not connected this run.
 	offPlugins map[string]bool
-	stopping   bool
-	wg         sync.WaitGroup
+	// browser is the browser plugin's admin API (plugins.go); nil when
+	// the plugin isn't configured.
+	browser  *browser.Client
+	stopping bool
+	wg       sync.WaitGroup
 }
 
 // goRun runs a background task that Run waits for. A crash is reported,
@@ -387,6 +391,7 @@ func New(ctx context.Context, cfg *config.Config, version string, opts Options) 
 			return out
 		}}
 	a.setUpMail() // before the dashboard serves anything
+	a.setUpBrowser()
 
 	if !opts.NoHTTP {
 		a.HTTP = server.New(cfg.HTTPAddr, version, cfg.CharactersDir, a.health, server.Routes{
@@ -633,6 +638,9 @@ func (a *App) Run(parent context.Context) error {
 		goRun("gallery", func() {
 			g.Run(ctx, func(err error) { a.Log.Warn("couldn't refresh the gallery index", "err", err) })
 		})
+	}
+	if a.browser != nil {
+		goRun("browser", func() { a.pushRestoredProfiles(ctx) })
 	}
 	goRun("pause", func() { a.Engine.RunPauseWatch(ctx) })
 	goRun("approvals", func() { a.Engine.RunApprovalSweep(ctx) })

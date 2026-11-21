@@ -92,6 +92,18 @@ provider seeing what it's sent.
   without STARTTLS are refused). Kid sprigs can't have it. The dashboard
   shows a private sprig's mailbox only to its person, never escapes text
   into markup, and serves attachments only as sandboxed downloads.
+- **Sprigs' browser** ([The browser](browser.md)): one Chromium per
+  sprig in a container of its own (non-root, no capabilities, memory and
+  process limits; Thicket gets no Docker socket). Chromium's only network
+  path is a per-sprig egress proxy inside the container that allows only
+  the sites on the sprig's allowlist (only its owner changes it, in the
+  trail), refuses private, loopback, link-local and metadata addresses
+  after DNS and connects to the address it checked (no DNS rebinding),
+  for every request including redirects, subresources and downloads.
+  Profiles (logins) are sealed at rest with AES-256-GCM under a per-sprig
+  key from the encrypted secret store; the plain profile exists only on a
+  tmpfs while the browser is open. Uploads are limited to the sprig's own
+  downloads. Pages are outside content. Kid sprigs can't have it.
 
 ## What was checked
 

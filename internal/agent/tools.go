@@ -555,6 +555,18 @@ func (e *Engine) builtinTools() []*Tool {
 			Run:      e.toolMailAllowlist,
 		},
 		{
+			Name:   "browser_allowlist",
+			Config: true,
+			Shows:  true, ShowWith: []string{"sprig"},
+			Description: "Show or change which sites a sprig's own web browser (the thicket-browser plugin, mcp:browser/*) may load: site names like shop.example, each allowing its subdomains too. " +
+				"Everything else is blocked by the browser's proxy, page parts included; private and local addresses can never be allowed. Logins the sprig makes there are kept, encrypted. " +
+				"Only the sprig's owner may change it; every change is in the trail. Omit add and remove to show it.",
+			Params:   `{"type":"object","properties":{"sprig":{"type":"string"},"add":{"type":"array","items":{"type":"string"}},"remove":{"type":"array","items":{"type":"string"}}},"required":["sprig"]}`,
+			Scope:    "characters",
+			ChatOnly: true,
+			Run:      e.toolBrowserAllowlist,
+		},
+		{
 			Name:        "request_secret",
 			Config:      true,
 			Description: "Ask the user to send a secret (API key, token) in their next DM. The value is captured by Thicket, stored encrypted and never shown to you. Refer to it in integrations as {{secret:NAME}}.",

@@ -8,3 +8,4 @@ thicket-export-*.tar.gz
 /plugins/hello/hello
 /plugins/mail/mail
 /plugins/voice/voice
+/plugins/browser/node_modules/

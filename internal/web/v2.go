@@ -45,6 +45,14 @@ type Household interface {
 	ChangeMailAllow(ctx context.Context, by *store.User, sprig string, add, remove []string, via string) ([]string, error)
 }
 
+// BrowserHousehold is what the API asks of the engine for sprigs'
+// browser allowlists (docs/browser.md). The engine has it; a Household
+// without it answers 404 there.
+type BrowserHousehold interface {
+	BrowserAllowlist(ctx context.Context, u *store.User, sprig string) ([]string, error)
+	ChangeBrowserAllow(ctx context.Context, by *store.User, sprig string, add, remove []string, via string) ([]string, error)
+}
+
 // KidSprigMaker creates kid sprigs (the engine's CreateKidSprig, adapted).
 type KidSprigMaker func(ctx context.Context, by *store.User, body json.RawMessage) (*character.Character, error)
 
@@ -83,6 +91,8 @@ func (a *Adapter) V2Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v2/levels", a.bearer(a.v2SetLevel))
 	mux.HandleFunc("GET /api/v2/sprigs/{id}/mail/allowlist", a.bearer(a.v2MailAllow))
 	mux.HandleFunc("PATCH /api/v2/sprigs/{id}/mail/allowlist", a.bearer(a.v2ChangeMailAllow))
+	mux.HandleFunc("GET /api/v2/sprigs/{id}/browser/allowlist", a.bearer(a.v2BrowserAllow))
+	mux.HandleFunc("PATCH /api/v2/sprigs/{id}/browser/allowlist", a.bearer(a.v2ChangeBrowserAllow))
 	// Household.
 	mux.HandleFunc("GET /api/v2/household", a.bearer(a.v2Household))
 	mux.HandleFunc("POST /api/v2/household/invites", a.bearer(a.v2Invite))
@@ -545,6 +555,58 @@ func (a *Adapter) v2ChangeMailAllow(w http.ResponseWriter, r *http.Request, u *s
 		return
 	}
 	list, err := a.Household.ChangeMailAllow(r.Context(), u, r.PathValue("id"), b.Add, b.Remove, "through the API")
+	if errors.Is(err, store.ErrStorage) {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowlist": list})
+}
+
+// --- a sprig's browser allowlist (docs/browser.md) ---
+
+func (a *Adapter) browserHousehold(w http.ResponseWriter) (BrowserHousehold, bool) {
+	h, ok := a.Household.(BrowserHousehold)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not found")
+	}
+	return h, ok
+}
+
+func (a *Adapter) v2BrowserAllow(w http.ResponseWriter, r *http.Request, u *store.User) {
+	h, ok := a.browserHousehold(w)
+	if !ok {
+		return
+	}
+	list, err := h.BrowserAllowlist(r.Context(), u, r.PathValue("id"))
+	if errors.Is(err, store.ErrStorage) {
+		writeErr(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err != nil {
+		// No such sprig, or not one they may see: the same answer.
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowlist": list})
+}
+
+func (a *Adapter) v2ChangeBrowserAllow(w http.ResponseWriter, r *http.Request, u *store.User) {
+	h, ok := a.browserHousehold(w)
+	if !ok {
+		return
+	}
+	var b struct {
+		Add    []string `json:"add"`
+		Remove []string `json:"remove"`
+	}
+	if !decodeBody(w, r, &b) {
+		return
+	}
+	list, err := h.ChangeBrowserAllow(r.Context(), u, r.PathValue("id"), b.Add, b.Remove, "through the API")
 	if errors.Is(err, store.ErrStorage) {
 		writeErr(w, http.StatusInternalServerError, "database error")
 		return
