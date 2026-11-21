@@ -229,9 +229,25 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
+	// An address sent in chat is a new server. A hosted provider's key
+	// isn't for it: one in the environment can't be kept from it, so the
+	// switch is refused; a stored one is set aside under the provider's name.
+	hostedKey := false
+	if saveURL {
+		if err := e.envKeyBlocks(""); err != nil {
+			return e.send(ctx, in.ChatRef(), host, "I haven't tried that server: "+err.Error()+".")
+		}
+		_, hostedKey = e.provider(ctx)
+	}
 	var tried []string
 	for _, base := range cands {
-		ids, err := e.listModels(ctx, base)
+		var ids []string
+		var err error
+		if hostedKey {
+			ids, err = e.modelLister()(ctx, base, "")
+		} else {
+			ids, err = e.listModels(ctx, base)
+		}
 		if err != nil {
 			tried = append(tried, fmt.Sprintf("%s (%s)", base, shortErr(err)))
 			continue
@@ -248,7 +264,15 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 		}
 		providerMu.Lock()
 		var setErr error
+		if hostedKey {
+			if setErr = e.keepProviderKey(ctx); setErr == nil {
+				setErr = e.clearModelKey(ctx)
+			}
+		}
 		for k, v := range set {
+			if setErr != nil {
+				break
+			}
 			if setErr = e.Settings.Set(ctx, k, v); setErr != nil {
 				break
 			}

@@ -279,10 +279,12 @@ func (e *Engine) useProvider(ctx context.Context, by *store.User, p llm.Provider
 		return nil
 	}
 	if err := e.setAll(ctx, "model_url", p.BaseURL, "model", model, "cheap_model", cheap, "fallback_model", model); err != nil {
-		if now, ok := e.provider(ctx); !ok || now.ID != p.ID {
+		// Read what was saved even if the request was cancelled: a failed
+		// read would show the default address, not the one in use.
+		bg := context.WithoutCancel(ctx)
+		if now, ok := e.provider(bg); !ok || now.ID != p.ID {
 			// Models still run where they did: so must the key, or the new
 			// one would be sent there, and later kept under that name.
-			bg := context.WithoutCancel(ctx)
 			var rerr error
 			if prev != "" {
 				rerr = e.Secrets.Put(bg, secrets.ModelAPIKey, prev)

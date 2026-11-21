@@ -195,3 +195,26 @@ func TestProviderKeyStaysWithItsProvider(t *testing.T) {
 		t.Fatalf("the refused switch still happened: %q", localGot)
 	}
 }
+
+// First-run setup with a hosted provider's key in the environment: a
+// local address sent in chat is not tried, so the key isn't sent to it.
+func TestChatLocalServerWithProviderKeyInEnv(t *testing.T) {
+	a, fc, _, ctx := setup(t)
+	e := a.Engine
+	const groqKey = "gsk_goodgoodgoodgoodgoodgood1"
+	e.Cfg.ModelAPIKey, e.Cfg.ModelURL = groqKey, "https://api.groq.com/openai/v1"
+	a.Secrets.SetEnvFallback(secrets.ModelAPIKey, groqKey)
+	var asked []string
+	e.ListModels = func(_ context.Context, base, key string) ([]string, error) {
+		asked = append(asked, base+" "+key)
+		return []string{"qwen2.5"}, nil
+	}
+	e.HandleIncoming(ctx, dm("http://10.0.0.5:11434"))
+	out := fc.take()
+	if len(asked) != 0 {
+		t.Fatalf("the server was asked, with the key: %q", asked)
+	}
+	if len(out) != 1 || !strings.Contains(out[0].text, "THICKET_MODEL_API_KEY") || strings.Contains(out[0].text, groqKey) {
+		t.Fatalf("reply: %+v", out)
+	}
+}
