@@ -1,0 +1,17 @@
+{
+  "name": "thicket-browser",
+  "version": "0.1.0",
+  "description": "Thicket plugin: a web browser per sprig, behind an egress allowlist",
+  "private": true,
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
