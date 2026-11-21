@@ -80,3 +80,33 @@ test('a profile over the size limit is refused', async (t) => {
   await fsp.writeFile(path.join(d, 'big'), Buffer.alloc(4096));
   await assert.rejects(vault.pack(d, 1024), /bigger than/);
 });
+
+// Chromium can still be tidying its profile folder when a session that
+// ended on its own is saved: a file listed a moment ago may be gone.
+test('a file or folder that vanishes while the profile is saved is left out, not fatal', async (t) => {
+  const d = await tmpdir(t);
+  const src = path.join(d, 'src');
+  await fsp.mkdir(path.join(src, 'profile', 'Default', 'tmp'), { recursive: true });
+  await fsp.writeFile(path.join(src, 'profile', 'Default', 'Cookies'), 'session=1');
+  await fsp.writeFile(path.join(src, 'profile', 'Default', 'Cookies-journal'), 'j');
+  await fsp.writeFile(path.join(src, 'profile', 'Default', 'tmp', 'x'), 'x');
+  const gone = [path.join(src, 'profile', 'Default', 'Cookies-journal'), path.join(src, 'profile', 'Default', 'tmp')];
+  // Remove each just as the save reaches it.
+  const readFile = fsp.readFile, readdir = fsp.readdir;
+  t.after(() => { fsp.readFile = readFile; fsp.readdir = readdir; });
+  const vanish = (real) => async (p, ...rest) => {
+    if (gone.includes(p)) await fsp.rm(p, { recursive: true, force: true });
+    return real(p, ...rest);
+  };
+  fsp.readFile = vanish(readFile);
+  fsp.readdir = vanish(readdir);
+  const k = key();
+  const file = path.join(d, 'pip.tbp');
+  await vault.save(src, file, k, 'pip', 1 << 20);
+  fsp.readFile = readFile; fsp.readdir = readdir;
+
+  const out = path.join(d, 'out');
+  assert.equal(await vault.load(file, out, k, 'pip', 1 << 20), true);
+  assert.equal(await fsp.readFile(path.join(out, 'profile', 'Default', 'Cookies'), 'utf8'), 'session=1');
+  assert.ok(!fs.existsSync(path.join(out, 'profile', 'Default', 'Cookies-journal')));
+});
