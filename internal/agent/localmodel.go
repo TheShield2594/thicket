@@ -137,8 +137,17 @@ func (e *Engine) bootstrap(ctx context.Context, in channel.Incoming, user *store
 		return e.connectLocal(ctx, in, user, host, cands, true)
 	}
 	// A provider and key set in the environment: pick its models now.
-	if p, ok := e.provider(ctx); ok {
-		if key, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey); key != "" {
+	// The provider and its key are read together, so a switch in between
+	// can't pair one provider with another's key.
+	providerMu.Lock()
+	p, ok := e.provider(ctx)
+	key := ""
+	if ok {
+		key, _ = e.Secrets.Get(ctx, secrets.ModelAPIKey)
+	}
+	providerMu.Unlock()
+	if ok {
+		if key != "" {
 			return e.connectProvider(ctx, in, user, host, p, key, false)
 		}
 		return e.bootstrapGreeting(ctx, in, user, host)
@@ -174,16 +183,42 @@ func (e *Engine) connectProvider(ctx context.Context, in channel.Incoming, user 
 		return e.send(ctx, in.ChatRef(), host, fmt.Sprintf("%s accepted the key, but lists no chat models I can use. Is the account or plan active?", p.Name))
 	}
 	wasReady := e.ModelReady(ctx)
-	if sent {
-		if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
-			return err
+	// One step with a switch made on the Settings screen.
+	var setErr error
+	moved := false
+	if err := func() error {
+		providerMu.Lock()
+		defer providerMu.Unlock()
+		if !sent {
+			// The key was read before the models were listed. If Settings
+			// switched providers meanwhile, it is no longer this one's.
+			now, ok := e.provider(ctx)
+			if cur, _ := e.Secrets.Get(ctx, secrets.ModelAPIKey); !ok || now.ID != p.ID || cur != key {
+				moved = true
+				return nil
+			}
 		}
+		if sent {
+			// The key of the provider being left stays, for switching back.
+			if err := e.keepProviderKey(ctx); err != nil {
+				return err
+			}
+			if err := e.Secrets.Put(ctx, secrets.ModelAPIKey, key); err != nil {
+				return err
+			}
+		}
+		if serr := e.setAll(ctx, "model_url", p.BaseURL, "model", model, "cheap_model", cheap, "fallback_model", model); serr != nil {
+			setErr = serr
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
-	set := map[string]string{"model_url": p.BaseURL, "model": model, "cheap_model": cheap, "fallback_model": model}
-	for _, k := range []string{"model_url", "model", "cheap_model", "fallback_model"} {
-		if err := e.Settings.Set(ctx, k, set[k]); err != nil {
-			return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(err)+").")
-		}
+	if moved {
+		return nil // someone chose another provider in Settings; theirs stands
+	}
+	if setErr != nil {
+		return e.send(ctx, in.ChatRef(), host, "The key works, but I couldn't save the setting ("+shortErr(setErr)+").")
 	}
 	e.logActivity(ctx, "info", "system", "", user.ID, "connected to model provider "+p.Name, model)
 	msg := fmt.Sprintf("Connected to %s. I'll think with **%s**", p.Name, model)
@@ -216,9 +251,26 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 	if ch := e.channelFor(in.Channel); ch != nil {
 		ch.Typing(ctx, in.ChatID)
 	}
+	// An address sent in chat is a new server. A hosted provider's key
+	// isn't for it: one in the environment can't be kept from it, so the
+	// switch is refused; a stored one is set aside under the provider's name.
+	hostedKey := false
+	if saveURL {
+		if err := e.envKeyBlocks(""); err != nil {
+			return e.send(ctx, in.ChatRef(), host, "I haven't tried that server: "+err.Error()+".")
+		}
+		// Also on OpenRouter: a key left in the slot was a provider's.
+		hostedKey = llm.IsHosted(e.Settings.String(ctx, "model_url"))
+	}
 	var tried []string
 	for _, base := range cands {
-		ids, err := e.listModels(ctx, base)
+		var ids []string
+		var err error
+		if hostedKey {
+			ids, err = e.modelLister()(ctx, base, "")
+		} else {
+			ids, err = e.listModels(ctx, base)
+		}
 		if err != nil {
 			tried = append(tried, fmt.Sprintf("%s (%s)", base, shortErr(err)))
 			continue
@@ -233,10 +285,24 @@ func (e *Engine) connectLocal(ctx context.Context, in channel.Incoming, user *st
 		if saveURL {
 			set["model_url"] = base
 		}
-		for k, v := range set {
-			if err := e.Settings.Set(ctx, k, v); err != nil {
-				return e.send(ctx, in.ChatRef(), host, "I reached "+base+" but couldn't save the setting ("+shortErr(err)+").")
+		providerMu.Lock()
+		var setErr error
+		if hostedKey {
+			if setErr = e.keepProviderKey(ctx); setErr == nil {
+				setErr = e.Secrets.Delete(ctx, secrets.ModelAPIKey)
 			}
+		}
+		for k, v := range set {
+			if setErr != nil {
+				break
+			}
+			if setErr = e.Settings.Set(ctx, k, v); setErr != nil {
+				break
+			}
+		}
+		providerMu.Unlock()
+		if setErr != nil {
+			return e.send(ctx, in.ChatRef(), host, "I reached "+base+" but couldn't save the setting ("+shortErr(setErr)+").")
 		}
 		e.logActivity(ctx, "info", "system", "", 0, "connected to local model server "+base, model)
 		msg := fmt.Sprintf("Connected to %s. I'll think with **%s**.", base, model)

@@ -43,6 +43,12 @@ key, as for a [local server](local-models.md).
 
 ## Setting one up
 
+**In the web app.** Settings (owner and admins) lists every provider as
+not set up, ready or in use. Choose **Set up**, paste the key, and Thicket
+checks it, picks the models and switches. Keys for providers you move
+away from are kept, so **Manage → Use** switches back without pasting
+again; **Remove key** forgets one.
+
 **In chat.** DM Juni the key. A key only one provider uses (like Groq's
 `gsk_…`) is recognised on its own; for the rest, send the provider's name
 with it:

@@ -94,6 +94,7 @@ const ICONS = {
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   memory: '<path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.6.8-2.6 2s1 1.7 2.6 2 2.7.8 2.7 2-1.1 2-2.7 2c-1.2 0-2.2-.5-2.7-1.3M12 6v2M12 16v2"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
 };
 function icon(name, cls) {
@@ -365,10 +366,16 @@ async function showInvite() {
 
 // ---------- account ----------
 
-async function showAccount() {
-  let acct;
-  try { acct = await api('/api/account'); } catch (e) { return toast('Couldn’t load your account: ' + e.message); }
-  const close = () => sheet.remove();
+// accountSection is "Your account" in the settings dialog: name and
+// timezone, the weekly digest, signing in, and sessions.
+function accountSection() {
+  const box = h('div.acct', {}, h('p.d-empty', {}, 'Loading…'));
+  fillAccount(box).catch((e) => box.replaceChildren(h('p.d-empty', {}, 'Couldn’t load your account: ' + e.message)));
+  return box;
+}
+
+async function fillAccount(box) {
+  const acct = await api('/api/account');
   const err = h('p.err', { role: 'alert' });
   const fields = [];
   let user;
@@ -390,8 +397,9 @@ async function showAccount() {
       btn.disabled = true; err.textContent = '';
       try {
         const r = await api('/api/account/password', { method: 'POST', body: { username: user?.value.trim() || '', current: cur?.value || '', new: next.value } });
-        close();
         toast(r.signed_out ? `Password saved. Signed out ${r.signed_out} other session${r.signed_out === 1 ? '' : 's'}.` : 'Password saved.');
+        // The form depends on what's now set (a username, a password).
+        await fillAccount(box);
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     },
   }, fields, btn);
@@ -457,20 +465,16 @@ async function showAccount() {
         catch (e) { toast('Couldn’t sign it out: ' + e.message); }
       },
     }, 'Sign out')));
-  const sheet = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Your account', onclick: (ev) => { if (ev.target === sheet) close(); } },
-    h('div.sheet-card', {},
-      h('div.sheet-head', {}, h('h2', {}, 'Your account'), h('button.icon-btn', { 'aria-label': 'Close', onclick: close }, icon('x'))),
-      profile,
-      digest,
-      h('h3', {}, 'Signing in'),
-      acct.username ? h('p.muted', {}, 'Username: ', h('b', {}, acct.username)) : h('p.muted', {}, 'Set a username and password to sign in without a link.'),
-      acct.oidc && h('p.muted', {}, 'You can also sign in with single sign-on.'),
-      form, err,
-      h('h3', {}, 'Where you’re signed in'),
-      h('ul.sessions', {}, rows)));
-  sheet.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
-  document.body.append(sheet);
-  (me.name ? user || cur || next : nameI).focus();
+  box.replaceChildren(...[
+    h('h3', {}, 'About you'),
+    profile,
+    ...(digest || []),
+    h('h3', {}, 'Signing in'),
+    acct.username ? h('p.muted', {}, 'Username: ', h('b', {}, acct.username)) : h('p.muted', {}, 'Set a username and password to sign in without a link.'),
+    acct.oidc && h('p.muted', {}, 'You can also sign in with single sign-on.'),
+    form, err,
+    h('h3', {}, 'Where you’re signed in'),
+    h('ul.sessions', {}, rows)].filter(Boolean));
 }
 
 function relTime(at) {
@@ -570,9 +574,7 @@ function onRoster() {
   rosterTimer = setTimeout(async () => {
     const had = new Set(S.order);
     try { await refreshMe(); } catch { return; }
-    // Settings holds forms someone may be half-way through (a token, an
-    // unsaved value); only the sidebar needs the new roster there.
-    if (S.view === 'settings') renderSidebar(); else renderShell();
+    renderShell();
     for (const id of S.order) if (!had.has(id)) toast(`${S.sprigs.get(id).name} has joined. Find them in the sidebar.`);
   }, 300);
 }
@@ -782,7 +784,10 @@ function toggleDetails(force) {
 
 function cycleTheme() {
   const cur = document.documentElement.dataset.theme || 'auto';
-  const next = { auto: 'dark', dark: 'light', light: 'auto' }[cur];
+  setTheme({ auto: 'dark', dark: 'light', light: 'auto' }[cur]);
+}
+
+function setTheme(next) {
   if (next === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
   try { if (next === 'auto') localStorage.removeItem('thicket.theme'); else localStorage.setItem('thicket.theme', next); } catch { /* ignore */ }
   renderSidebar();
@@ -809,6 +814,7 @@ async function signOut() {
 // was revoked. Requests still in flight compare S.session before writing
 // anything, so a late response can't bring the account's data back.
 function endSession() {
+  document.querySelector('.sheet.settings')?.remove(); // it shows the account that just ended
   es?.close();
   clearTimeout(downTimer);
   save('thicket.layout', null);
@@ -932,10 +938,9 @@ function renderSidebar() {
       meter,
       h('div.me', {},
         h('span.me-avatar', { 'aria-hidden': 'true' }, initials(u.name || 'You')),
-        h('button.who', { title: 'Your account: name, timezone, password and sessions', onclick: showAccount }, h('b', {}, u.name || 'You'), h('small', {}, { owner: 'Owner', admin: 'Admin', kid: 'Kid' }[u.role] || 'Member')),
-        S.me.settings && h('button.icon-btn', { title: 'Settings: models, spending and connectors', 'aria-label': 'Settings', 'aria-pressed': S.view === 'settings' ? 'true' : 'false', onclick: () => openView('settings') }, icon('sliders')),
+        h('button.who', { title: 'Your account: name, timezone, password and sessions', onclick: () => openSettings('account') }, h('b', {}, u.name || 'You'), h('small', {}, { owner: 'Owner', admin: 'Admin', kid: 'Kid' }[u.role] || 'Member')),
+        h('button.icon-btn', { title: S.me.settings ? 'Settings: models, spending, connectors and your account' : 'Settings: your account and this browser', 'aria-label': 'Settings', onclick: () => openSettings() }, icon('sliders')),
         h('button.icon-btn', { title: 'Notifications', 'aria-label': 'Toggle notifications', 'aria-pressed': load('thicket.notify', false) ? 'true' : 'false', onclick: toggleNotify }, icon('bell')),
-        h('button.icon-btn', { title: 'Account: name, timezone, password and sessions', 'aria-label': 'Account', onclick: showAccount }, icon('key')),
         h('button.icon-btn', { title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, icon('out')))));
   if (refocus !== null) { search.focus(); search.setSelectionRange(refocus, refocus); }
 }
@@ -983,6 +988,7 @@ async function askHost(text, note) {
   const host = hostSprig();
   if (!host) return toast('There’s no host sprig to ask.');
   const chat = chatOf(host.id);
+  document.querySelector('.sheet.settings')?.remove(); // the chat is behind it
   if (text) S.drafts.set(chat, text);
   // openChat builds the pane before it waits for the messages. The request
   // goes in now, never after the wait: by then the person may be typing.
@@ -1010,7 +1016,7 @@ function setupIdeas() {
     ['leaf', 'Bring on a new sprig', 'A helper with its own job, voice and memory.', () => askHost(`${n}, I’d like to bring on a new sprig to help with `)],
     ['calendar', 'Schedule a routine', 'A morning summary, a weekly nudge, a reminder.', () => askHost(`${n}, can you set up a routine that `)],
     admin && ['split', 'Connect a service', 'Home Assistant, Notion, Linear and other tools.', () => askHost(`${n}, can you connect `)],
-    S.me.settings && ['sliders', 'Models and spending', 'Change them yourself in Settings.', () => openView('settings')],
+    S.me.settings && ['sliders', 'Models and spending', 'Change them yourself in Settings.', () => openSettings('ai')],
   ].filter(Boolean);
   return [
     h('div.section-title', {}, h('h2', {}, `Set things up with ${n}`), h('small', {}, `Setup happens in chat: pick one and finish the sentence`)),
@@ -1073,7 +1079,6 @@ function openView(view) {
 
 function renderView() {
   if (S.view === 'calendar') return renderCalendar();
-  if (S.view === 'settings' && S.me.settings) return renderSettings();
   if (S.view === 'setup' && hostSprig()) {
     return h('section.view', { 'aria-label': 'Set things up' },
       viewHead('Set things up', 'Setup happens in chat', h('span.view-mark', { 'aria-hidden': 'true' }, icon('leaf'))),
@@ -1248,23 +1253,33 @@ function calendarSources() {
   return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connected calendars')), list, add);
 }
 
-// --- settings (owners and admins) ---
+// --- settings: a dialog with sections down the side ---
 
-const SETTING_GROUPS = [
-  ['Models', 'Which models your sprigs think with. Ids are OpenRouter model ids, e.g. anthropic/claude-sonnet-4.5.', ['model', 'fallback_model', 'cheap_model', 'transcribe_model', 'model_url']],
-  ['Spending', 'Caps on what models may cost. 0 means no cap.', ['budget.daily_usd', 'budget.monthly_usd']],
-  ['Behaviour', '', ['auto_route', 'consistency_check', 'checkin_days', 'history_tokens']],
-  ['Web and documents', '', ['web_search', 'search_url', 'pdf_engine', 'document_chars']],
-];
+// The household settings each section holds. Anything not named here is
+// under Advanced.
+const SETTING_SECTIONS = {
+  ai: ['model', 'fallback_model', 'cheap_model'],
+  spending: ['budget.daily_usd', 'budget.monthly_usd', 'budget.ask_above_usd', 'budget.kid_monthly_usd', 'model_usd_per_mtok_in', 'model_usd_per_mtok_out'],
+  behaviour: ['auto_route', 'consistency_check', 'checkin_days', 'history_tokens'],
+  web: ['web_search', 'search_url', 'pdf_engine', 'document_chars'],
+  voice: ['local_voice', 'transcribe_model', 'transcribe_url', 'speech_url', 'speech_model', 'speech_voice', 'speech_usd_per_1k_chars'],
+};
 const SETTING_LABELS = {
-  model: 'Main model', fallback_model: 'Fallback model', cheap_model: 'Small model', transcribe_model: 'Voice transcription model', model_url: 'Model server',
-  'budget.daily_usd': 'Daily cap (USD)', 'budget.monthly_usd': 'Monthly cap (USD)',
+  model: 'Main model', fallback_model: 'Fallback model', cheap_model: 'Small model', model_url: 'Model server',
+  'budget.daily_usd': 'Daily cap (USD)', 'budget.monthly_usd': 'Monthly cap (USD)', 'budget.ask_above_usd': 'Ask before spending more than (USD)',
+  'budget.kid_monthly_usd': 'A new kid sprig’s monthly cap (USD)', model_usd_per_mtok_in: 'Price per million prompt tokens (USD)', model_usd_per_mtok_out: 'Price per million reply tokens (USD)',
   auto_route: 'Pick who answers automatically', consistency_check: 'Personality check', checkin_days: 'Check in after quiet days', history_tokens: 'Conversation history (tokens)',
   web_search: 'Web search', search_url: 'SearXNG address', pdf_engine: 'PDF reader', document_chars: 'PDF text kept (characters)',
+  local_voice: 'Use the voice plugin', transcribe_model: 'Transcription model', transcribe_url: 'Transcription server', speech_url: 'Speech server',
+  speech_model: 'Speech model', speech_voice: 'Voice', speech_usd_per_1k_chars: 'Speech price per 1,000 characters (USD)',
+  timezone: 'Household timezone', backup_dir: 'Backup folder', backup_schedule: 'Backup schedule', backup_keep: 'Backups kept',
+  'digest.day': 'Weekly digest day', 'digest.time': 'Weekly digest time',
+  'limits.tool_calls_per_minute': 'Tool calls per minute, per sprig', 'limits.actions_per_hour': 'Actions per hour, per sprig', 'limits.integration_calls_per_minute': 'Calls per minute, per connector',
 };
 const upFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function settingRow(s) {
+  const cached = s; // the dialog's copy, shown again when the section is reopened
   const id = 'set-' + s.name.replace(/\W/g, '-');
   let input;
   if (s.kind === 'bool') {
@@ -1274,7 +1289,8 @@ function settingRow(s) {
   } else {
     const num = s.kind === 'int' || s.kind === 'float';
     input = h('input.field', { id, type: num ? 'number' : s.kind === 'url' ? 'url' : 'text', min: num ? 0 : null, step: s.kind === 'float' ? 'any' : null,
-      inputmode: s.kind === 'int' ? 'numeric' : s.kind === 'float' ? 'decimal' : null, placeholder: s.default || 'Not set', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+      inputmode: s.kind === 'int' ? 'numeric' : s.kind === 'float' ? 'decimal' : null, placeholder: s.default || 'Not set', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false',
+      list: MODEL_PICKS.includes(s.name) ? 'model-ids' : null });
   }
   input.value = s.value;
   const save = h('button.chip', { type: 'submit', hidden: true }, 'Save');
@@ -1287,6 +1303,7 @@ function settingRow(s) {
     err.textContent = ''; save.disabled = reset.disabled = true;
     try {
       s = await api('/api/settings', { method: 'POST', body: { name: s.name, value } });
+      Object.assign(cached, s);
       input.value = s.value; reset.hidden = !s.changed; dirty();
       toast(`${SETTING_LABELS[s.name] || s.name} saved.`);
       if (s.name.startsWith('budget.')) refreshMe().then(renderSidebar).catch(() => {});
@@ -1299,21 +1316,217 @@ function settingRow(s) {
     h('div.set-input', {}, input, save, reset));
 }
 
-function settingsList() {
-  const body = h('div', {}, h('p.d-empty', {}, 'Loading…'));
-  (async () => {
+// --- providers: where models run ---
+
+// Shown before "More providers", along with any that have a key.
+const PROVIDERS_FIRST = ['openrouter', 'anthropic', 'openai', 'gemini', 'xai', 'mistral', 'local'];
+// Settings whose value is a model id on the provider in use.
+const MODEL_PICKS = ['model', 'fallback_model', 'cheap_model'];
+
+function providerRow(p, st, change) {
+  const inUse = p.status === 'in_use', ready = p.status === 'ready', local = p.kind === 'local';
+  const sub = inUse ? h('small.prov-on', {}, h('i'), 'In use' + (p.model ? ' · ' + p.model : ''))
+    : ready ? h('small.prov-on', {}, h('i'), 'Ready')
+    : h('small', {}, local ? 'Not set up · Ollama, LM Studio, llama.cpp' : p.subscription ? 'Not set up · Use your plan’s key' : 'Not set up · Paste a key');
+  const open = st.open === p.id;
+  const row = h('div.prov-row', {},
+    h('span.prov-ico', { 'aria-hidden': 'true' }, local ? icon('home') : p.name.charAt(0).toUpperCase()),
+    h('div.prov-text', {}, h('b', {}, p.name), sub),
+    h('button.chip', { 'aria-expanded': open ? 'true' : 'false', onclick: () => { st.open = open ? '' : p.id; st.draw(); } }, open ? 'Close' : inUse || ready ? 'Manage' : 'Set up'));
+  if (!open) return row;
+
+  const err = h('p.err', { role: 'alert' });
+  // run sends one change and redraws the list from the answer.
+  const run = async (btn, busy, call, done) => {
+    err.textContent = ''; const label = btn.textContent; btn.disabled = true; btn.textContent = busy;
+    try { const r = await call(); st.open = ''; toast(done); change(r.providers); }
+    catch (e) { err.textContent = upFirst(e.message); btn.disabled = false; btn.textContent = label; }
+  };
+  const connect = (body) => api('/api/providers', { method: 'POST', body: { id: p.id, ...body } });
+  const kids = [p.note && h('p.d-empty', {}, p.note)];
+  if (ready) {
+    kids.push(h('button.chip.primary', { type: 'button', onclick: (e) => run(e.currentTarget, 'Switching…', () => connect({}), `Models now run on ${p.name}.`) }, 'Use ' + p.name));
+  }
+  if (local) {
+    const [addrL, addr] = field('Server address', { type: 'text', value: p.address || '', placeholder: 'http://192.168.1.20:11434', required: true, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+    const btn = h('button.chip.primary', { type: 'submit' }, inUse ? 'Change server' : 'Connect');
+    kids.push(h('form.prov-form', { onsubmit: (e) => { e.preventDefault(); run(btn, 'Connecting…', () => connect({ address: addr.value.trim() }), 'Models now run on your own server.'); } }, addrL, btn));
+  } else {
+    const [keyL, key] = field(inUse || ready ? 'Replace the key' : 'API key', { type: 'password', required: true, autocomplete: 'new-password', spellcheck: 'false' });
+    const btn = h('button.chip' + (ready || inUse ? '' : '.primary'), { type: 'submit' }, inUse || ready ? 'Save key' : 'Connect');
+    kids.push(h('form.prov-form', { onsubmit: (e) => { e.preventDefault(); run(btn, 'Checking…', () => connect({ key: key.value.trim() }), inUse ? 'Key replaced.' : `Models now run on ${p.name}.`); } },
+      keyL, btn, p.keys_url && h('a.linkish', { href: p.keys_url, target: '_blank', rel: 'noopener noreferrer' }, 'Get a key')));
+    kids.push(h('p.d-empty', {}, 'The key is checked with ' + p.name + ', stored encrypted, and never shown to a model.'));
+    if (inUse || ready) {
+      kids.push(h('button.chip.danger', { type: 'button', onclick: (e) => {
+        if (!confirm(inUse ? `Remove the ${p.name} key? Sprigs can’t reply until you set up another provider.` : `Remove the ${p.name} key?`)) return;
+        run(e.currentTarget, 'Removing…', () => api('/api/providers/' + encodeURIComponent(p.id), { method: 'DELETE' }), 'Key removed.');
+      } }, 'Remove key'));
+    }
+  }
+  return h('div.prov-open', {}, row, h('div.prov-panel', {}, kids, err));
+}
+
+function providerList(onChange) {
+  const st = { open: '', more: false, items: null, draw: () => {} };
+  const card = h('div.prov-card', {}, h('p.d-empty', {}, 'Loading…'));
+  const change = (items) => {
+    st.items = items; st.draw();
+    onChange();
+    refreshMe().then(renderSidebar).catch(() => {});
+  };
+  st.draw = () => {
+    const rank = (p) => (p.status === 'in_use' ? 0 : p.status === 'ready' ? 1 : 2);
+    const shown = (p) => p.status !== 'none' || PROVIDERS_FIRST.includes(p.id);
+    const first = st.items.filter(shown).sort((a, b) => rank(a) - rank(b));
+    const rest = st.items.filter((p) => !shown(p));
+    card.replaceChildren(...first.map((p) => providerRow(p, st, change)),
+      rest.length && h('button.prov-more', { 'aria-expanded': st.more ? 'true' : 'false', onclick: () => { st.more = !st.more; st.draw(); } },
+        h('span', {}, 'More providers'), h('small', {}, String(rest.length)), icon('back')),
+      ...(st.more ? rest.map((p) => providerRow(p, st, change)) : []));
+  };
+  const load = async () => {
+    try { st.items = (await api('/api/providers')).providers; st.draw(); }
+    catch (e) { card.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the providers: ' + e.message)); }
+  };
+  load();
+  return h('section.set-group', {},
+    h('div.section-title', {}, h('h2', {}, 'Providers'), h('button.linkish.quiet', { type: 'button', onclick: load }, 'Check again')),
+    h('p.d-empty', {}, 'Where your sprigs’ models run. One is in use at a time; keys you add for the others are kept, so you can switch back.'),
+    card);
+}
+
+// settingRows shows the settings pick chooses from all of them. all is
+// a function giving the list (loaded once for the dialog).
+function settingRows(all, pick) {
+  const body = h('div.set-group', {}, h('p.d-empty', {}, 'Loading…'));
+  const load = async () => {
     try {
-      const all = (await api('/api/settings')).settings;
-      const by = new Map(all.map((s) => [s.name, s]));
-      const grouped = new Set(SETTING_GROUPS.flatMap((g) => g[2]));
-      const rest = all.filter((s) => !grouped.has(s.name)).map((s) => s.name);
-      const groups = rest.length ? [...SETTING_GROUPS, ['Other', '', rest]] : SETTING_GROUPS;
-      body.replaceChildren(...groups.map(([title, sub, names]) => h('section.set-group', {},
-        h('div.section-title', {}, h('h2', {}, title)), sub && h('p.d-empty', {}, sub),
-        names.filter((n) => by.has(n)).map((n) => settingRow(by.get(n))))));
+      const rows = pick(await all());
+      body.replaceChildren(...(rows.length ? rows.map(settingRow) : [h('p.d-empty', {}, 'Nothing here.')]));
     } catch (e) { body.replaceChildren(h('p.d-empty', {}, 'Couldn’t load the settings: ' + e.message)); }
-  })();
+  };
+  load();
+  body.reload = load;
   return body;
+}
+
+const named = (names) => (all) => names.map((n) => all.find((s) => s.name === n)).filter(Boolean);
+
+// aiSection: where models run, and which of them do what.
+function aiSection(st) {
+  // The provider's model ids, offered as suggestions in the model fields.
+  const ids = h('datalist', { id: 'model-ids' });
+  let asked = 0;
+  const loadIds = async () => {
+    // Only the latest answer counts: an earlier provider's list may arrive late.
+    const mine = ++asked;
+    let models = [];
+    try { models = (await api('/api/models')).models; } catch { /* ids can still be typed */ }
+    if (mine === asked) ids.replaceChildren(...models.map((m) => h('option', { value: m })));
+  };
+  loadIds();
+  const rows = settingRows(st.all, named(SETTING_SECTIONS.ai));
+  // A provider switch changes the models and their list.
+  return [providerList(() => { st.reload(); rows.reload(); loadIds(); }),
+    h('section.set-group', {}, h('div.section-title', {}, h('h2', {}, 'Models')),
+      h('p.d-empty', {}, 'Which of the provider’s models your sprigs think with. Pick from its list or type an id.'), rows), ids];
+}
+
+// browserSection: what's kept in this browser only.
+function browserSection() {
+  const themes = [['auto', 'System', 'auto'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']];
+  const seg = h('div.seg', { role: 'group', 'aria-label': 'Theme' });
+  const drawSeg = () => {
+    const cur = document.documentElement.dataset.theme || 'auto';
+    seg.replaceChildren(...themes.map(([id, label, ic]) => h('button', { type: 'button', 'aria-pressed': cur === id ? 'true' : 'false', onclick: () => { setTheme(id); drawSeg(); } }, icon(ic), label)));
+  };
+  drawSeg();
+  const note = h('button.switch', { type: 'button', role: 'switch', 'aria-label': 'Notifications', onclick: async () => { await toggleNotify(); drawNote(); } }, h('i'));
+  const drawNote = () => note.setAttribute('aria-checked', load('thicket.notify', false) ? 'true' : 'false');
+  drawNote();
+  return h('div.set-group', {},
+    h('div.set-row', {}, h('div.set-text', {}, h('b', {}, 'Theme'), h('small', {}, 'Light, dark, or whatever your system uses.')), seg),
+    h('div.set-row', {}, h('div.set-text', {}, h('b', {}, 'Notifications'), h('small', {}, 'Tell me when a sprig messages me while Thicket is in the background.')), note),
+    h('p.d-empty', {}, 'These are saved in this browser, not in your account.'));
+}
+
+// settingsSections lists what the signed-in person may see, in order.
+function settingsSections(st) {
+  const admin = S.me.settings;
+  const placed = new Set(Object.values(SETTING_SECTIONS).flat());
+  const rows = (id) => () => settingRows(st.all, named(SETTING_SECTIONS[id]));
+  return [
+    admin && { id: 'ai', group: 'Household', icon: 'brain', name: 'AI', sub: 'Where models run, and which ones', body: () => aiSection(st) },
+    admin && { id: 'spending', group: 'Household', icon: 'coin', name: 'Spending', sub: 'Caps on what models may cost. 0 means no cap.', body: rows('spending') },
+    admin && { id: 'behaviour', group: 'Household', icon: 'leaf', name: 'Behaviour', sub: 'How sprigs answer and keep in touch', body: rows('behaviour') },
+    admin && { id: 'web', group: 'Household', icon: 'search', name: 'Web and documents', sub: 'Searching the web and reading PDFs', body: rows('web') },
+    admin && { id: 'voice', group: 'Household', icon: 'mic', name: 'Voice', sub: 'Hearing voice messages and reading replies aloud', body: rows('voice') },
+    admin && { id: 'connectors', group: 'Household', icon: 'link', name: 'Connectors', sub: 'Tools from MCP servers you run or point at', body: connectorList },
+    admin && st.advanced && { id: 'advanced', group: 'Household', icon: 'sliders', name: 'Advanced', sub: 'Backups, limits and everything else', body: () => settingRows(st.all, (all) => all.filter((s) => !placed.has(s.name))) },
+    { id: 'account', group: 'You', icon: 'users', name: 'Your account', sub: 'Name, timezone, password and sessions', body: accountSection },
+    { id: 'browser', group: 'This browser', icon: 'sun', name: 'Appearance', sub: 'Theme and notifications', body: browserSection },
+  ].filter(Boolean);
+}
+
+// openSettings shows the settings dialog on a section (the first one the
+// person has, if none is named).
+function openSettings(want) {
+  document.querySelector('.sheet.settings')?.remove();
+  const back = document.activeElement;
+  let cache;
+  const st = {
+    advanced: load('thicket.advanced', false),
+    all: () => (cache ||= api('/api/settings').then((r) => r.settings).catch((e) => { cache = null; throw e; })),
+    reload: () => { cache = null; },
+  };
+  let cur = want;
+  const nav = h('nav.set-nav', { 'aria-label': 'Settings sections' });
+  const title = h('h2'), sub = h('small');
+  const body = h('div.set-body');
+  const close = () => { sheet.remove(); back?.focus?.(); };
+  const draw = (focus) => {
+    const secs = settingsSections(st);
+    const sec = secs.find((x) => x.id === cur) || secs[0];
+    cur = sec.id;
+    let group = '';
+    nav.replaceChildren(...secs.flatMap((x) => {
+      const item = h('button.set-tab', { type: 'button', 'aria-current': x.id === cur ? 'page' : null, onclick: () => { cur = x.id; draw(true); } }, icon(x.icon), h('span', {}, x.name));
+      const out = x.group === group ? [item] : [h('div.set-nav-label', {}, x.group), item];
+      group = x.group;
+      return out;
+    }), S.me.settings && h('label.set-adv', {}, h('span', {}, 'Advanced mode'),
+      h('button.switch', { type: 'button', role: 'switch', 'aria-checked': st.advanced ? 'true' : 'false', onclick: () => { st.advanced = !st.advanced; save('thicket.advanced', st.advanced); draw(); } }, h('i'))));
+    title.textContent = sec.name; sub.textContent = sec.sub;
+    body.replaceChildren(...[sec.body()].flat());
+    body.scrollTop = 0;
+    if (focus) nav.querySelector('[aria-current]')?.focus();
+  };
+  const sheet = h('div.sheet.settings', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Settings', onclick: (ev) => { if (ev.target === sheet) close(); } },
+    h('div.set-modal', {}, nav,
+      h('div.set-pane', {},
+        h('header.set-head', {}, h('div', {}, title, sub), h('button.icon-btn', { 'aria-label': 'Close settings', onclick: close }, icon('x'))),
+        body)));
+  sheet.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.stopPropagation(); close(); return; }
+    if (ev.key !== 'Tab') return;
+    // Tab stays inside the dialog: past either end it wraps to the other.
+    const stops = [...sheet.querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && !el.hidden && el.getClientRects().length);
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    if (!sheet.contains(document.activeElement)) { ev.preventDefault(); first.focus(); }
+    else if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  });
+  // Focus that lands outside the dialog some other way comes back.
+  const keepIn = (ev) => {
+    if (!sheet.isConnected) return document.removeEventListener('focusin', keepIn);
+    if (!sheet.contains(ev.target)) nav.querySelector('[aria-current]')?.focus();
+  };
+  document.addEventListener('focusin', keepIn);
+  document.body.append(sheet);
+  draw(true);
 }
 
 function connectorList() {
@@ -1354,15 +1567,8 @@ function connectorList() {
   const signIn = h('div.cal-src', {},
     h('div', {}, h('b', {}, 'A service you sign in to'), h('small', {}, `Notion, Linear, Sentry and the like have no token to paste. ${hostName} sends you a sign-in link in chat.`)),
     h('button.chip.primary', { onclick: () => askHost(`${hostName}, can you connect `) }, `Ask ${hostName}`));
-  return h('section.cal-sources', {}, h('div.section-title', {}, h('h2', {}, 'Connectors')),
-    h('p.d-empty', {}, 'Tools from MCP servers you run or point at.'), list,
+  return h('section.cal-sources', {}, list,
     h('details.cal-add', {}, h('summary', {}, 'Add a connector by address'), form), signIn);
-}
-
-function renderSettings() {
-  return h('section.view', { 'aria-label': 'Settings' },
-    viewHead('Settings', 'Models, spending and connectors', h('span.view-mark', { 'aria-hidden': 'true' }, icon('sliders'))),
-    h('div.view-scroll', {}, h('div.view-inner', {}, settingsList(), connectorList())));
 }
 
 // --- kid chats ---
@@ -1996,7 +2202,8 @@ function renderDetails() {
 // ---------- keyboard ----------
 
 document.addEventListener('keydown', (e) => {
-  if (!S.me) return;
+  // The shortcuts act on what's behind an open dialog, so they wait.
+  if (!S.me || document.querySelector('.sheet')) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     if (MOBILE.matches && S.panes.length) goHome();

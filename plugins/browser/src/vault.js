@@ -77,8 +77,15 @@ async function pack(dir, max) {
     if (total > max) throw new Error(`the profile is bigger than ${Math.round(max / 1048576)} MB`);
     parts.push(b);
   };
+  // A browser that ended on its own may still be tidying its folder: an
+  // entry listed a moment ago can be gone. It is left out, not an error.
+  const gone = (e) => {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  };
   async function walk(rel) {
-    const entries = await fsp.readdir(path.join(dir, rel), { withFileTypes: true });
+    const entries = await fsp.readdir(path.join(dir, rel), { withFileTypes: true }).catch(gone);
+    if (!entries) return;
     entries.sort((a, b) => (a.name < b.name ? -1 : 1));
     for (const e of entries) {
       if (skipNames.has(e.name)) continue;
@@ -88,7 +95,8 @@ async function pack(dir, max) {
         add(header(1, 0o700, r));
         await walk(r);
       } else if (e.isFile()) {
-        const data = await fsp.readFile(full);
+        const data = await fsp.readFile(full).catch(gone);
+        if (!data) continue;
         const h = header(2, 0o600, r);
         const size = Buffer.alloc(8);
         size.writeBigUInt64BE(BigInt(data.length));
