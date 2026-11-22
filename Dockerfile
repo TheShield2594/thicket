@@ -2,7 +2,7 @@
 # manager, runs as non-root UID 65532). The build stage always runs on the
 # builder's own architecture and cross-compiles (the binary is pure Go), so
 # a multi-arch build needs no emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
